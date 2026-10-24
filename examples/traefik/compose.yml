@@ -1,5 +1,5 @@
 # =============================================================================
-# Ejemplo ejecutable: Traefik v3 + `errors` + un backend que devuelve 4xx/5xx.
+# Ejemplo ejecutable: Traefik v3 + `errserve` + un backend que devuelve 4xx/5xx.
 #
 #   cd examples/traefik
 #   podman-compose up -d          # o: docker compose up -d
@@ -21,12 +21,12 @@
 # docker. En podman rootless hay que apuntarlo al del usuario:
 #   CONTAINER_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock podman-compose up -d
 #
-# Este compose NO construye la imagen: descarga `ghcr.io/atareao/errors` (el
-# paquete publicado). `ERRORS_IMAGE=<referencia>` cambia eso, por ejemplo para
+# Este compose NO construye la imagen: descarga `ghcr.io/atareao/errserve` (el
+# paquete publicado). `ERRSERVE_IMAGE=<referencia>` cambia eso, por ejemplo para
 # probar una etiqueta concreta o una imagen local hecha con `just build`.
 # =============================================================================
 
-name: errors-traefik-example
+name: errserve-traefik-example
 
 services:
   # ---------------------------------------------------------------------------
@@ -35,7 +35,7 @@ services:
   # ---------------------------------------------------------------------------
   traefik:
     image: traefik:v3.6
-    container_name: errors-demo-traefik
+    container_name: errserve-demo-traefik
     restart: unless-stopped
     command:
       - --entrypoints.web.address=:80
@@ -67,12 +67,12 @@ services:
   # ---------------------------------------------------------------------------
   # El servicio del proyecto. Es el que responde las páginas con el código real.
   # ---------------------------------------------------------------------------
-  errors:
+  errserve:
     # La imagen publicada, en GHCR: se descarga sola, no hay que construir nada.
-    # Con `ERRORS_IMAGE` se prueba otra etiqueta o una imagen local
-    # (`just build`), p. ej. `ERRORS_IMAGE=ghcr.io/atareao/errors:0.2.0`.
-    image: ${ERRORS_IMAGE:-ghcr.io/atareao/errors:latest}
-    container_name: errors-demo-errors
+    # Con `ERRSERVE_IMAGE` se prueba otra etiqueta o una imagen local
+    # (`just build`), p. ej. `ERRSERVE_IMAGE=ghcr.io/atareao/errserve:0.3.0`.
+    image: ${ERRSERVE_IMAGE:-ghcr.io/atareao/errserve:latest}
+    container_name: errserve-demo-errors
     restart: unless-stopped
     environment:
       # Los mismos valores por defecto que trae la imagen; explícitos para que
@@ -91,20 +91,20 @@ services:
       # El puerto es el INTERNO del contenedor (8080), no uno del host: Traefik
       # habla con el contenedor por la red del compose y no hace falta publicar
       # nada con `ports:`.
-      traefik.http.services.errors.loadbalancer.server.port: "8080"
+      traefik.http.services.errserve.loadbalancer.server.port: "8080"
 
       # --- Middleware `errors` -----------------------------------------------
       # Intercepta cualquier respuesta 4xx/5xx del router al que se aplique y
-      # pide el cuerpo a `errservice` con la plantilla de `query`. `/{status}`
-      # es lo que produce la petición `/404`, que es donde `errors` lee el
+      # pide el cuerpo a `errserve` con la plantilla de `query`. `/{status}`
+      # es lo que produce la petición `/404`, que es donde `errserve` lee el
       # código: el contrato del proyecto depende de esa plantilla.
       traefik.http.middlewares.errpages.errors.status: "400-599"
-      traefik.http.middlewares.errpages.errors.service: errors
+      traefik.http.middlewares.errpages.errors.service: errserve
       traefik.http.middlewares.errpages.errors.query: "/{status}"
 
       # --- Router de respaldo (catch-all) ------------------------------------
       # Un Host que no case con ningún otro router cae aquí, NO tiene upstream y
-      # su código de error no lo puede conservar nadie: lo decide `errors`. Es
+      # su código de error no lo puede conservar nadie: lo decide `errserve`. Es
       # el caso que justifica este proyecto (con `error-pages` sería un 200).
       #
       # La prioridad se pone a mano y baja: Traefik, sin prioridad explícita,
@@ -121,11 +121,11 @@ services:
       # a secas. Medido con v3.6: con `{host:.+}` el router está `enabled` pero
       # no coincide con ninguna petición; con `.+\` coincide con todas.
       # (Equivalente al gusto de v3: `PathPrefix(\`/\`)`.)
-      traefik.http.routers.errors-catchall.rule: HostRegexp(`.+`)
-      traefik.http.routers.errors-catchall.entrypoints: web
-      traefik.http.routers.errors-catchall.service: errors
-      traefik.http.routers.errors-catchall.middlewares: errpages
-      traefik.http.routers.errors-catchall.priority: "1"
+      traefik.http.routers.errserve-catchall.rule: HostRegexp(`.+`)
+      traefik.http.routers.errserve-catchall.entrypoints: web
+      traefik.http.routers.errserve-catchall.service: errserve
+      traefik.http.routers.errserve-catchall.middlewares: errpages
+      traefik.http.routers.errserve-catchall.priority: "1"
 
       # El middleware aquí es inofensivo: la petición que el propio middleware
       # hace al servicio de errores no vuelve a pasar por los routers, así que
@@ -136,7 +136,7 @@ services:
       # decide el estado (Traefik conserva el 503 del backend; el cuerpo es el
       # de nuestra página 404).
       traefik.http.middlewares.errfixed.errors.status: "400-599"
-      traefik.http.middlewares.errfixed.errors.service: errors
+      traefik.http.middlewares.errfixed.errors.service: errserve
       traefik.http.middlewares.errfixed.errors.query: "/404"
 
   # ---------------------------------------------------------------------------
@@ -145,7 +145,7 @@ services:
   # ---------------------------------------------------------------------------
   backend:
     image: nginx:1.29-alpine
-    container_name: errors-demo-backend
+    container_name: errserve-demo-backend
     restart: unless-stopped
     networks:
       - net

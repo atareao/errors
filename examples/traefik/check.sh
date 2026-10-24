@@ -39,7 +39,7 @@ header() {
     fi
 }
 
-echo "== estados (Traefik + errors en ${base}) =="
+echo "== estados (Traefik + errserve en ${base}) =="
 code app.localtest.me / 404 \
     "el 404 del backend: estado de Traefik, cuerpo y cabeceras nuestros"
 code app.localtest.me /boom 503 \

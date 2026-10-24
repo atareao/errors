@@ -8,8 +8,8 @@ docker compose up -d          # o: podman-compose up -d
 docker compose down
 ```
 
-La imagen **se descarga**, no se construye: el compose usa `ghcr.io/atareao/errors`. Con
-`ERRORS_IMAGE` puedes apuntar a otra etiqueta o a una imagen local que hayas construido con
+La imagen **se descarga**, no se construye: el compose usa `ghcr.io/atareao/errserve`. Con
+`ERRSERVE_IMAGE` puedes apuntar a otra etiqueta o a una imagen local que hayas construido con
 `just build`.
 
 Si el `pull` responde `denied`, el paquete de GHCR sigue privado (nace así aunque el repositorio sea
@@ -58,10 +58,10 @@ la vieja no falla: simplemente no casa.**
 
 ```yaml
 # MAL en Traefik v3 — sintaxis v2 (placeholder {nombre:regexp})
-traefik.http.routers.errors.rule: HostRegexp(`{host:.+}`)
+traefik.http.routers.errserve.rule: HostRegexp(`{host:.+}`)
 
 # BIEN en Traefik v3 — regexp de Go
-traefik.http.routers.errors.rule: HostRegexp(`.+`)
+traefik.http.routers.errserve.rule: HostRegexp(`.+`)
 ```
 
 Medido en v3.6: ``HostRegexp(`{host:.+}`)`` **no casa con nada** y ``HostRegexp(`.+`)`` casa. Lo
@@ -99,7 +99,7 @@ http:
   services:
     errservice:
       loadBalancer:
-        servers: [{url: "http://errors:8080"}]
+        servers: [{url: "http://errserve:8080"}]
   routers:
     catchall:
       rule: "HostRegexp(`.+`)"

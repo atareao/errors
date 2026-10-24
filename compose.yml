@@ -1,5 +1,5 @@
 # =============================================================================
-# `errors` para una infraestructura que YA tiene Traefik.
+# `errserve` para una infraestructura que YA tiene Traefik.
 #
 #   TRAEFIK_NETWORK=<red de Traefik> docker compose up -d     # o podman-compose
 #
@@ -11,20 +11,20 @@
 # `examples/traefik/`; este fichero no lo duplica.
 # =============================================================================
 
-name: errors
+name: errserve
 
 services:
-  errors:
-    # La imagen publicada está en **GHCR** (`docker pull ghcr.io/atareao/errors`):
+  errserve:
+    # La imagen publicada está en **GHCR** (`docker pull ghcr.io/atareao/errserve`):
     # no hay nada en Docker Hub. Versiona la etiqueta en producción
-    # (`ghcr.io/atareao/errors:0.2.0`); `latest` solo para probar. Si la has
+    # (`ghcr.io/atareao/errserve:0.3.0`); `latest` solo para probar. Si la has
     # construido en local con `just build`, la etiqueta es esta misma.
     #
     # Si el `pull` responde `denied` sin credenciales, el paquete de GHCR sigue
     # privado: nace así aunque el repositorio sea público y hay que hacerlo
     # público a mano una vez (ver «Publicación» en README.md).
-    image: ${ERRORS_IMAGE:-ghcr.io/atareao/errors:latest}
-    container_name: errors
+    image: ${ERRSERVE_IMAGE:-ghcr.io/atareao/errserve:latest}
+    container_name: errserve
     restart: unless-stopped
 
     # --- Parada limpia --------------------------------------------------------
@@ -113,9 +113,9 @@ services:
     # del host: Traefik habla con el contenedor por la red del compose.
     #
     # Con esto montado, el servicio cubre dos sitios a la vez:
-    #   * el router de respaldo (`errors-catchall`): cualquier Host que no case
+    #   * el router de respaldo (`errserve-catchall`): cualquier Host que no case
     #     con otro router, sin upstream cuyo código conservar. Aquí el código lo
-    #     decide `errors` — es el caso que justifica el proyecto;
+    #     decide `errserve` — es el caso que justifica el proyecto;
     #   * `errpages`, el middleware para colgar de los routers de tus
     #     aplicaciones (añade `middlewares: errpages@docker` al router, o el
     #     label `traefik.http.routers.<tu-app>.middlewares`). Ahí el estado lo
@@ -125,13 +125,13 @@ services:
     #  traefik.enable: "true"
     #
     #  # --- El servicio -------------------------------------------------------
-    #  traefik.http.services.errors.loadbalancer.server.port: "8080"
+    #  traefik.http.services.errserve.loadbalancer.server.port: "8080"
     #
     #  # --- El middleware ----------------------------------------------------
     #  # `/{status}` es la plantilla que produce la petición `/404`: el código
     #  # viaja en el path. No la cambies sin cambiar también el servicio.
     #  traefik.http.middlewares.errpages.errors.status: "400-599"
-    #  traefik.http.middlewares.errpages.errors.service: errors
+    #  traefik.http.middlewares.errpages.errors.service: errserve
     #  traefik.http.middlewares.errpages.errors.query: "/{status}"
     #
     #  # --- El router de respaldo --------------------------------------------
@@ -141,15 +141,15 @@ services:
     #  # `HostRegexp(`{host:.+}`)` de la guía de error-pages: es sintaxis v2 y en
     #  # v3 no casa con nada (medido), con lo que te quedarías con el 404 en
     #  # texto plano de Traefik. Alternativa v3: `PathPrefix(`/`)`.
-    #  traefik.http.routers.errors-catchall.rule: HostRegexp(`.+`)
-    #  traefik.http.routers.errors-catchall.entrypoints: web
-    #  traefik.http.routers.errors-catchall.service: errors
-    #  traefik.http.routers.errors-catchall.middlewares: errpages
-    #  traefik.http.routers.errors-catchall.priority: "1"
+    #  traefik.http.routers.errserve-catchall.rule: HostRegexp(`.+`)
+    #  traefik.http.routers.errserve-catchall.entrypoints: web
+    #  traefik.http.routers.errserve-catchall.service: errserve
+    #  traefik.http.routers.errserve-catchall.middlewares: errpages
+    #  traefik.http.routers.errserve-catchall.priority: "1"
     #
     #  # Si prefieres no publicar el router de respaldo y solo usarlo como
     #  # servicio de errores de tus aplicaciones, borra las cuatro líneas de
-    #  # `errors-catchall` y quédate con el servicio y el middleware.
+    #  # `errserve-catchall` y quédate con el servicio y el middleware.
     # =========================================================================
 
 # Sin volúmenes: el binario es estático y las páginas van dentro de la imagen
