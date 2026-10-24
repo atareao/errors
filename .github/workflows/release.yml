@@ -18,15 +18,17 @@ name: Release
 #   runner sí tiene docker: este workflow es el único sitio donde el healthcheck y el `USER` de
 #   la imagen se ejercitan contra docker de verdad, y por eso la prueba va **antes** de publicar.
 #
-# LA PEGA DE GHCR (leer antes de publicar)
-#   Un paquete de GHCR nace **privado** aunque el repositorio sea público, y su visibilidad **no
-#   se puede cambiar por API** (medido: `PATCH /user/packages/container/errors` responde 404;
-#   tampoco existe en el OpenAPI ni en GraphQL, donde para paquetes solo hay
-#   `deletePackageVersion`). Hay que abrir, **una sola vez y a mano**, los ajustes del paquete
+# LA VISIBILIDAD DEL PAQUETE (leer antes de publicar)
+#   La visibilidad de un paquete no se puede cambiar **por API** (medido: `PATCH
+#   /user/packages/container/errors` responde 404; tampoco existe en el OpenAPI ni en GraphQL,
+#   donde para paquetes solo hay `deletePackageVersion`): solo a mano, en los ajustes del paquete
 #   —<https://github.com/users/atareao/packages/container/errors/settings> » Danger Zone » Change
-#   visibility » Public—. Hasta ese momento, `docker pull ghcr.io/atareao/errors` sin credenciales
-#   responde `denied`. El paso "Aviso si el paquete sigue privado" avisa (sin fallar el release)
-#   cuando eso pasa. También está en el README, sección «Publicación».
+#   visibility » Public—.
+#   En este repositorio, MEDIDO tras la primera publicación, el paquete quedó **público** (la
+#   descarga anónima y `tags/list` responden 200), así que no hubo que tocar nada. El paso "Aviso
+#   si el paquete sigue privado" comprueba ese extremo en cada release y avisa —sin fallar— si el
+#   paquete quedó privado, que es cuando `docker pull` sin credenciales responde `denied`.
+#   También está en el README, sección «Publicación».
 
 on:
   push:

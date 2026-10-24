@@ -144,10 +144,11 @@ Orden obligatorio antes de commit: `cargo fmt --check && cargo clippy --all-targ
   construye, **prueba la imagen con docker real** (el runner sí lo tiene; aquí solo hay podman, que
   además descarta el `HEALTHCHECK` al construir en formato OCI), publica en GHCR y crea el Release.
   La etiqueta `latest` solo se mueve en versiones estables.
-- ⚠️ **Un paquete de GHCR nace privado** aunque el repositorio sea público, y su visibilidad **no se
-  puede cambiar por API** (verificado: `PATCH /user/packages/...` da 404; no existe en el OpenAPI ni
-  en GraphQL). Se cambia una vez a mano en los ajustes del paquete. Hasta entonces,
-  `docker pull ghcr.io/atareao/errors` responde `denied`.
+- La visibilidad del paquete en GHCR **no se puede cambiar por API** (verificado: `PATCH /user/packages/...`
+  da 404; no existe ni en el OpenAPI ni en GraphQL): solo a mano en los ajustes del paquete. En este
+  repositorio, **medido** tras la primera publicación, el paquete quedó **público** —descarga anónima
+  y `tags/list` responden `200`—, así que no hubo que tocar nada; pero si algún día un
+  `docker pull ghcr.io/atareao/errors` responde `denied`, ese es el motivo y ahí está el arreglo.
 
 ## Quirks
 
