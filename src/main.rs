@@ -540,11 +540,11 @@ async fn error_response(state: &AppState, path: &NormalizedPath, hints: &Hints) 
             // pudo leer). El estado sigue siendo el código resuelto y nunca
             // `500`: se responde el cuerpo de texto (auditoría I-2).
             tracing::warn!(code, error = %err, "sin HTML de la página de error: se responde texto");
-            page_response(render_text_fallback(code))
+            page_response(render_text_fallback(code, config.retry_after))
         }
         Err(err) => {
             tracing::error!(code, error = %err, "la tarea de render falló: se responde texto");
-            page_response(render_text_fallback(code))
+            page_response(render_text_fallback(code, config.retry_after))
         }
     }
 }
@@ -653,6 +653,20 @@ mod tests {
             ("DEFAULT_ERROR_PAGE".to_string(), "503".to_string()),
         ])
         .unwrap()
+    }
+
+    /// Configuración de prueba con `RETRY_AFTER` fijado: el valor configurado
+    /// tiene que llegar también a una página de error cuyo código no lo aporta
+    /// el path, sino la cabecera `X-Code`.
+    fn fixtures_config_con_retry_after(value: &str) -> Config {
+        Config::from_env_iter([
+            (
+                "CONTENT_DIR".to_string(),
+                fixtures_content_dir().to_string_lossy().into_owned(),
+            ),
+            ("RETRY_AFTER".to_string(), value.to_string()),
+        ])
+        .expect("la configuración de fixtures debe construirse")
     }
 
     /// Fichero de fixture que representa `content/404.html`.
@@ -1153,12 +1167,13 @@ mod tests {
 
     // --- Compresión gzip (change `release-hardening`, tasks.md 1.1-1.3) ---
     //
-    // La capa de compresión la añade la fase GREEN; aquí solo se fija el
-    // contrato. Ojo al umbral de `tower_http::compression::predicate`: su
-    // predicado por defecto (`SizeAbove`, 32 bytes) no comprime respuestas más
-    // pequeñas, así que la prueba usa `/404` (cuerpo de texto de ~70 bytes) y no
-    // un cuerpo mínimo. Los cuerpos concretos no se fijan aquí: se comparan
-    // entre sí para que la prueba no dependa del texto de las páginas.
+    // La prueba fija el contrato de la capa de compresión, que `build_router`
+    // ya aplica (`CompressionLayer::new()`). Ojo al umbral de
+    // `tower_http::compression::predicate`: su predicado por defecto
+    // (`SizeAbove`, 32 bytes) no comprime respuestas más pequeñas, así que la
+    // prueba usa `/404` (cuerpo de texto de ~70 bytes) y no un cuerpo mínimo.
+    // Los cuerpos concretos no se fijan aquí: se comparan entre sí para que la
+    // prueba no dependa del texto de las páginas.
 
     #[tokio::test]
     async fn con_accept_encoding_gzip_la_respuesta_va_comprimida_y_conserva_el_codigo() {
@@ -1204,7 +1219,7 @@ mod tests {
         let body = body_bytes(response).await;
         assert_eq!(
             body,
-            render_text_fallback(404).body,
+            render_text_fallback(404, 120).body,
             "sin `Accept-Encoding` el cuerpo debe ser el de siempre"
         );
     }
@@ -1587,7 +1602,7 @@ mod tests {
         // de la página del código resuelto.
         assert_eq!(
             body,
-            render_text_fallback(404).body,
+            render_text_fallback(404, 120).body,
             "el cuerpo debe ser el de la página del código resuelto (texto)"
         );
     }
@@ -1629,7 +1644,7 @@ mod tests {
         // que es el del defecto (`404`). Sin `Accept`, en texto.
         assert_eq!(
             body,
-            render_text_fallback(404).body,
+            render_text_fallback(404, 120).body,
             "el cuerpo debe ser el de la página del código resuelto (texto)"
         );
     }
@@ -1706,9 +1721,72 @@ mod tests {
         let body = body_bytes(response).await;
         assert_eq!(
             body,
-            render_text_fallback(503).body,
+            render_text_fallback(503, 120).body,
             "el cuerpo debe ser el de la página del código resuelto (`503`)"
         );
+    }
+
+    #[tokio::test]
+    async fn el_retry_after_configurado_no_depende_del_origen_del_codigo() {
+        // Spec `error-page`, "el valor no depende del formato ni del origen del
+        // código": el valor tiene que ser el mismo cuando el `503` sale del path
+        // —en JSON, que es el otro eje de esa escena— y cuando sale de `X-Code`
+        // sobre un asset inexistente. Y lo mismo para el `429`, el otro código
+        // que lleva la cabecera.
+        //
+        // El camino de `X-Code` es el interesante: ahí el estado lo aportaba el
+        // servidor de ficheros y el `Retry-After` salía pegado a un cuerpo ajeno
+        // (ver `un_asset_inexistente_con_x_code_responde_el_codigo_resuelto`).
+        let router = build_router(&fixtures_config_con_retry_after("30"));
+
+        let casos = [
+            // `/503.json` no existe como asset, así que es una página de error
+            // cuyo código lo aporta el path; sin `Accept`, la extensión manda y
+            // el formato es JSON.
+            (
+                "el `503` del path, en JSON",
+                get("/503.json"),
+                StatusCode::SERVICE_UNAVAILABLE,
+                Some("application/json"),
+            ),
+            (
+                "el `429` del path",
+                get("/429"),
+                StatusCode::TOO_MANY_REQUESTS,
+                None,
+            ),
+            // Asset inexistente con `X-Code: 503`: el código lo aporta la
+            // cabecera.
+            (
+                "el `503` de `X-Code` sobre un asset inexistente",
+                get_with_headers("/nada.png", &[("X-Code", "503")]),
+                StatusCode::SERVICE_UNAVAILABLE,
+                None,
+            ),
+        ];
+
+        for (etiqueta, request, estado, content_type_esperado) in casos {
+            let response = router.clone().oneshot(request).await.unwrap();
+
+            assert_eq!(response.status(), estado, "estado de {etiqueta}");
+            assert_eq!(
+                header_value(&response, "Retry-After").as_deref(),
+                Some("30"),
+                "el valor configurado debe llegar a {etiqueta}, sin depender del \
+                 formato ni del origen del código"
+            );
+            // La etiqueta del caso JSON afirma que cubre también el eje del
+            // formato: se comprueba el tipo MIME donde el caso lo declara, para
+            // que una cascada de extensión rota (el `.json` servido como texto)
+            // no siga pasando en verde.
+            if let Some(content_type_esperado) = content_type_esperado {
+                assert_eq!(
+                    header_value(&response, "Content-Type").as_deref(),
+                    Some(content_type_esperado),
+                    "Content-Type de {etiqueta}"
+                );
+            }
+        }
     }
 
     #[tokio::test]
@@ -1728,7 +1806,7 @@ mod tests {
         let body = body_bytes(response).await;
         assert_eq!(
             body,
-            render_text_fallback(503).body,
+            render_text_fallback(503, 120).body,
             "el cuerpo debe ser el de la página del defecto configurado (`503`)"
         );
     }

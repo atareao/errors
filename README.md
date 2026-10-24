@@ -89,10 +89,18 @@ curl -s  localhost:8080/version              # {"version":"..."}
 | `CONTENT_DIR` | `content` | Directorio de páginas HTML y assets. |
 | `DEFAULT_ERROR_PAGE` | `404` | Código cuando el path y `X-Code` no aportan uno utilizable. |
 | `LOG_FORMAT` | `text` | Formato del registro: `text` o `json`. |
+| `RETRY_AFTER` | `120` | Segundos de la cabecera `Retry-After`. La llevan solo el `429` y el `503`. |
 
 No se lee ningún fichero de configuración. Una variable **presente pero vacía**
 es un error de arranque, no un valor por defecto. `DEFAULT_ERROR_PAGE` fuera del
 rango `400..=599` también lo es.
+
+`RETRY_AFTER` es el único valor de la respuesta que depende de tu infraestructura: la cabecera
+`Retry-After` es lo que se le promete al cliente sobre cuándo volver, así que si tu backend tarda
+cinco minutos en recuperarse, `120` es una mentira que el cliente obedece. Admite cualquier entero de
+segundos —`0` significa «reintenta ya»— y no tiene techo. Una variable vacía, o que no sea un entero
+de segundos, es un error de arranque. Lo que **no** se configura es qué códigos la llevan: son el
+`429` y el `503`, y eso lo decide el código.
 
 ## Cómo se resuelve
 
@@ -108,7 +116,7 @@ Código y formato son ortogonales: `/503.xml` es un 503 en XML.
 
 Cada página de error lleva `Content-Type`, `Content-Length`,
 `X-Robots-Tag: noindex, nofollow, nosnippet, noarchive` y, en `429` y `503`,
-`Retry-After: 120`.
+`Retry-After` con el valor de `RETRY_AFTER` (`120` por defecto).
 
 El HTML se sirve de `CONTENT_DIR/<código>.html` (con caída al fichero del código
 por defecto); JSON, XML y texto se generan del código, su razón canónica y su
@@ -168,6 +176,27 @@ con codificación por trozos, sin `Content-Length`—, y declara `Vary: Accept-E
 X-Trace-Id, X-Correlation-Id, X-Amzn-Trace-Id`: las cinco, siempre, las traiga la petición o no.
 Las cabeceras de correlación se copian de la petición a la respuesta cuando vienen —no se
 inventan—, así que una caché intermedia tiene que saber que la respuesta varía por ellas.
+
+### El registro de peticiones
+
+El servicio ya traza cada petición —método, ruta, latencia y estado—, pero con el `LOG_LEVEL` por
+defecto (`info`) no se ve: lo único que sale es la línea de arranque. Para encenderlo:
+
+```sh
+LOG_LEVEL="tower_http=debug,info"                                   # dos líneas por petición: entrada y salida
+LOG_LEVEL="tower_http::trace::on_failure=off,tower_http=debug,info" # sin el ruido de los 5xx
+```
+
+La segunda forma es la recomendable, y el motivo está en el propio diseño del servicio: el
+clasificador de `tower-http` marca **todo `5xx` como fallo**, y como este servicio *sirve* páginas
+`5xx`, cada `503` normal fingiría un error. Por eso su nivel bajó a `DEBUG`; al encender el acceso
+conviene silenciarlo, o volverá el ruido por la puerta de atrás. Con `LOG_FORMAT=json` cada suceso
+sale en una línea de JSON —las de salida, con `latency` y `status`—, listo para un colector sin
+expresiones regulares.
+
+Lo que el registro **no** trae: la dirección del cliente ni el `X-Code` recibido. Para saber quién
+está inflando el contador de un código, esa información ya está en `/metrics`, en la etiqueta
+`source`.
 
 ## Imagen
 
