@@ -1,0 +1,261 @@
+name: Release
+
+# Publica la imagen en GHCR y crea el Release de GitHub. Dos disparadores:
+#
+#   * push de una etiqueta `v*`  -> el camino normal (`git tag v0.1.0 && git push origin v0.1.0`).
+#   * workflow_dispatch          -> republicar una etiqueta YA existente, pasándola en el input
+#                                   `tag`.
+#
+# POR QUÉ EL INPUT ES OBLIGATORIO
+#   En un `workflow_dispatch` no hay etiqueta: `github.ref_name` es la RAMA (`main`). Sin input,
+#   este job habría construido la imagen como `main`, empujado `ghcr.io/atareao/errors:main` y
+#   creado un Release llamado `main` sobre el último commit de la rama. Con el input, un dispatch
+#   sin etiqueta válida falla en el primer paso en lugar de publicar basura.
+#
+# POR QUÉ AQUÍ SÍ HAY DOCKER
+#   La máquina de desarrollo no tiene docker (usa podman), así que la imagen solo se había
+#   probado con podman y en formato OCI, que **descarta el HEALTHCHECK del Dockerfile**. El
+#   runner sí tiene docker: este workflow es el único sitio donde el healthcheck y el `USER` de
+#   la imagen se ejercitan contra docker de verdad, y por eso la prueba va **antes** de publicar.
+#
+# LA PEGA DE GHCR (leer antes de publicar)
+#   Un paquete de GHCR nace **privado** aunque el repositorio sea público, y su visibilidad **no
+#   se puede cambiar por API** (medido: `PATCH /user/packages/container/errors` responde 404;
+#   tampoco existe en el OpenAPI ni en GraphQL, donde para paquetes solo hay
+#   `deletePackageVersion`). Hay que abrir, **una sola vez y a mano**, los ajustes del paquete
+#   —<https://github.com/users/atareao/packages/container/errors/settings> » Danger Zone » Change
+#   visibility » Public—. Hasta ese momento, `docker pull ghcr.io/atareao/errors` sin credenciales
+#   responde `denied`. El paso "Aviso si el paquete sigue privado" avisa (sin fallar el release)
+#   cuando eso pasa. También está en el README, sección «Publicación».
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Etiqueta ya existente que se republica (p. ej. v0.1.0)"
+        required: true
+        type: string
+
+# `contents: write` para crear el Release; `packages: write` para empujar a GHCR con el
+# GITHUB_TOKEN. No hace falta ningún secreto extra.
+permissions:
+  contents: write
+  packages: write
+
+# Dos publicaciones a la vez sobre el mismo repo se pisarían (`latest` es mutable). No se cancela
+# la que esté en curso: a mitad de un release, cancelar deja el registro y el Release a medias.
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  REGISTRY: ghcr.io
+
+jobs:
+  imagen:
+    name: construir, probar y publicar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Resolver la etiqueta, la versión y la imagen
+        id: v
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            tag="${{ inputs.tag }}"
+          fi
+
+          # Solo `v` + versión. Acepta `v1.2.3` y pre-releases tipo `v1.2.3-rc1`; rechaza `main`,
+          # `feature/x` y cualquier etiqueta sin forma de versión, que es lo que un dispatch
+          # descuidado produciría.
+          if [[ ! "$tag" =~ ^v[0-9]+(\.[0-9]+)*([-+].*)?$ ]]; then
+            echo "::error::La etiqueta '$tag' no tiene forma de versión vX.Y.Z. En un workflow_dispatch, rellena el input 'tag' con una etiqueta existente."
+            exit 1
+          fi
+
+          # `github.repository` es `atareao/errors` (con las mayúsculas que tenga el repo), y GHCR
+          # **rechaza** nombres con mayúsculas ("repository name must be lowercase"): se baja a
+          # minúsculas aquí en vez de confiar en cómo esté escrito el repositorio hoy.
+          repo="$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
+          image="${REGISTRY}/${repo}"
+
+          {
+            echo "tag=$tag"
+            echo "version=${tag#v}"
+            echo "repo=$repo"
+            echo "image=$image"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "etiqueta : $tag"
+          echo "versión  : ${tag#v}"
+          echo "imagen   : $image"
+
+      - name: Construir la imagen
+        run: |
+          set -euo pipefail
+          docker build \
+            --tag "${{ steps.v.outputs.image }}:${{ steps.v.outputs.version }}" \
+            --tag "${{ steps.v.outputs.image }}:latest" \
+            .
+
+      # El smoke test es el punto de este job: hasta hoy la imagen solo se había probado con
+      # podman. Aquí corre con docker de verdad y comprueba lo que el proyecto promete.
+      - name: Probar la imagen con docker (smoke test)
+        run: |
+          set -euo pipefail
+
+          image="${{ steps.v.outputs.image }}:${{ steps.v.outputs.version }}"
+          base="http://127.0.0.1:8080"
+
+          # Al fallar se vuelca el registro del contenedor: un `test` a secas en Actions deja
+          # "exit code 1" y ninguna pista de qué respondió el servicio.
+          fallo() {
+            echo "::error::$1"
+            echo "--- docker logs smoke (últimas 40 líneas) ---"
+            docker logs smoke 2>&1 | tail -n 40 || true
+            echo "--- estado del contenedor ---"
+            docker inspect --format '{{json .State}}' smoke || true
+            exit 1
+          }
+
+          # Se publica **solo** en loopback: el puerto no tiene por qué quedar expuesto en el
+          # runner, y lo único que hace falta es hablar con él desde el propio job.
+          docker run --detach --rm --name smoke \
+            --publish 127.0.0.1:8080:8080 \
+            "$image"
+
+          # 1) Que arranque. `/healthz` responde siempre 200 y no pasa por la resolución de
+          #    páginas de error, así que sirve de puerta sin depender de nada más.
+          for _ in $(seq 1 20); do
+            if curl -fsS -o /dev/null "$base/healthz"; then listo=1; break; fi
+            sleep 1
+          done
+          [[ "${listo:-0}" == "1" ]] || fallo "el contenedor no respondió en /healthz"
+
+          # 2) La garantía del proyecto: una página de error devuelve **su** código, nunca 200.
+          comprobar() {
+            local real
+            real=$(curl -s -o /dev/null -w '%{http_code}' "$base$1")
+            [[ "$real" == "$2" ]] || fallo "GET $1 devolvió $real; se esperaba $2"
+            echo "ok   GET $1 -> $real"
+          }
+
+          comprobar /404 404                                   # página de error
+          comprobar /503 503                                   # 5xx, con Retry-After
+          comprobar /404.json 404                              # el formato no cambia el código
+          comprobar /healthz 200                               # endpoint de servicio
+          comprobar /metrics 200                               # contador Prometheus
+          comprobar /css/error.css 200                         # un asset existente gana al error
+
+          # 3) Cabeceras que la documentación promete.
+          cabecera() {
+            curl -s -D - -o /dev/null "$base$1" | grep -qi "^$2:" \
+              || fallo "GET $1 no trae la cabecera $2"
+            echo "ok   GET $1 -> $2"
+          }
+
+          cabecera /404 x-robots-tag
+          cabecera /503 retry-after
+          curl -s -D - -o /dev/null "$base/503" | grep -qi '^retry-after: 120' \
+            || fallo "el 503 no trae Retry-After: 120"
+
+          # 4) El HEALTHCHECK del Dockerfile (wget de busybox contra /healthz), ejercitado en
+          #    docker por primera vez. Su `interval` es 30s, así que el primer veredicto tarda
+          #    ~30s: de ahí los 90s de margen.
+          for _ in $(seq 1 45); do
+            estado=$(docker inspect --format '{{.State.Health.Status}}' smoke 2>/dev/null || echo sin-healthcheck)
+            [[ "$estado" == "healthy" ]] && break
+            sleep 2
+          done
+          [[ "${estado:-}" == "healthy" ]] || fallo "el healthcheck de la imagen quedó en '$estado' (se esperaba 'healthy')"
+          echo "ok   healthcheck -> healthy"
+
+          # 5) La imagen no corre como root (uid/gid 10001 fijos, lo promete el README).
+          usuario=$(docker inspect --format '{{.Config.User}}' smoke)
+          [[ "$usuario" == "10001:10001" ]] || fallo "la imagen declara USER '$usuario'; se esperaba 10001:10001"
+          echo "ok   USER -> $usuario"
+
+          echo "--- docker logs smoke ---"
+          docker logs smoke
+
+      - name: Retirar el contenedor de prueba
+        if: always()
+        run: docker rm --force smoke || true
+
+      - name: Entrar en GHCR
+        run: |
+          set -euo pipefail
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | docker login "$REGISTRY" --username "${{ github.actor }}" --password-stdin
+
+      - name: Publicar
+        run: |
+          set -euo pipefail
+
+          image="${{ steps.v.outputs.image }}"
+          version="${{ steps.v.outputs.version }}"
+
+          docker push "$image:$version"
+
+          # `latest` solo para versiones estables: si la etiqueta es una pre-release
+          # (`v0.2.0-rc1`), mover `latest` mandaría a producción una release candidate.
+          if [[ "$version" == *-* ]]; then
+            echo "pre-release: no se mueve :latest"
+          else
+            docker push "$image:latest"
+          fi
+
+      # No falla el release (la imagen ya está publicada y el Release se crea igual), pero deja
+      # la pega de GHCR a la vista en el resumen del job en vez de que la descubra quien intente
+      # hacer `pull` sin credenciales. Ver "LA PEGA DE GHCR" arriba.
+      - name: Aviso si el paquete sigue privado
+        run: |
+          set -euo pipefail
+
+          codigo=$(curl -s -o /dev/null -w '%{http_code}' \
+            "https://ghcr.io/token?scope=repository:${{ steps.v.outputs.repo }}:pull")
+
+          if [[ "$codigo" == "200" ]]; then
+            echo "El paquete admite pull anónimo (público): $codigo"
+          else
+            aviso="GHCR responde $codigo a un token anónimo para '${{ steps.v.outputs.repo }}': el paquete sigue PRIVADO, así que 'docker pull ${{ steps.v.outputs.image }}' sin credenciales da 'denied'."
+            echo "::warning::$aviso"
+            {
+              echo "### ⚠️ El paquete de GHCR sigue privado"
+              echo
+              echo "$aviso"
+              echo
+              echo "Se arregla a mano, una vez por paquete: <https://github.com/users/atareao/packages/container/errors/settings> » Danger Zone » Change visibility » Public."
+              echo "(No hay API para cambiarlo: el \`PATCH /user/packages/...\` ya no existe.)"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Crear el Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          tag="${{ steps.v.outputs.tag }}"
+          version="${{ steps.v.outputs.version }}"
+
+          # Republicar una etiqueta ya publicada (dispatch) no debe petar: si el Release existe,
+          # se reutiliza. El `create` final sí falla si falla.
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "El Release $tag ya existe: se reutiliza."
+            exit 0
+          fi
+
+          args=(--title "$tag" --generate-notes --verify-tag)
+          if [[ "$version" == *-* ]]; then
+            args+=(--prerelease)
+          fi
+
+          gh release create "$tag" "${args[@]}"
