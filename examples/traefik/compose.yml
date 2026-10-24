@@ -70,7 +70,7 @@ services:
   errors:
     # La imagen publicada, en GHCR: se descarga sola, no hay que construir nada.
     # Con `ERRORS_IMAGE` se prueba otra etiqueta o una imagen local
-    # (`just build`), p. ej. `ERRORS_IMAGE=ghcr.io/atareao/errors:0.1.0`.
+    # (`just build`), p. ej. `ERRORS_IMAGE=ghcr.io/atareao/errors:0.2.0`.
     image: ${ERRORS_IMAGE:-ghcr.io/atareao/errors:latest}
     container_name: errors-demo-errors
     restart: unless-stopped
