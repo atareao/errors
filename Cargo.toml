@@ -1,0 +1,28 @@
+[package]
+name = "errors"
+version = "0.1.0"
+edition = "2024"
+
+# Versiones elegidas contra la caché local de `~/.cargo/registry` (rangos caret,
+# sin fijar de memoria): axum 0.8.9, tokio 1.54.1, tower-http 0.6.11,
+# tracing 0.1.44, tracing-subscriber 0.3.23, serde 1.0.229, serde_json 1.0.154,
+# percent-encoding 2.3.2, tower 0.5.3 y http-body-util 0.1.5.
+#
+# `percent-encoding` ya estaba en el árbol de forma transitiva (vía `tower-http`,
+# que lo usa para decodificar el path en `ServeDir`); se declara ahora como
+# dependencia directa porque `src/path.rs` lo usa para normalizar el path con el
+# **mismo** decodificador que el servidor de ficheros.
+
+[dependencies]
+axum = { version = "0.8", features = ["tokio"] }
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["fs", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+percent-encoding = "2"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

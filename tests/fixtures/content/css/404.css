@@ -1,0 +1,6 @@
+/* Fixture de la fase RED: representa `content/css/404.css`. */
+body {
+  font-family: system-ui, sans-serif;
+  margin: 0;
+  padding: 2rem;
+}

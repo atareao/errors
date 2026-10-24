@@ -1,0 +1,44 @@
+# Contexto que NO necesita el build de la imagen.
+#
+# Regla: si `cargo build --release` no lo lee y el Dockerfile no lo copia,
+# fuera. Lo que sí entra está listado al final, para que nadie lo excluya
+# "por limpieza" y rompa la imagen en silencio.
+
+# Caché de compilación local; en la imagen se reconstruye desde cero.
+target/
+
+# Metadatos de git: no aportan nada al build (y `version` del .justfile se
+# resuelve en el host, no aquí).
+.git/
+.gitignore
+
+# Documentación, automatización y specs: no son entrada de la compilación.
+AGENTS.md
+README.md
+openspec/
+.justfile
+
+# Secretos y configuración local. No hay ninguno versionado; la lista existe
+# para que un `.env` de trabajo nunca acabe horneado en una capa.
+.env
+*.env
+*.pem
+*.key
+
+# Los ficheros de empaquetado no son entrada de `cargo` (el Dockerfile se lee
+# aparte, antes de filtrar el contexto).
+Dockerfile
+.dockerignore
+
+# Tests de integración: se compilan con `cargo test`, que no se ejecuta en el
+# build de la imagen; el Dockerfile nunca copia `tests/`.
+tests/
+
+# --------------------------------------------------------------------------
+# NO excluir (los copia el Dockerfile o los lee `cargo`):
+#   src/         -> fuente del binario
+#   content/     -> `COPY content ./content`; con CONTENT_DIR=content y
+#                   WORKDIR=/app resuelve a /app/content
+#   Cargo.toml   -> manifiesto
+#   Cargo.lock   -> lock del binario, versionado; imprescindible para --locked
+# --------------------------------------------------------------------------
