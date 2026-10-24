@@ -84,3 +84,42 @@ dev:
     # Mismas variables por defecto que la imagen. `CONTENT_DIR=content` se
     # resuelve desde el directorio del repo, que es donde vive `content/`.
     CONTENT_DIR=content PORT={{port}} cargo run
+
+# Escribe la sección del CHANGELOG de lo que **todavía no está etiquetado**,
+# según `cliff.toml`:
+#
+#   just changelog            -> «Sin publicar»: lo que lleva la próxima versión
+#   just changelog v0.2.0     -> la misma sección, ya con el nombre del tag que
+#                                se va a crear
+#
+# `--unreleased` procesa los commits posteriores al último tag; `--tag` (cuando
+# se pasa) es solo el nombre que se le pone a esa sección. `--offline` evita que
+# git-cliff consulte la API de GitHub: la plantilla solo necesita el
+# `owner`/`repo` de `cliff.toml`, que no es red.
+#
+# **Antepone** (`--prepend`) en vez de regenerar el fichero: la entrada de `0.1.0`
+# está escrita a mano y es más rica que lo que saldría de los commits, así que no
+# se toca. Lo que sí hace la receta es negarse a repetir una sección que ya esté
+# en el fichero —git-cliff no lo detecta y la escribiría dos veces—: para
+# regenerarla, se borra antes la sección antigua a mano.
+#
+# Antepone al `CHANGELOG.md` la sección de lo que aún no está etiquetado.
+changelog version="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="{{ version }}"
+    args=(--config cliff.toml --offline --unreleased)
+    section="Sin publicar"
+    if [[ -n "$version" ]]; then
+        args+=(--tag "$version")
+        # El `v` del tag no va en el encabezado (`## [0.2.0]`), pero sí en el
+        # enlace al tag que construye la plantilla.
+        section="${version#v}"
+    fi
+    if grep -qF "## [${section}]" CHANGELOG.md; then
+        echo "CHANGELOG.md ya tiene una sección «## [${section}]»." >&2
+        echo "Bórrala a mano si quieres volver a generarla; no se duplica." >&2
+        exit 1
+    fi
+    git-cliff "${args[@]}" --prepend CHANGELOG.md
+    echo "CHANGELOG.md: sección «${section}» antepuesta."

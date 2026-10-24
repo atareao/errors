@@ -154,6 +154,26 @@ just login          # entra en GHCR (una vez por máquina)
 just push           # publica a mano la versión y `latest`
 ```
 
+## CHANGELOG
+
+Se mantiene con [`git-cliff`](https://git-cliff.org) a partir de los commits convencionales:
+
+```sh
+just changelog              # antepone la sección de lo que aún no está etiquetado
+just changelog v0.2.0       # lo mismo, ya con el nombre del tag que se va a crear
+```
+
+Antepone, no regenera: la entrada de `0.1.0` está escrita a mano y el fichero no se pierde.
+
+## Dependencias
+
+`cargo deny check -D warnings` (con `deny.toml`) revisa avisos de seguridad, licencias, duplicaciones
+y fuentes. Corre en el CI, en el job `cargo-deny`:
+
+```sh
+cargo deny check -D warnings
+```
+
 ## Publicación
 
 Se publica **con una etiqueta**:
@@ -173,35 +193,18 @@ existente, pero exige indicarla en el input `tag`: en un dispatch no hay etiquet
 `main` y `development` están **protegidas**: todo entra por **PR** y ningún PR se fusiona hasta que
 el check **`fmt, clippy y tests`** está en verde. El release no sustituye a ese check.
 
-### La pega de GHCR: el paquete nace privado
+### La visibilidad del paquete
 
-Los paquetes de GHCR **nacen privados** aunque el repositorio sea público, y la visibilidad **no se
-puede cambiar por API** —el `PATCH /user/packages/{type}/{name}` que circula por ahí ya no existe:
-medido, responde `404`, no está en el OpenAPI de GitHub y en GraphQL, para paquetes, solo hay
-`deletePackageVersion`—. Hay que hacerlo a mano, **una vez por paquete**:
+En GitHub **no se puede cambiar la visibilidad de un paquete por API**: el
+`PATCH /user/packages/{type}/{name}` que circula por ahí ya no existe (medido: responde `404`, no está
+en el OpenAPI de GitHub y en GraphQL no hay mutación de paquetes), así que solo se toca a mano en los
+ajustes del paquete.
 
-1. <https://github.com/users/atareao/packages/container/errors/settings>
-2. **Danger Zone** » **Change visibility** » **Public**, y confirmar escribiendo el nombre.
-
-Hasta entonces `docker pull ghcr.io/atareao/errors` sin credenciales responde `denied`, y quien
-clone el repositorio y haga `compose up` se queda sin arrancar: es exactamente el fallo que este
-pipeline cierra, y el job avisa de ello en su resumen cuando todavía no se ha hecho. Una vez
-público, lo está para **todas** las versiones siguientes (no hay que repetirlo en cada release).
-Ojo: no se puede deshacer, un paquete público no vuelve a privado.
-
-Comprobación sin credenciales —`200` público, `403` privado o aún sin publicar—:
-
-```sh
-curl -s -o /dev/null -w '%{http_code}\n' "https://ghcr.io/token?scope=repository:atareao/errors:pull"
-```
-
-Y para leer la visibilidad del paquete hace falta el scope `read:packages`, que el token de `gh` no
-trae por defecto:
-
-```sh
-gh auth refresh -h github.com -s read:packages
-gh api /users/atareao/packages/container/errors --jq .visibility     # -> "public"
-```
+En este repositorio, **medido tras la primera publicación**, el paquete quedó **público**: la
+descarga anónima funciona. Si algún día `docker pull ghcr.io/atareao/errors` responde `denied`, es
+que el paquete quedó privado: se arregla una sola vez en
+<https://github.com/users/atareao/packages/container/errors/settings> » *Danger Zone* » *Change
+visibility* » **Public**.
 
 ## Desarrollo
 

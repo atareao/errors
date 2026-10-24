@@ -1,0 +1,84 @@
+# cargo-deny — qué dependencias pueden entrar en `errors`.
+# https://embarkstudios.github.io/cargo-deny/
+#
+# Se ejecuta en el CI (`.github/workflows/ci.yml`, job `dependencias`) y a mano
+# con `cargo deny check`.
+#
+# Criterio de este fichero: cada permiso y cada excepción lleva escrito **por
+# qué** está, y ninguno se da «por si acaso». Una lista de licencias copiada de
+# internet que no se corresponda con este árbol solo consigue que el CI se ponga
+# en rojo por permisos que nadie usa, que es la forma más rápida de que la
+# puerta acabe desactivándose.
+#
+# No se declara `[graph] targets`, a propósito: sin `targets` se revisan **todas**
+# las plataformas del `Cargo.lock` (incluidas las dependencias de Windows y de
+# wasm que aquí nunca se compilan), de modo que un aviso sobre cualquiera de
+# ellas se ve hoy y no el día que alguien porte el proyecto.
+
+[advisories]
+# La base de datos es la de RustSec (https://rustsec.org), el valor por defecto:
+# `cargo-deny` la clona en `$CARGO_HOME/advisory-dbs` la primera vez.
+#
+# Cualquier vulnerabilidad falla el check y no hay ningún `ignore`: una excepción
+# se añade aquí cuando aparezca un aviso real, junto a su motivo, y nunca antes.
+#
+# Los tres niveles van escritos y en su forma estricta. Coinciden con los valores
+# por defecto de cargo-deny 0.20, pero escritos no dependen de que un día cambien:
+#
+#   * `yanked = "deny"`: el `warn` por defecto se quedaría en el log, y aquí el
+#     `Cargo.lock` fija versiones exactas, así que una versión retirada del
+#     registro es algo que hay que mirar, no una nota.
+#   * `unmaintained = "all"` y `unsound = "all"`: también en las dependencias
+#     transitivas, que es donde se enquista. Si alguna vez bloquea una subida
+#     legítima, la salida es un `ignore` con motivo, no bajar el nivel.
+yanked = "deny"
+unmaintained = "all"
+unsound = "all"
+
+[licenses]
+# MIT y Apache-2.0 cubren casi todo el árbol (axum, tokio, tower-http, tracing,
+# serde…), y las dos son compatibles con la licencia del proyecto (MIT).
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+]
+
+[bans]
+# Dos versiones de la misma crate son deuda: se deniega y se excepciona abajo lo
+# que hoy es inevitable, con su motivo.
+multiple-versions = "deny"
+# Ninguna versión comodín (`"*"`): fija el árbol y evita sustos.
+wildcards = "deny"
+
+# Crates que no queremos ni de rebote:
+deny = [
+    # El servicio no hace TLS: lo termina Traefik delante (el `Dockerfile` ni
+    # siquiera enlaza TLS). Cualquier aparición de OpenSSL significa código C
+    # compilado y la imagen deja de ser un binario estático.
+    { crate = "openssl", reason = "el TLS lo termina Traefik; además no queremos código C en la imagen", use-instead = "nada (no hay TLS que hacer)" },
+    { crate = "openssl-sys", reason = "arrastra OpenSSL y un compilador de C a la imagen", use-instead = "nada (no hay TLS que hacer)" },
+    { crate = "native-tls", reason = "el TLS lo termina Traefik", use-instead = "nada (no hay TLS que hacer)" },
+    # El backend de zlib en C. `flate2` se usa con su backend en Rust
+    # (`miniz_oxide`, ver el comentario de `Cargo.toml`): que entre `libz-sys`
+    # significa que el build necesita C, cosa que aquí se evita a propósito.
+    { crate = "libz-sys", reason = "`flate2` va con su backend en Rust (`miniz_oxide`); `libz-sys` obligaría a compilar C" },
+]
+
+# Duplicaciones que hoy son inevitables. Cada una lleva su versión exacta para
+# que cargo-deny avise cuando deje de hacer falta y se pueda borrar la línea.
+skip = [
+    # `syn` convive en 2.x y 3.x: `tracing-attributes` (a través de `tracing`)
+    # sigue en 2.x mientras `tokio-macros` y `serde_derive` ya van en 3.x. Es la
+    # duplicación de un proc-macro, sin efecto en el binario, y solo la resuelve
+    # el ecosistema publicando `tracing-attributes` contra `syn` 3.
+    { crate = "syn@2.0.119", reason = "`tracing-attributes` aún no ha publicado contra `syn` 3; es un proc-macro, no entra en el binario" },
+]
+
+[sources]
+# Todo el árbol viene de crates.io. Cualquier otra fuente —un registro privado
+# que se cuele en el `Cargo.lock`, o una dependencia `git`— se deniega: el
+# `Cargo.lock` no debe contener código que no esté publicado.
+unknown-registry = "deny"
+unknown-git = "deny"

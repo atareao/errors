@@ -1,0 +1,97 @@
+# git-cliff — cómo se genera el CHANGELOG de `errors`.
+# https://git-cliff.org/docs/configuration
+#
+# El CHANGELOG **no se regenera**: la receta `just changelog` **antepone** la
+# sección de lo que todavía no está etiquetado (`git-cliff --unreleased
+# --prepend CHANGELOG.md`). La entrada de `0.1.0` está escrita a mano y es más
+# rica que lo que saldría de los commits, así que se queda donde está.
+
+# El repositorio, solo para construir los enlaces de los encabezados. No hace
+# red: son dos cadenas que usa la plantilla.
+[remote.github]
+owner = "atareao"
+repo = "errors"
+
+[changelog]
+# Encabezado **estático** e idéntico al que ya tiene `CHANGELOG.md`. Con un
+# encabezado estático, `--prepend` lo reconoce por su texto y deja las secciones
+# nuevas justo debajo, sin duplicarlo. Si algún día se reescribe la cabecera del
+# CHANGELOG, hay que reflejarla aquí o cada ejecución antepondrá otra copia.
+header = """# Changelog
+
+El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el
+versionado, [SemVer](https://semver.org/lang/es/).
+
+"""
+
+# Una sección por versión. El encabezado enlaza al tag: a la comparación con la
+# versión anterior cuando la hay (es lo que hace útil un CHANGELOG), y al árbol
+# del tag en la primera versión, que no tiene con qué compararse. Sin versión
+# —lo que genera `just changelog` a secas— el enlace compara el último tag con
+# `HEAD`, que es exactamente el rango de commits que se está documentando.
+#
+# `<!-- N -->` delante del nombre del grupo es el truco del propio git-cliff: los
+# grupos se ordenan por ese comentario y `striptags` lo borra al imprimirlo. Sin
+# él, el orden sería alfabético y «Añadido» quedaría detrás de «Seguridad».
+body = """\
+{% if version %}\
+## [{{ version | trim_start_matches(pat="v") }}](https://github.com/{{ remote.github.owner }}/{{ remote.github.repo }}/compare/{% if previous %}{{ previous.version }}{% endif %}..{{ version }}) - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## [Sin publicar](https://github.com/{{ remote.github.owner }}/{{ remote.github.repo }}/compare/{% if previous %}{{ previous.version }}{% endif %}..HEAD)
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+
+{% for commit in commits %}\
+- {% if commit.scope %}**{{ commit.scope }}**: {% endif %}{{ commit.message | upper_first | trim }}{% if commit.breaking %} **(cambio incompatible)**{% endif %}
+{% endfor %}\
+{% endfor %}
+
+"""
+# Quita el espacio en blanco sobrante del principio y del final del cuerpo.
+trim = true
+
+[git]
+# Commits convencionales (`feat:`, `fix(scope):`…) y nada más: lo que no siga esa
+# convención se descarta. Esto ya deja fuera los «Merge pull request #N from …».
+conventional_commits = true
+filter_unconventional = true
+
+# Los parsers se aplican **en orden** y gana el primero que casa. Los dos
+# primeros son los que descartan ruido; el resto, los que agrupan.
+commit_parsers = [
+    # Commits de merge. Se descartan por el campo `merge_commit`, que es lo que
+    # git sabe de verdad, y no por el texto: un `Merge branch 'x'` a secas no es
+    # convencional (ya lo filtraría `filter_unconventional`), pero un merge
+    # squasheado sí puede parecerlo.
+    { field = "merge_commit", pattern = "true", skip = true },
+    { message = "^Merge", skip = true },
+    # Ruido de release: el commit que prepara la versión o el bump de
+    # dependencias no son noticias para quien lee el CHANGELOG. La etiqueta
+    # `changelog: ignore` en el pie del commit permite salirse a mano.
+    { message = "^chore\\(release\\)", skip = true },
+    { footer = "^changelog: ?ignore", skip = true },
+    # Tipos convencionales, en el orden de Keep a Changelog.
+    { message = "^feat", group = "<!-- 1 -->Añadido" },
+    { message = "^change", group = "<!-- 2 -->Cambiado" },
+    { message = "^refactor", group = "<!-- 2 -->Cambiado" },
+    { message = "^perf", group = "<!-- 2 -->Cambiado" },
+    { message = "^remove", group = "<!-- 3 -->Eliminado" },
+    { message = "^fix", group = "<!-- 4 -->Corregido" },
+    # Un pie `Security:` o una mención a la seguridad en el cuerpo sacan el
+    # commit a su propia sección, como en la entrada a mano de 0.1.0.
+    { body = "(?i)security|seguridad", group = "<!-- 5 -->Seguridad" },
+    { message = "^doc", group = "<!-- 6 -->Documentación" },
+    { message = "^test", group = "<!-- 7 -->Pruebas" },
+    # Lo demás que sí es convencional (`chore`, `ci`, `build`, `style`, `revert`)
+    # va a Mantenimiento en vez de perderse.
+    { message = "^revert", group = "<!-- 8 -->Mantenimiento" },
+    { message = ".*", group = "<!-- 8 -->Mantenimiento" },
+]
+# Ningún commit se queda sin grupo: el último parser es el comodín.
+filter_commits = false
+fail_on_unmatched_commit = false
+
+# `v0.1.0`, `v1.2.3`… El `v` lo recorta la plantilla al imprimir.
+tag_pattern = "v[0-9].*"
+sort_commits = "oldest"
