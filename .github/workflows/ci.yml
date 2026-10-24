@@ -32,3 +32,37 @@ jobs:
 
       - name: Tests
         run: cargo test
+
+  # Puerta de dependencias. Va aparte de las tres anteriores —y no dentro del
+  # mismo job— porque no necesita compilar nada: si el `Cargo.lock` trae un aviso
+  # de seguridad, una licencia incompatible o una fuente inesperada, esto se ve
+  # en un minuto mientras el job de arriba sigue compilando. El `name` de un job
+  # es lo que se marca como «check» requerido en la protección de rama.
+  dependencias:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Binario precompilado: `cargo install cargo-deny` se pasa varios minutos
+      # compilando el propio cargo-deny en cada ejecución.
+      #
+      # La versión va fijada a la **misma que se verificó al escribir
+      # `deny.toml`** (aquí, 0.20.2): el formato del fichero de configuración ha
+      # cambiado entre versiones —campos que se eliminan y pasan a ser error—,
+      # así que un `cargo-deny` nuevo no debería poder romper el CI sin que haya
+      # un commit de por medio. Subirla es cambiar esta línea y volver a pasar
+      # `cargo deny check -D warnings` en local.
+      - name: Instalar cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+
+      # Las cuatro comprobaciones de una vez: avisos (RustSec), licencias,
+      # prohibiciones y duplicaciones, y fuentes del `Cargo.lock`.
+      #
+      # `-D warnings` convierte en error los avisos de higiene del propio
+      # `deny.toml` —una licencia permitida que ya no usa nadie, por ejemplo—:
+      # sin él se quedan en el log y el fichero deriva a permitir de más.
+      - name: Avisos, licencias, duplicaciones y fuentes
+        run: cargo deny check -D warnings
