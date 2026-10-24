@@ -19,7 +19,7 @@ requisitos viven fusionados en los cuatro specs de `openspec/specs/`: `error-pag
 - `src/render.rs` — cuerpo por formato y cabeceras.
 - `src/metrics.rs` — contador de páginas servidas por código **y por origen del código**, y su serialización en texto Prometheus.
 - `content/` — **once** páginas HTML (`400`, `401`, `403`, `404`, `405`, `408`, `429`, `500`, `502`, `503`, `504`), todas con la clase `c<código>` en el `body`, y la hoja única `content/css/error.css`.
-- `Dockerfile`, `.dockerignore`, `.justfile`, `compose.yml` — empaquetado (imagen ~12 MB, no-root uid 10001); el `compose.yml` va endurecido: `read_only: true`, `cap_drop: [ALL]`, `no-new-privileges:true` e `init: true`.
+- `Dockerfile`, `.dockerignore`, `.justfile`, `compose.yml` — empaquetado (imagen ~13 MB, no-root uid 10001); el `compose.yml` va endurecido: `read_only: true`, `cap_drop: [ALL]`, `no-new-privileges:true` e `init: true`.
 - `README.md` — el contrato con Traefik y los ejemplos.
 
 Puertas en verde: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` y **124 tests**
@@ -169,7 +169,7 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo check --offline                       # el repo compila SIN RED (caché local de Cargo)
 cargo deny check -D warnings                # dependencias: avisos, licencias, duplicaciones y fuentes
-just changelog [v0.2.0]                     # antepone al CHANGELOG la sección de lo no etiquetado
+just changelog [v0.3.0]                     # antepone al CHANGELOG la sección de lo no etiquetado
 just build | run | dev                      # empaquetado (docker por defecto; just engine=podman ...)
 ```
 
@@ -181,7 +181,7 @@ Se mantiene con [`git-cliff`](https://git-cliff.org) (`cliff.toml`) y la receta 
 **antepone** (`--prepend`) la sección de lo que todavía no está etiquetado:
 
 - `just changelog` escribe la sección «Sin publicar» (los commits posteriores al último tag).
-- `just changelog v0.2.0` escribe esa misma sección ya con el nombre del tag que se va a crear: es lo
+- `just changelog v0.3.0` escribe esa misma sección ya con el nombre del tag que se va a crear: es lo
   que se hace justo antes de `git tag`.
 - La entrada de `0.1.0` está **escrita a mano** y es más rica que lo que saldría de los commits: el
   fichero **no se regenera**, así que se conserva.
@@ -190,24 +190,29 @@ Se mantiene con [`git-cliff`](https://git-cliff.org) (`cliff.toml`) y la receta 
 
 ## Entrega
 
-- `main` y `development` están **protegidas**: PR obligatorio, el check `fmt, clippy y tests` en
-  verde y `strict` (la rama ha de estar al día). `enforce_admins` está activo, así que **tampoco el
-  dueño empuja directo**. El flujo es: rama `feature/...` desde `development` → PR a `development` →
-  PR de `development` a `main`.
+- `main` y `development` están **protegidas**: PR obligatorio, los checks `fmt, clippy y tests` y
+  `cargo-deny` en verde y `strict` (la rama ha de estar al día). `enforce_admins` está activo, así
+  que **tampoco el dueño empuja directo**. El flujo es: rama `feature/...` desde `development` → PR a
+  `development` → PR de `development` a `main`.
 - El CI (`.github/workflows/ci.yml`) tiene **dos jobs**: `fmt, clippy y tests` (las tres puertas) y
-  `cargo-deny` (la puerta de dependencias, con `deny.toml`). En la protección de rama **solo está
-  marcado como requerido el primero**; el de `cargo-deny` corre en cada PR pero su rojo no bloquea el
-  merge hasta que se añada a `required_status_checks` (medido con la API: los `contexts` de `main` y
-  de `development` son `["fmt, clippy y tests"]`).
+  `cargo-deny` (la puerta de dependencias, con `deny.toml`). **Los dos están marcados como requeridos
+  en `main` y en `development`**, así que el rojo de cualquiera de ellos bloquea el merge (medido con
+  la API: los `contexts` de las dos ramas son `["fmt, clippy y tests", "cargo-deny"]`). Para volver a
+  medirlo:
+  `gh api repos/atareao/errserve/branches/main/protection --jq '.required_status_checks.contexts'`.
 - La imagen y el Release se publican empujando una **etiqueta** `v*`: el workflow `release.yml`
   construye, **prueba la imagen con docker real** (el runner sí lo tiene; aquí solo hay podman, que
   además descarta el `HEALTHCHECK` al construir en formato OCI), publica en GHCR y crea el Release.
   La etiqueta `latest` solo se mueve en versiones estables.
 - La visibilidad del paquete en GHCR **no se puede cambiar por API** (verificado: `PATCH /user/packages/...`
-  da 404; no existe ni en el OpenAPI ni en GraphQL): solo a mano en los ajustes del paquete. En este
-  repositorio, **medido** tras la primera publicación, el paquete quedó **público** —descarga anónima
-  y `tags/list` responden `200`—, así que no hubo que tocar nada; pero si algún día un
-  `docker pull ghcr.io/atareao/errserve` responde `denied`, ese es el motivo y ahí está el arreglo.
+  da 404; no existe ni en el OpenAPI ni en GraphQL): solo a mano en los ajustes del paquete. La primera
+  medición fue del paquete **viejo**, `ghcr.io/atareao/errors`, publicado antes del renombrado:
+  **medido** entonces, quedó **público** —descarga anónima y `tags/list` responden `200`—, así que no
+  hubo que tocar nada. El paquete **nuevo** ha seguido el mismo camino: `ghcr.io/atareao/errserve` se
+  publicó con `0.3.0` (y `latest`), y la descarga anónima funciona —comprobado con un `podman pull` sin
+  credenciales (`--authfile` con `{"auths":{}}`) y con `tags/list` anónimo—. Si algún día un
+  `docker pull ghcr.io/atareao/errserve` responde `denied`, eso es un cambio de visibilidad y ahí está
+  el arreglo a mano.
 - El paquete de GHCR `ghcr.io/atareao/errors` queda **congelado en `0.2.0`**: renombrar el repositorio
   **no** renombra ni redirige el paquete, así que sigue publicado y descargable, pero **no recibe nada
   nuevo** —lo que se publique a partir de ahora va a `ghcr.io/atareao/errserve`—. Y el nombre `errors`
