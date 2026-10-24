@@ -15,10 +15,15 @@ name: errors
 
 services:
   errors:
-    # Versiona la etiqueta en producción (`atareao/errors:0.1.0`): `latest` solo
-    # para probar. Si has construido la imagen en local con `just build`, la
-    # etiqueta ya es esta misma.
-    image: ${ERRORS_IMAGE:-atareao/errors:latest}
+    # La imagen publicada está en **GHCR** (`docker pull ghcr.io/atareao/errors`):
+    # no hay nada en Docker Hub. Versiona la etiqueta en producción
+    # (`ghcr.io/atareao/errors:0.1.0`); `latest` solo para probar. Si la has
+    # construido en local con `just build`, la etiqueta es esta misma.
+    #
+    # Si el `pull` responde `denied` sin credenciales, el paquete de GHCR sigue
+    # privado: nace así aunque el repositorio sea público y hay que hacerlo
+    # público a mano una vez (ver «Publicación» en README.md).
+    image: ${ERRORS_IMAGE:-ghcr.io/atareao/errors:latest}
     container_name: errors
     restart: unless-stopped
 
