@@ -53,7 +53,7 @@ use crate::config::{Config, LogFormat};
 use crate::metrics::PageCounters;
 use crate::path::NormalizedPath;
 use crate::render::{RenderedPage, render_page, render_text_fallback};
-use crate::resolve::{code_from_path, resolve_code, resolve_format};
+use crate::resolve::{code_from_path, resolve_code_with_source, resolve_format};
 use axum::Router;
 use axum::body::Body;
 use axum::extract::{Request, State};
@@ -89,6 +89,28 @@ const CORRELATION_HEADERS: [&str; 4] = [
     "X-Amzn-Trace-Id",
 ];
 
+/// Paths de los **endpoints de servicio** que declara [`build_router`].
+///
+/// Están aquí para que el middleware [`error_pages`] los deje fuera de la
+/// sustitución: un endpoint de servicio **no es una página de error**. Un método
+/// que el endpoint no admite es un hecho sobre *esa ruta* —axum lo dice con un
+/// `405` y su `Allow`—, y convertirlo en la página de error da un `404` que a la
+/// vez declara qué métodos admite la ruta: incoherente, y una mentira sobre qué
+/// es esa ruta.
+///
+/// **Esta lista tiene que seguir a la de [`build_router`]**: es exactamente la
+/// de las rutas que se registran allí. Si mañana se añade un endpoint de
+/// servicio en `build_router` y no aquí, sus estados de error volverán a salir
+/// como páginas de error.
+const SERVICE_ENDPOINTS: [&str; 6] = [
+    "/healthz",
+    "/health",
+    "/health/live",
+    "/live",
+    "/version",
+    "/metrics",
+];
+
 /// Estado compartido por el router: la configuración y el contador de páginas.
 ///
 /// El contador va aquí (y no en un `static`) para que sea **del router**: se
@@ -105,6 +127,10 @@ struct AppState {
 /// `/health`, `/health/live`, `/live`, `/version`, `/metrics`), assets
 /// estáticos de `config.content_dir` y *fallback* de páginas de error
 /// (resolución de código y de formato + `render_page`).
+///
+/// Los paths de esas seis rutas de servicio son los de [`SERVICE_ENDPOINTS`]:
+/// las dos listas van juntas, y añadir una ruta aquí sin añadirla allí deja sus
+/// estados de error a merced de [`error_pages`].
 fn build_router(config: &Config) -> Router {
     let state = AppState {
         config: config.clone(),
@@ -112,6 +138,9 @@ fn build_router(config: &Config) -> Router {
     };
 
     Router::new()
+        // Estas seis rutas son las de [`SERVICE_ENDPOINTS`], la lista que usa
+        // [`error_pages`] para no sustituir sus estados de error: las dos van
+        // juntas.
         .route("/healthz", get(alive))
         .route("/health", get(alive))
         .route("/health/live", get(alive))
@@ -238,6 +267,9 @@ async fn metrics(State(state): State<AppState>) -> Response {
 /// la petición. Los valores se guardan **antes** de ceder el paso a la capa
 /// interna (la petición se consume ahí) y se reinyectan en la respuesta con el
 /// mismo valor; lo que no venía, no se añade.
+///
+/// Como la respuesta depende de esas cabeceras, aquí mismo se declaran en
+/// `Vary`: ver [`declare_vary`].
 async fn correlation(request: Request, next: Next) -> Response {
     let carried = correlation_headers(request.headers());
 
@@ -247,7 +279,30 @@ async fn correlation(request: Request, next: Next) -> Response {
         response.headers_mut().insert(name, value);
     }
 
+    declare_vary(response.headers_mut());
+
     response
+}
+
+/// Declara en `Vary` que la respuesta depende de las cabeceras de correlación
+/// (spec `response-extras`, "Las cabeceras de correlación se declaran en Vary").
+///
+/// Su contenido cambia según esas cabeceras, porque se copian de la petición:
+/// sin declararlo, una caché intermedia podría servirle a un usuario el
+/// identificador de otro. Se añade **siempre**, haya o no cabeceras de
+/// correlación en la petición —una lista que cambiase según la petición no le
+/// serviría a una caché—, y con `append` porque `Vary` es una cabecera de lista:
+/// si alguna capa ya declaró algo, se une en vez de pisarse.
+///
+/// La lista declara también `Accept-Encoding` —que es lo que hace que la capa
+/// de compresión, al encontrarlo ya declarado, no añada un segundo `Vary` con
+/// lo mismo—, y va en un **único** valor: una caché tiene que leer las cinco
+/// declaraciones juntas, y repartirlas en dos valores del mismo campo no aporta
+/// nada.
+fn declare_vary(headers: &mut HeaderMap) {
+    let value = format!("Accept-Encoding, {}", CORRELATION_HEADERS.join(", "));
+
+    append_header(headers, header::VARY.as_str(), &value);
 }
 
 /// Las cabeceras de [`CORRELATION_HEADERS`] presentes en la petición, en ese
@@ -288,12 +343,33 @@ impl Hints {
     }
 }
 
-/// Middleware de cierre: lo que no es un asset estático existente es una página
-/// de error, con el estado igual al código resuelto (nunca `200`).
+/// Middleware de cierre: lo que no es un asset estático existente —ni un
+/// endpoint de servicio— es una página de error, con el estado igual al código
+/// resuelto (nunca `200`).
 ///
 /// Va en un middleware y no en un `fallback` para que las páginas de error
 /// manden sobre los ficheros: si no, `/404.html` se serviría desde
 /// `CONTENT_DIR/404.html` con un `200`, justo lo que este proyecto corrige.
+///
+/// Toda respuesta del servidor de ficheros **con estado de error** se sustituye
+/// por la página de error —no solo su `404`—: también el `405` de un método que
+/// no sirve estáticos, el `416` de un `Range` múltiple y el `500` de un
+/// segmento de path que no cabe como nombre de fichero, que salían con el
+/// cuerpo vacío y sin las cabeceras de la página (spec `error-page`, "Ningún
+/// estado de error del servidor de ficheros se escapa").
+///
+/// Los **endpoints de servicio** quedan fuera: no son el servidor de ficheros y
+/// no son páginas de error. Ver [`SERVICE_ENDPOINTS`].
+///
+/// El estado de la página es **el código resuelto**, nunca el suyo: el estado
+/// del servidor de ficheros no es una fuente de la cascada. Conservarlo —lo que
+/// hacía la primera versión de este change— salía peor que el defecto, medido
+/// con el binario delante: obligaba a propagar cabeceras que describen *su*
+/// respuesta (`Allow` en el `405`, `Content-Range` en el `416`) so pena de
+/// incumplir un `MUST` de RFC 9110; dejaba el estado y el cuerpo en desacuerdo
+/// (`GET /nada.png` con `X-Code: 503` salía `404` con el cuerpo del `503` y su
+/// `Retry-After: 120`); y con `DEFAULT_ERROR_PAGE=503` convertía cualquier
+/// asset inexistente en un `404`, dejando sin efecto a `X-Code`.
 ///
 /// El path se normaliza **una sola vez** aquí (percent-decode + plegado de `.`
 /// y `..`) y la URI se reescribe con esa misma cadena antes de entregársela a
@@ -320,9 +396,49 @@ async fn error_pages(State(state): State<AppState>, mut request: Request, next: 
 
     let response = next.run(request).await;
 
-    // El asset no existe: en vez del `404` vacío de `ServeDir`, la página de
-    // error del código resuelto.
-    if response.status() == StatusCode::NOT_FOUND {
+    // Los endpoints de servicio —`SERVICE_ENDPOINTS`, los que declara
+    // `build_router`— quedan fuera de la sustitución: no son páginas de
+    // error. Su `405` —el método que no admiten— es un estado honesto del
+    // endpoint y lo dice con su `Allow`; convertir esa respuesta en una página
+    // nuestra produce un `404` que a la vez declara qué métodos admite la ruta,
+    // que es tanto como mentir sobre qué es esa ruta. Es el estado que daba
+    // axum aquí antes de este change.
+    //
+    // El límite, dicho: hoy un endpoint de servicio solo devuelve `200` o el
+    // `405` del propio router, así que esta salida temprana no se está saltando
+    // ningún `5xx` suyo. Si algún día uno devolviera un `5xx`, ese `5xx` **no**
+    // pasaría por esta vía: saldría tal cual, sin página de error. Es el lado
+    // correcto por el que caer —un fallo interno de un endpoint de servicio no
+    // es una petición de página de error—, pero conviene saberlo.
+    if is_service_endpoint(normalized.as_str()) {
+        return response;
+    }
+
+    let status = response.status();
+
+    // Cualquier estado de error del servidor de ficheros se sustituye por la
+    // página de error: es la única forma de que ninguno salga sin cuerpo ni sin
+    // nuestras cabeceras. Lo que **no** se toca:
+    //
+    // - El `200` de un asset existente: se sirve tal cual, y convertirlo en
+    //   página de error es el fallo que este proyecto corrige.
+    // - El `304` de una petición condicional (`If-Modified-Since`), que es el
+    //   único `3xx` que `ServeDir` emite aquí. Se deja pasar **a propósito**: no
+    //   es un estado de error, no admite cuerpo y es la respuesta que el cliente
+    //   pidió. (Este es el `3xx` al que se refería el comentario viejo, que
+    //   decía que `append_index_html_on_directories(false)` los suprimía: eso es
+    //   falso —esa opción suprime la redirección de directorio, no los `3xx`—,
+    //   así que no lo «endurezcas» mañana leyendo aquella frase.)
+    //
+    // La condición de abajo es la que distingue: un `304` no es error de cliente
+    // ni de servidor, así que no entra.
+    //
+    // El estado del servidor de ficheros **no** se pasa a `error_response`: no
+    // es una fuente de la cascada, así que el estado de la página es el código
+    // resuelto. Conservarlo obligaba a propagar el `Allow` del `405` o el
+    // `Content-Range` del `416` so pena de incumplir un `MUST` de RFC 9110,
+    // dejaba el estado y el cuerpo en desacuerdo y anulaba `X-Code`.
+    if status.is_client_error() || status.is_server_error() {
         return error_response(&state, &normalized, &hints).await;
     }
 
@@ -363,19 +479,41 @@ fn is_error_page_path(path: &str) -> bool {
     first_segment.is_empty() || code_from_path(path).is_some()
 }
 
+/// ¿El path —ya normalizado— es uno de los endpoints de servicio
+/// ([`SERVICE_ENDPOINTS`])?
+///
+/// Compara sobre el path **normalizado** —el mismo que usa el resto del
+/// middleware, no el crudo de la petición— y exige **igualdad exacta**: otro
+/// path que no sea uno de los seis registrados en [`build_router`] no es un
+/// endpoint de servicio, así que sigue su camino como cualquier otro (y, al no
+/// existir como asset, acaba en la página de error). `/healthz/` o `/metrics/x`
+/// no son esos endpoints.
+fn is_service_endpoint(path: &str) -> bool {
+    SERVICE_ENDPOINTS.contains(&path)
+}
+
 /// Resuelve código y formato y renderiza la página de error.
 ///
 /// Es el **único** punto donde se sirve una página de error, así que es donde
-/// se cuenta: cada página servida suma uno al contador de su código. El código
-/// ya está resuelto aquí y siempre es del rango utilizable, que es lo que hace
-/// que el contador no pueda crecer sin límite.
+/// se cuenta: cada página servida suma uno al contador del par `(código, origen
+/// del código)`. El código ya está resuelto aquí y siempre es del rango
+/// utilizable, que es lo que hace que el contador no pueda crecer sin límite.
+///
+/// El estado, el cuerpo y las cabeceras salen del **código resuelto** por la
+/// cascada: el estado de la respuesta del servidor de ficheros que esta página
+/// sustituye no es una de las fuentes de esa cascada. Conservarlo obligaba a
+/// propagar cabeceras que describen *su* respuesta —el `Allow` del `405`, el
+/// `Content-Range` del `416`— so pena de incumplir un `MUST` de RFC 9110,
+/// dejaba el estado y el cuerpo en desacuerdo (un `404` con el `Retry-After` y
+/// el cuerpo del `503`) y, con `DEFAULT_ERROR_PAGE=503`, convertía cualquier
+/// asset inexistente en un `404`, dejando sin efecto a `X-Code`.
 ///
 /// El render lee del disco, así que va en `spawn_blocking`: el hilo del
 /// ejecutor async no se bloquea con E/S síncrona (auditoría I-1).
 async fn error_response(state: &AppState, path: &NormalizedPath, hints: &Hints) -> Response {
     let config = &state.config;
 
-    let code = resolve_code(
+    let (code, source) = resolve_code_with_source(
         path.as_str(),
         hints.x_code.as_deref(),
         config.default_error_page,
@@ -387,7 +525,7 @@ async fn error_response(state: &AppState, path: &NormalizedPath, hints: &Hints) 
         hints.accept.as_deref(),
     );
 
-    state.counters.record(code);
+    state.counters.record(code, source);
 
     let rendered = tokio::task::spawn_blocking({
         let config = config.clone();
@@ -413,6 +551,11 @@ async fn error_response(state: &AppState, path: &NormalizedPath, hints: &Hints) 
 
 /// Convierte una página renderizada en la respuesta de axum. `Content-Length`
 /// lo calcula hyper a partir del cuerpo; el resto de cabeceras van aquí.
+///
+/// El estado es el del código resuelto ([`RenderedPage::status`]) y las
+/// cabeceras de acompañamiento se calcularon a partir de él
+/// ([`RenderedPage::headers`]), así que el estado, el cuerpo y el `Retry-After`
+/// no pueden discrepar.
 fn page_response(page: RenderedPage) -> Response {
     let mut response = Response::new(Body::from(page.body));
     *response.status_mut() = page.status;
@@ -431,6 +574,9 @@ fn page_response(page: RenderedPage) -> Response {
 }
 
 /// Inserta una cabecera, ignorándola si el nombre o el valor no son válidos.
+///
+/// `insert` **sustituye** lo que hubiera con ese nombre: para las cabeceras de
+/// la página de error, que no se repiten, es lo correcto.
 fn insert_header(headers: &mut HeaderMap, name: &str, value: &str) {
     let Ok(name) = HeaderName::from_bytes(name.as_bytes()) else {
         return;
@@ -442,10 +588,26 @@ fn insert_header(headers: &mut HeaderMap, name: &str, value: &str) {
     headers.insert(name, value);
 }
 
+/// Añade una cabecera a las que ya hubiera con ese nombre, en vez de pisarlas.
+///
+/// Es lo que necesita una cabecera de lista como `Vary`; con `insert` se
+/// perdería lo que otra capa (la compresión) haya declarado.
+fn append_header(headers: &mut HeaderMap, name: &str, value: &str) {
+    let Ok(name) = HeaderName::from_bytes(name.as_bytes()) else {
+        return;
+    };
+    let Ok(value) = HeaderValue::from_str(value) else {
+        return;
+    };
+
+    headers.append(name, value);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::metrics::COUNTER_NAME;
     use axum::body::Body;
     use axum::http::{Request, StatusCode, header};
     use flate2::read::GzDecoder;
@@ -477,6 +639,19 @@ mod tests {
             "CONTENT_DIR".to_string(),
             content_dir.to_string_lossy().into_owned(),
         )])
+        .unwrap()
+    }
+
+    /// Configuración de prueba con `DEFAULT_ERROR_PAGE=503`: el defecto
+    /// configurado tiene que mandar sobre el `404` del servidor de ficheros.
+    fn default_503_config() -> Config {
+        Config::from_env_iter([
+            (
+                "CONTENT_DIR".to_string(),
+                fixtures_content_dir().to_string_lossy().into_owned(),
+            ),
+            ("DEFAULT_ERROR_PAGE".to_string(), "503".to_string()),
+        ])
         .unwrap()
     }
 
@@ -621,6 +796,61 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn un_metodo_no_admitido_sobre_un_endpoint_de_servicio_conserva_el_405_de_axum() {
+        // Los endpoints de servicio no son páginas de error: su `405` —el
+        // método que no admiten— es un estado honesto del endpoint y lo dice con
+        // su `Allow`. Interceptarlo daba un `404` que a la vez declaraba qué
+        // métodos admite la ruta, y eso no describe ninguna página de error.
+        // Los seis endpoints de servicio, con su path literal —no leído de
+        // `SERVICE_ENDPOINTS`—: la prueba comprueba así que la lista del código
+        // sigue siendo la de `build_router`.
+        for uri in [
+            "/healthz",
+            "/health",
+            "/health/live",
+            "/live",
+            "/version",
+            "/metrics",
+        ] {
+            for method in ["POST", "PUT"] {
+                let request = Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap();
+
+                let response = send(request).await;
+
+                assert_eq!(
+                    response.status(),
+                    StatusCode::METHOD_NOT_ALLOWED,
+                    "`{method} {uri}` debe conservar el 405 de axum, no {:?}",
+                    response.status()
+                );
+                assert_eq!(
+                    header_value(&response, "Allow").as_deref(),
+                    Some("GET,HEAD"),
+                    "`{method} {uri}`: el 405 del endpoint describe la ruta con su `Allow`"
+                );
+                assert_eq!(
+                    header_value(&response, "X-Robots-Tag"),
+                    None,
+                    "`{method} {uri}`: un endpoint de servicio no lleva las cabeceras \
+                     de la página de error"
+                );
+
+                let body = body_bytes(response).await;
+                assert!(
+                    body.is_empty(),
+                    "`{method} {uri}`: la respuesta no puede ser una página de error, \
+                     y este cuerpo no está vacío: {}",
+                    String::from_utf8_lossy(&body)
+                );
+            }
+        }
+    }
+
     // --- Assets estáticos (tasks.md 1.8) ----------------------------------
 
     #[tokio::test]
@@ -635,6 +865,41 @@ mod tests {
 
         let body = body_bytes(response).await;
         assert!(!body.is_empty(), "el CSS servido no puede estar vacío");
+    }
+
+    #[tokio::test]
+    async fn un_asset_con_if_modified_since_en_el_futuro_responde_304_y_no_una_pagina() {
+        // El único `3xx` que `ServeDir` emite aquí es el `304` de una petición
+        // condicional, y pasa tal cual **a propósito**: no es un estado de
+        // error, no admite cuerpo y es la respuesta que el cliente pidió. Ni se
+        // intercepta ni se convierte en página de error.
+        //
+        // La fecha tiene que ser un IMF-fixdate válido **y con el día de la
+        // semana correcto**: `httpdate` valida el día y descarta la cabecera si
+        // no cuadra (`Wed, 21 Oct 2030` es un lunes, así que esa fecha se
+        // ignora y la respuesta sería un `200`). Esta está bien formada, es
+        // futura para cualquier copia del repositorio y el `Last-Modified` del
+        // fixture nunca la alcanza.
+        let response = send(get_with_headers(
+            "/css/404.css",
+            &[("If-Modified-Since", "Tue, 01 Jan 2999 00:00:00 GMT")],
+        ))
+        .await;
+
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_MODIFIED,
+            "`If-Modified-Since` posterior al `Last-Modified` del asset da `304`"
+        );
+        assert_eq!(
+            header_value(&response, "X-Robots-Tag"),
+            None,
+            "un `304` no es una página de error: no puede llevar sus cabeceras"
+        );
+        assert!(
+            body_bytes(response).await.is_empty(),
+            "un `304` no admite cuerpo"
+        );
     }
 
     // --- Normalización del path (auditoría B-1) ---------------------------
@@ -1071,17 +1336,36 @@ mod tests {
     // deterministas las cuentas, porque las demás pruebas corren en paralelo y
     // también piden `/404`.
 
-    /// Valor del contador de un código, leído del texto Prometheus.
+    /// Total de páginas servidas con un código, leído del texto Prometheus.
     ///
-    /// Se busca la **línea entera** (`errors_pages_total{code="404"} 3`): un
-    /// `contains` sobre el cuerpo daría por bueno un `33`.
+    /// Con la etiqueta de origen un código puede repartirse entre varias series
+    /// (`{code="404",source="path"}`, `{code="404",source="default"}`…), así que
+    /// buscar la línea entera ya no encontraría nada: se **suman** todas las
+    /// series de ese código, sea cual sea su origen.
+    ///
+    /// Sumar no debilita lo que esta prueba comprobaba —el total de páginas
+    /// servidas de cada código—, y se sigue exigiendo la etiqueta completa
+    /// (`code="404",` y el `} ` de cierre) y un valor parseable: un `contains`
+    /// sobre el cuerpo daría por bueno un `33`.
     fn contador_prometheus(cuerpo: &str, code: u16) -> Option<u64> {
-        let prefijo = format!("errors_pages_total{{code=\"{code}\"}} ");
+        let prefijo = format!("{COUNTER_NAME}{{code=\"{code}\",");
 
-        cuerpo
-            .lines()
-            .find_map(|linea| linea.strip_prefix(&prefijo))
-            .and_then(|valor| valor.trim().parse().ok())
+        let mut total = None;
+        for linea in cuerpo.lines() {
+            let Some(resto) = linea.strip_prefix(&prefijo) else {
+                continue;
+            };
+            let Some((_, valor)) = resto.split_once("} ") else {
+                continue;
+            };
+            let Ok(valor) = valor.trim().parse::<u64>() else {
+                continue;
+            };
+
+            total = Some(total.unwrap_or(0) + valor);
+        }
+
+        total
     }
 
     /// Router propio de la prueba: se le piden las páginas de error indicadas
@@ -1172,5 +1456,390 @@ mod tests {
             cuerpo.contains("# TYPE errors_pages_total counter"),
             "falta el tipo (`# TYPE ... counter`) del contador:\n{cuerpo}"
         );
+    }
+
+    #[tokio::test]
+    async fn el_path_gana_a_la_cabecera_y_el_contador_lo_declara_con_origen_path() {
+        // Guarda del contador (tasks.md 1.10): `/404` es una página de error por
+        // su path, así que se sirve como `404` aunque venga `X-Code: 503`, y el
+        // contador tiene que declararlo con origen `path`. Router propio de la
+        // prueba, como en `el_contador_distingue_de_donde_salio_el_codigo`: las
+        // cuentas deterministas necesitan un contador propio, porque las demás
+        // pruebas corren en paralelo y también piden `/404`.
+        let router = build_router(&fixtures_config());
+
+        let request = Request::builder()
+            .uri("/404")
+            .header("X-Code", "503")
+            .body(Body::empty())
+            .unwrap();
+        let response = router.clone().oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let response = router.oneshot(get("/metrics")).await.unwrap();
+        let cuerpo = String::from_utf8(body_bytes(response).await).unwrap();
+
+        assert!(
+            cuerpo.contains(r#"errors_pages_total{code="404",source="path"} 1"#),
+            "el path ganó: la página se cuenta con origen `path`:\n{cuerpo}"
+        );
+        assert!(
+            !cuerpo.contains(r#"source="header""#),
+            "el path ganó, así que ninguna serie puede declarar origen `header`:\n{cuerpo}"
+        );
+    }
+
+    // --- Ningún estado de error del servidor de ficheros se escapa ---------
+    //
+    // Change `security-hardening`, tasks.md 1.1-1.8. Los tres defectos de la
+    // auditoría, cada uno con la petición que lo reproduce: un segmento de path
+    // que no cabe como nombre de fichero (`ENAMETOOLONG`), un método que el
+    // servidor de ficheros no admite y un `Range` múltiple. La spec `error-page`
+    // ("Ningún estado de error del servidor de ficheros se escapa") manda
+    // sustituir **cualquier** respuesta suya con estado de error —`4xx` o `5xx`,
+    // no solo el `404`— por la página de error, con el estado igual al **código
+    // resuelto** por la cascada (path -> `X-Code` -> defecto).
+    //
+    // El estado del servidor de ficheros **no** es una de las fuentes de esa
+    // cascada, así que no elige ni el estado ni el cuerpo ni las cabeceras.
+    // Conservarlo se probó y se descartó, y estas pruebas fijan por qué, con las
+    // tres mediciones hechas con el binario delante:
+    //
+    // - Obligaba a propagar cabeceras que describen *su* respuesta (`Allow` en
+    //   el `405`, `Content-Range` en el `416`) so pena de incumplir un `MUST` de
+    //   RFC 9110: el `PUT /css/404.css` salía `405` **sin** `Allow`.
+    // - Dejaba el estado y el cuerpo en desacuerdo: `GET /nada.png` con
+    //   `X-Code: 503` salía `404` con el cuerpo del `503` y su
+    //   `Retry-After: 120`.
+    // - Con `DEFAULT_ERROR_PAGE=503`, cualquier asset inexistente salía `404`,
+    //   dejando sin efecto a `X-Code`, que existe justo para los despliegues que
+    //   no reescriben el path.
+    //
+    // De ahí que `PUT /css/404.css` (un `405` del servidor de ficheros) lleve el
+    // estado y el cuerpo del código resuelto (`404`, el defecto: `/css/404.css`
+    // no aporta código), y que un segmento imposible (`500` suyo) lleve
+    // también los del resuelto.
+
+    /// Un segmento de path que no cabe como nombre de fichero: el servidor de
+    /// ficheros falla al abrirlo (`ENAMETOOLONG`, os error 36) y responde un
+    /// `500` vacío y sin cabeceras.
+    fn uri_imposible() -> String {
+        format!("/{}", "a".repeat(300))
+    }
+
+    /// Los nombres que declara `Vary`, en minúsculas, sin repetir y en orden.
+    ///
+    /// Junta **todas** las cabeceras `Vary` (varias capas pueden añadir la
+    /// suya) y las parte por comas, que es como la spec compara —`Accept-Encoding`
+    /// en minúsculas— con independencia de cómo las escriba cada capa.
+    fn vary_names(response: &axum::response::Response) -> Vec<String> {
+        let mut names: Vec<String> = response
+            .headers()
+            .get_all(header::VARY)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .flat_map(|value| value.split(','))
+            .map(|name| name.trim().to_ascii_lowercase())
+            .filter(|name| !name.is_empty())
+            .collect();
+
+        names.sort();
+        names.dedup();
+
+        names
+    }
+
+    #[tokio::test]
+    async fn un_segmento_de_path_imposible_da_la_pagina_de_error_y_no_un_500() {
+        let response = send(get(&uri_imposible())).await;
+        let status = response.status();
+
+        assert_ne!(
+            status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "una URL larga no puede fabricar un 5xx del servicio"
+        );
+        assert!(
+            (400..=599).contains(&status.as_u16()),
+            "el estado debe estar en 400..=599, fue {status}"
+        );
+        // El segmento no aporta código (no es un número), así que el código
+        // resuelto es el defecto de la configuración de prueba: `404`.
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "el 500 del servidor de ficheros debe caer al código resuelto, no {status}"
+        );
+
+        assert_eq!(
+            header_value(&response, "X-Robots-Tag").as_deref(),
+            Some("noindex, nofollow, nosnippet, noarchive"),
+            "la página de error debe llevar sus cabeceras"
+        );
+
+        let body = body_bytes(response).await;
+        assert!(
+            !body.is_empty(),
+            "el `500` del servidor de ficheros sale con el cuerpo vacío; la página de error no"
+        );
+        // Sin `Accept` el formato por defecto es texto, así que el cuerpo es el
+        // de la página del código resuelto.
+        assert_eq!(
+            body,
+            render_text_fallback(404).body,
+            "el cuerpo debe ser el de la página del código resuelto (texto)"
+        );
+    }
+
+    #[tokio::test]
+    async fn un_metodo_no_admitido_sobre_un_asset_da_la_pagina_del_codigo_resuelto() {
+        let request = Request::builder()
+            .method("PUT")
+            .uri("/css/404.css")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = send(request).await;
+
+        // El `405` del servidor de ficheros **no** se conserva. Conservarlo
+        // obligaba a propagar el `Allow` que describe *su* respuesta —un `MUST`
+        // de RFC 9110 §15.5.6— y ese `Allow` se perdía al construir la nuestra,
+        // así que salía un `405` que mentía. `/css/404.css` no aporta código
+        // (su primer segmento no es un número), así que el resuelto es el
+        // defecto: `404`.
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_ne!(
+            response.status(),
+            StatusCode::METHOD_NOT_ALLOWED,
+            "el `405` del servidor de ficheros no puede ser el estado de la página"
+        );
+        assert_eq!(
+            header_value(&response, "X-Robots-Tag").as_deref(),
+            Some("noindex, nofollow, nosnippet, noarchive"),
+            "un `405` del servidor de ficheros se escapaba sin las cabeceras de la página"
+        );
+
+        let body = body_bytes(response).await;
+        assert!(
+            !body.is_empty(),
+            "el `405` del servidor de ficheros sale con el cuerpo vacío: debe ser la página"
+        );
+        // El cuerpo es el de la cascada: `/css/404.css` no aporta código, así
+        // que es el del defecto (`404`). Sin `Accept`, en texto.
+        assert_eq!(
+            body,
+            render_text_fallback(404).body,
+            "el cuerpo debe ser el de la página del código resuelto (texto)"
+        );
+    }
+
+    #[tokio::test]
+    async fn un_asset_existente_sigue_sirviendose_con_200_y_no_como_pagina_de_error() {
+        // Guarda del arreglo: interceptar los estados de error del servidor de
+        // ficheros no puede tragarse el camino bueno.
+        let response = send(get("/css/404.css")).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            content_type(&response).starts_with("text/css"),
+            "Content-Type inesperado: {}",
+            content_type(&response)
+        );
+        assert_eq!(
+            header_value(&response, "X-Robots-Tag"),
+            None,
+            "un asset no es una página de error: no puede llevar sus cabeceras"
+        );
+        assert!(
+            !body_bytes(response).await.is_empty(),
+            "el CSS servido no puede estar vacío"
+        );
+    }
+
+    #[tokio::test]
+    async fn un_range_multiple_sobre_un_asset_da_la_pagina_del_codigo_resuelto() {
+        // `tower-http` no soporta multi-rango, así que rechaza este `Range` con
+        // un `416`: los dos rangos (`0-0` y `1-1`) son satisfacibles por
+        // separado, no es un `Range` no satisfacible. Ese `416` tampoco se
+        // conserva: la `Content-Range` que lo acompaña describe *su* respuesta,
+        // y el estado del servidor de ficheros no es una fuente de la cascada.
+        // Sale el código resuelto —el defecto, `404`— con la página.
+        let response = send(get_with_headers(
+            "/css/404.css",
+            &[("Range", "bytes=0-0,1-1")],
+        ))
+        .await;
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_ne!(
+            response.status(),
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            "el `416` del servidor de ficheros no puede ser el estado de la página"
+        );
+        assert_eq!(
+            header_value(&response, "X-Robots-Tag").as_deref(),
+            Some("noindex, nofollow, nosnippet, noarchive"),
+            "el `416` del servidor de ficheros salía sin las cabeceras de la página"
+        );
+        assert!(
+            !body_bytes(response).await.is_empty(),
+            "el `416` del servidor de ficheros sale con el cuerpo vacío: debe ser la página"
+        );
+    }
+
+    #[tokio::test]
+    async fn un_asset_inexistente_con_x_code_responde_el_codigo_resuelto() {
+        // El `404` del servidor de ficheros no puede tapar la cabecera: el
+        // estado sale de la cascada, así que `X-Code: 503` manda y el
+        // `Retry-After` corresponde al estado que se sirve, no al código de un
+        // cuerpo ajeno.
+        let response = send(get_with_headers("/nada.png", &[("X-Code", "503")])).await;
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            header_value(&response, "Retry-After").as_deref(),
+            Some("120"),
+            "el `503` servido tiene que llevar su `Retry-After`"
+        );
+
+        let body = body_bytes(response).await;
+        assert_eq!(
+            body,
+            render_text_fallback(503).body,
+            "el cuerpo debe ser el de la página del código resuelto (`503`)"
+        );
+    }
+
+    #[tokio::test]
+    async fn el_defecto_configurado_manda_sobre_el_not_found_del_servidor_de_ficheros() {
+        // Con `DEFAULT_ERROR_PAGE=503`, conservar el `404` del servidor de
+        // ficheros contradecía el defecto configurado y dejaba sin efecto a
+        // `X-Code`, que existe justo para los despliegues que no reescriben el
+        // path.
+        let response = build_router(&default_503_config())
+            .oneshot(get("/nada.png"))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_ne!(response.status(), StatusCode::NOT_FOUND);
+
+        let body = body_bytes(response).await;
+        assert_eq!(
+            body,
+            render_text_fallback(503).body,
+            "el cuerpo debe ser el de la página del defecto configurado (`503`)"
+        );
+    }
+
+    #[tokio::test]
+    async fn el_retry_after_corresponde_al_estado_servido() {
+        // `Retry-After` describe el estado que se sirve, no el código de un
+        // cuerpo ajeno: sobre las respuestas interceptadas —donde el servidor de
+        // ficheros aporta un estado— solo puede aparecer con un `429` o un
+        // `503`. Hasta esta corrección, un asset inexistente con `X-Code: 503`
+        // salía `404` **con** el `Retry-After: 120` del `503` resuelto.
+        let interceptadas = [
+            get_with_headers("/nada.png", &[("X-Code", "503")]),
+            Request::builder()
+                .method("PUT")
+                .uri("/css/404.css")
+                .body(Body::empty())
+                .unwrap(),
+            get(&uri_imposible()),
+        ];
+
+        for request in interceptadas {
+            let response = send(request).await;
+            let status = response.status();
+            let retry_after = header_value(&response, "Retry-After");
+            // `429` y `503` lo llevan; el resto no.
+            let debe_llevarlo = matches!(
+                status,
+                StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE
+            );
+
+            assert_eq!(
+                retry_after.is_some(),
+                debe_llevarlo,
+                "`Retry-After` = {retry_after:?} con estado {status}: solo `429` y `503` lo llevan"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn una_respuesta_interceptada_sigue_la_cascada_de_formato() {
+        // Guarda: la respuesta interceptada se construye como cualquier página
+        // de error, así que el formato sale de la cascada (`Accept: text/html`
+        // aquí) y el cuerpo es el HTML del código resuelto (`404`, el defecto).
+        let request = Request::builder()
+            .method("PUT")
+            .uri("/css/404.css")
+            .header("Accept", "text/html")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = send(request).await;
+
+        assert!(
+            content_type(&response).starts_with("text/html"),
+            "Content-Type inesperado: {}",
+            content_type(&response)
+        );
+
+        let body = body_bytes(response).await;
+        assert_eq!(
+            body,
+            fixture_404_html().as_bytes(),
+            "el cuerpo debe ser la página HTML del código resuelto (`404`)"
+        );
+    }
+
+    #[tokio::test]
+    async fn vary_declara_la_compresion_y_las_cuatro_cabeceras_de_correlacion() {
+        // La respuesta copia las cabeceras de correlación de la petición, así
+        // que su contenido depende de ellas: sin declararlo en `Vary`, una
+        // caché intermedia podría servirle a un usuario el identificador de
+        // otro. La lista tiene que ser la misma con y sin ellas en la petición
+        // (una lista que cambiase no serviría a una caché), y la capa de
+        // correlación envuelve a **todo** el router: la declaración va también
+        // en los endpoints de servicio —`/healthz`, `/metrics`—, no solo en las
+        // páginas de error.
+        for uri in ["/404", "/healthz", "/metrics"] {
+            let sin_correlacion = send(get(uri)).await;
+            let con_correlacion = send(get_with_headers(
+                uri,
+                &[
+                    ("X-Request-Id", "req-1"),
+                    ("X-Trace-Id", "trace-2"),
+                    ("X-Correlation-Id", "corr-3"),
+                    ("X-Amzn-Trace-Id", "Root=1-abc"),
+                ],
+            ))
+            .await;
+
+            let sin = vary_names(&sin_correlacion);
+            let con = vary_names(&con_correlacion);
+
+            assert_eq!(
+                con, sin,
+                "`{uri}`: `Vary` no puede depender de la petición: sin cabeceras {sin:?}, \
+                 con ellas {con:?}"
+            );
+
+            for nombre in [
+                "accept-encoding",
+                "x-request-id",
+                "x-trace-id",
+                "x-correlation-id",
+                "x-amzn-trace-id",
+            ] {
+                assert!(
+                    sin.contains(&nombre.to_string()),
+                    "`{uri}`: falta `{nombre}` en `Vary` (Vary = {sin:?})"
+                );
+            }
+        }
     }
 }
