@@ -31,9 +31,10 @@
 //! /// Descripción larga del código; genérica para los códigos no tabulados.
 //! pub fn description(code: u16) -> &'static str;
 //!
-//! /// Cabecera `Retry-After`: `Some(120)` solo para `429` y `503`, `None` para
-//! /// el resto (spec `error-page`, "Las cabeceras de acompañamiento").
-//! pub fn retry_after_secs(code: u16) -> Option<u32>;
+//! /// Cabecera `Retry-After`: `Some(configured)` solo para `429` y `503`,
+//! /// `None` para el resto (spec `error-page`, "Las cabeceras de acompañamiento").
+//! /// Decide **qué códigos** la llevan; el valor lo aporta la configuración.
+//! pub fn retry_after_secs(code: u16, configured: u32) -> Option<u32>;
 //! ```
 //!
 //! Detalles que la fase GREEN debe respetar:
@@ -251,11 +252,16 @@ pub fn description(code: u16) -> &'static str {
     }
 }
 
-/// Cabecera `Retry-After`: `Some(120)` solo para `429` y `503`, `None` para el
-/// resto (spec `error-page`, "Las cabeceras de acompañamiento").
-pub fn retry_after_secs(code: u16) -> Option<u32> {
+/// Cabecera `Retry-After`: `Some(configured)` solo para `429` y `503`, `None`
+/// para el resto (spec `error-page`, "Las cabeceras de acompañamiento").
+///
+/// Decide **qué códigos** llevan la cabecera —y eso no se configura: lo decide
+/// el código— y deja el **valor** a la configuración que lo acompaña
+/// (`RETRY_AFTER`, `120` por defecto). La frontera se mantiene así: `resolve`
+/// decide, `render` compone.
+pub fn retry_after_secs(code: u16, configured: u32) -> Option<u32> {
     match code {
-        429 | 503 => Some(120),
+        429 | 503 => Some(configured),
         _ => None,
     }
 }
@@ -551,9 +557,27 @@ mod tests {
 
     #[test]
     fn retry_after_solo_para_429_y_503() {
-        assert_eq!(retry_after_secs(429), Some(120));
-        assert_eq!(retry_after_secs(503), Some(120));
-        assert_eq!(retry_after_secs(404), None);
-        assert_eq!(retry_after_secs(500), None);
+        // Qué códigos llevan la cabecera lo sigue decidiendo esta función; el
+        // valor lo aporta la configuración (aquí, el defecto `120`) y se
+        // devuelve tal cual, sin retocarlo.
+        assert_eq!(retry_after_secs(429, 120), Some(120));
+        assert_eq!(retry_after_secs(503, 120), Some(120));
+        assert_eq!(retry_after_secs(404, 120), None);
+        assert_eq!(retry_after_secs(500, 120), None);
+
+        // Con el valor esperado igual al del defecto, una implementación que
+        // ignorase el parámetro y devolviese `120` fijo —la de antes de este
+        // change— también pasaría las cuatro aserciones de arriba. Estos pares
+        // usan un valor distinto del esperado para que el parámetro discrimine.
+        assert_eq!(retry_after_secs(429, 30), Some(30));
+        assert_eq!(retry_after_secs(503, 45), Some(45));
+
+        // Caza la implementación que devolviese la cabecera para cualquier
+        // código: un `404` con un valor distinto del defecto tiene que seguir
+        // siendo `None`.
+        assert_eq!(retry_after_secs(404, 30), None);
+        // Caza cualquier recorte o saturación del valor: el extremo sale tal
+        // cual, sin retocarlo.
+        assert_eq!(retry_after_secs(503, u32::MAX), Some(u32::MAX));
     }
 }
