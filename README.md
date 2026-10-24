@@ -1,4 +1,4 @@
-# errors
+# errserve
 
 Servidor de páginas de error para **Traefik**, escrito en Rust. Es un clon
 deliberadamente mínimo de [tarampampam/error-pages][ep] con **una diferencia de
@@ -61,8 +61,8 @@ Hay un **ejemplo ejecutable** en [`examples/traefik/`](examples/traefik/) —Tra
 [`compose.yml`](compose.yml) en la raíz listo para producción (solo el servicio, con los labels de
 Traefik para descomentar). El ejemplo explica además el matiz de quién decide el código HTTP.
 
-Los dos usan la **imagen publicada** (`ghcr.io/atareao/errors`), así que se levantan sin construir
-nada; `ERRORS_IMAGE` apunta a otra etiqueta o a una imagen local si hace falta.
+Los dos usan la **imagen publicada** (`ghcr.io/atareao/errserve`), así que se levantan sin construir
+nada; `ERRSERVE_IMAGE` apunta a otra etiqueta o a una imagen local si hace falta.
 
 Una trampa que conviene conocer antes de copiar una regla de internet: ``HostRegexp(`{host:.+}`)`` es
 sintaxis de Traefik **v2** y en v3 **no casa con nada** —el router aparece `enabled` y Traefik
@@ -203,11 +203,11 @@ está inflando el contador de un código, esa información ya está en `/metrics
 La imagen publicada está en **GHCR**, no en Docker Hub:
 
 ```sh
-docker pull ghcr.io/atareao/errors:latest     # o una versión fija: :0.2.0
+docker pull ghcr.io/atareao/errserve:latest     # o una versión fija: :0.3.0
 ```
 
 El [`compose.yml`](compose.yml) de la raíz y el ejemplo de [`examples/traefik/`](examples/traefik/)
-la usan por defecto (`ERRORS_IMAGE` cambia la referencia), así que **no hay que construir nada** para
+la usan por defecto (`ERRSERVE_IMAGE` cambia la referencia), así que **no hay que construir nada** para
 probarlos. Si el `pull` responde `denied` sin credenciales, el paquete sigue privado: ver
 [Publicación](#publicación).
 
@@ -270,9 +270,9 @@ en el OpenAPI de GitHub y en GraphQL no hay mutación de paquetes), así que sol
 ajustes del paquete.
 
 En este repositorio, **medido tras la primera publicación**, el paquete quedó **público**: la
-descarga anónima funciona. Si algún día `docker pull ghcr.io/atareao/errors` responde `denied`, es
+descarga anónima funciona. Si algún día `docker pull ghcr.io/atareao/errserve` responde `denied`, es
 que el paquete quedó privado: se arregla una sola vez en
-<https://github.com/users/atareao/packages/container/errors/settings> » *Danger Zone* » *Change
+<https://github.com/users/atareao/packages/container/errserve/settings> » *Danger Zone* » *Change
 visibility* » **Public**.
 
 ## Desarrollo

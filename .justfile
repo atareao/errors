@@ -1,9 +1,9 @@
-# Empaquetado de `errors`. `just --list` para ver las recetas.
+# Empaquetado de `errserve`. `just --list` para ver las recetas.
 #
 # El motor de contenedores está parametrizado: esta máquina no tiene `docker`
 # (sí `podman`), así que no se hardcodea el binario.
 #
-# La imagen se publica en **GHCR** (`ghcr.io/atareao/errors`), no en Docker Hub:
+# La imagen se publica en **GHCR** (`ghcr.io/atareao/errserve`), no en Docker Hub:
 # es gratis para repositorios públicos y es donde la deja la etiqueta `v*`
 # (`.github/workflows/release.yml`). Estas recetas son la vía manual, para
 # construir en local o publicar a mano.
@@ -18,7 +18,7 @@ image := registry + "/" + user + "/" + name
 
 # `version` = último tag de git. Ojo: `git tag -l | tail -n1` sale con éxito y
 # con salida **vacía** cuando el repo todavía no tiene tags (es el caso ahora),
-# y `ghcr.io/atareao/errors:` no es un tag válido. El `grep .` intermedio es el
+# y `ghcr.io/atareao/errserve:` no es un tag válido. El `grep .` intermedio es el
 # que fuerza el fallo con entrada vacía para que se aplique el respaldo `latest`.
 # Decisión: degradar a `latest` en vez de petar, para que `just build` funcione
 # en un clon recién hecho sin tags.

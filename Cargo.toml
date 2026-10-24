@@ -1,11 +1,11 @@
 [package]
-name = "errors"
+name = "errserve"
 version = "0.2.0"
 edition = "2024"
 description = "Servidor de páginas de error para Traefik que devuelve el código de error real"
 license = "MIT"
 authors = ["Lorenzo Carbonell <lorenzo.carbonell.cerezo@gmail.com>"]
-repository = "https://github.com/atareao/errors"
+repository = "https://github.com/atareao/errserve"
 
 # Versiones elegidas contra la caché local de `~/.cargo/registry` (rangos caret,
 # sin fijar de memoria): axum 0.8.9, tokio 1.54.1, tower-http 0.6.11,

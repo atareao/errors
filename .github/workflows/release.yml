@@ -8,7 +8,7 @@ name: Release
 #
 # POR QUÉ EL INPUT ES OBLIGATORIO
 #   En un `workflow_dispatch` no hay etiqueta: `github.ref_name` es la RAMA (`main`). Sin input,
-#   este job habría construido la imagen como `main`, empujado `ghcr.io/atareao/errors:main` y
+#   este job habría construido la imagen como `main`, empujado `ghcr.io/atareao/errserve:main` y
 #   creado un Release llamado `main` sobre el último commit de la rama. Con el input, un dispatch
 #   sin etiqueta válida falla en el primer paso en lugar de publicar basura.
 #
@@ -20,9 +20,9 @@ name: Release
 #
 # LA VISIBILIDAD DEL PAQUETE (leer antes de publicar)
 #   La visibilidad de un paquete no se puede cambiar **por API** (medido: `PATCH
-#   /user/packages/container/errors` responde 404; tampoco existe en el OpenAPI ni en GraphQL,
+#   /user/packages/container/errserve` responde 404; tampoco existe en el OpenAPI ni en GraphQL,
 #   donde para paquetes solo hay `deletePackageVersion`): solo a mano, en los ajustes del paquete
-#   —<https://github.com/users/atareao/packages/container/errors/settings> » Danger Zone » Change
+#   —<https://github.com/users/atareao/packages/container/errserve/settings> » Danger Zone » Change
 #   visibility » Public—.
 #   En este repositorio, MEDIDO tras la primera publicación, el paquete quedó **público** (la
 #   descarga anónima y `tags/list` responden 200), así que no hubo que tocar nada. El paso "Aviso
@@ -82,7 +82,7 @@ jobs:
             exit 1
           fi
 
-          # `github.repository` es `atareao/errors` (con las mayúsculas que tenga el repo), y GHCR
+          # `github.repository` es `atareao/errserve` (con las mayúsculas que tenga el repo), y GHCR
           # **rechaza** nombres con mayúsculas ("repository name must be lowercase"): se baja a
           # minúsculas aquí en vez de confiar en cómo esté escrito el repositorio hoy.
           repo="$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
@@ -234,7 +234,7 @@ jobs:
               echo
               echo "$aviso"
               echo
-              echo "Se arregla a mano, una vez por paquete: <https://github.com/users/atareao/packages/container/errors/settings> » Danger Zone » Change visibility » Public."
+              echo "Se arregla a mano, una vez por paquete: <https://github.com/users/atareao/packages/container/errserve/settings> » Danger Zone » Change visibility » Public."
               echo "(No hay API para cambiarlo: el \`PATCH /user/packages/...\` ya no existe.)"
             } >> "$GITHUB_STEP_SUMMARY"
           fi

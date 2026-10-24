@@ -3,7 +3,7 @@
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el
 versionado, [SemVer](https://semver.org/lang/es/).
 
-## [0.2.0](https://github.com/atareao/errors/compare/v0.1.0..v0.2.0) - 2026-10-24
+## [0.2.0](https://github.com/atareao/errserve/compare/v0.1.0..v0.2.0) - 2026-10-24
 
 ### Añadido
 

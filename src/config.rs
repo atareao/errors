@@ -142,7 +142,7 @@ impl LogFormat {
 pub struct Config {
     /// Puerto de escucha en `0.0.0.0`.
     pub port: u16,
-    /// Filtro de `tracing-subscriber` (p. ej. `info`, `errors=debug`).
+    /// Filtro de `tracing-subscriber` (p. ej. `info`, `errserve=debug`).
     pub log_level: String,
     /// Formato de los registros: texto o JSON.
     pub log_format: LogFormat,
