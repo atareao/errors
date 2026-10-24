@@ -3,6 +3,16 @@
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el
 versionado, [SemVer](https://semver.org/lang/es/).
 
+## [0.3.0](https://github.com/atareao/errserve/compare/v0.2.0..v0.3.0) - 2026-10-24
+
+### Cambiado
+
+- Renombra el proyecto y el crate a `errserve`. El nombre `errors` estaba ocupado en crates.io
+  (`seanmonstar`, desde 2019), así que el crate no se podía publicar con él.
+- **La imagen cambia de paquete**: el paquete de GHCR no se renombra ni se redirige, así que
+  `ghcr.io/atareao/errors` queda congelado en `0.2.0` —sigue descargable— y a partir de esta
+  versión la imagen es `ghcr.io/atareao/errserve`. Hay que cambiar la referencia al desplegar.
+
 ## [0.2.0](https://github.com/atareao/errserve/compare/v0.1.0..v0.2.0) - 2026-10-24
 
 ### Añadido
