@@ -45,7 +45,7 @@
 //!
 //! /// Respaldo de texto, infalible (no lee ficheros), con el estado y las
 //! /// cabeceras de `code`: lo que se sirve cuando falta el HTML.
-//! pub fn render_text_fallback(code: u16) -> RenderedPage;
+//! pub fn render_text_fallback(code: u16, retry_after: u32) -> RenderedPage;
 //! ```
 //!
 //! Contrato de la spec (`error-page`):
@@ -58,7 +58,8 @@
 //! - `Content-Type`: `text/html; charset=utf-8`, `application/json`,
 //!   `application/xml` y `text/plain; charset=utf-8`.
 //! - `X-Robots-Tag: noindex, nofollow, nosnippet, noarchive` en toda página;
-//!   `Retry-After: 120` solo en los códigos que lo llevan.
+//!   `Retry-After` con el valor de `RETRY_AFTER` (`120` por defecto) solo en los
+//!   códigos que lo llevan (`429` y `503`).
 
 use crate::config::Config;
 use crate::resolve::{self, Format};
@@ -150,6 +151,9 @@ pub fn render_body(
 
 /// [`render_body`] más las cabeceras de acompañamiento y el estado.
 ///
+/// El valor de `Retry-After` sale de la [`Config`] que ya recibe: la firma no
+/// cambia porque la configuración ya estaba aquí.
+///
 /// # Errors
 ///
 /// Las mismas que [`render_body`].
@@ -163,7 +167,7 @@ pub fn render_page(
     Ok(RenderedPage {
         status: status_of(code),
         content_type: content_type_for(format),
-        headers: companion_headers(code),
+        headers: companion_headers(code, config.retry_after),
         body,
     })
 }
@@ -175,11 +179,15 @@ pub fn render_page(
 /// cuando el HTML del código —y el del código por defecto— no existe, para no
 /// responder `500` por esa causa: el estado sigue siendo el código resuelto
 /// (spec `error-page`, "Un fallo al leer el HTML no cambia el estado").
-pub fn render_text_fallback(code: u16) -> RenderedPage {
+///
+/// `retry_after` es el valor configurado ([`Config::retry_after`]): el respaldo
+/// lleva las mismas cabeceras que [`render_page`], así que un `503` sin HTML no
+/// pierde su `Retry-After` ni lo sirve con un valor distinto al configurado.
+pub fn render_text_fallback(code: u16, retry_after: u32) -> RenderedPage {
     RenderedPage {
         status: status_of(code),
         content_type: content_type_for(Format::Text),
-        headers: companion_headers(code),
+        headers: companion_headers(code, retry_after),
         body: text_body(code).into_bytes(),
     }
 }
@@ -195,11 +203,14 @@ fn status_of(code: u16) -> StatusCode {
 }
 
 /// Cabeceras de acompañamiento de toda página de error: `X-Robots-Tag` y, para
-/// los códigos que lo llevan, `Retry-After`.
-fn companion_headers(code: u16) -> Vec<(&'static str, String)> {
+/// los códigos que lo llevan, `Retry-After` con el valor configurado.
+///
+/// Qué códigos lo llevan lo decide [`resolve::retry_after_secs`]; aquí solo se
+/// aporta `retry_after` ([`Config::retry_after`]) como valor.
+fn companion_headers(code: u16, retry_after: u32) -> Vec<(&'static str, String)> {
     let mut headers = vec![(X_ROBOTS_TAG_NAME, X_ROBOTS_TAG_VALUE.to_string())];
 
-    if let Some(secs) = resolve::retry_after_secs(code) {
+    if let Some(secs) = resolve::retry_after_secs(code, retry_after) {
         headers.push((RETRY_AFTER_NAME, secs.to_string()));
     }
 
@@ -458,7 +469,7 @@ mod tests {
     fn el_respaldo_de_texto_conserva_el_codigo_y_sus_cabeceras() {
         // Auditoría I-2: sin fichero HTML, el estado sigue siendo el código
         // resuelto (nunca `500`) y la página no pierde `X-Robots-Tag`.
-        let page = render_text_fallback(418);
+        let page = render_text_fallback(418, 120);
 
         assert_eq!(page.status, StatusCode::IM_A_TEAPOT);
         assert_ne!(page.status, StatusCode::INTERNAL_SERVER_ERROR);
@@ -478,10 +489,111 @@ mod tests {
 
     #[test]
     fn el_respaldo_de_texto_mantiene_retry_after() {
+        // Con el valor por defecto (`120`, el que `render_page` recibiría de una
+        // `Config` sin `RETRY_AFTER`), el respaldo conserva la misma cabecera.
         assert_eq!(
-            header(&render_text_fallback(503), "Retry-After"),
+            header(&render_text_fallback(503, 120), "Retry-After"),
             Some("120")
         );
-        assert_eq!(header(&render_text_fallback(404), "Retry-After"), None);
+        assert_eq!(header(&render_text_fallback(404, 120), "Retry-After"), None);
+    }
+
+    // --- `RETRY_AFTER` configurado (change `retry-after-configurable`,
+    //     tasks.md 1.5-1.7) ------------------------------------------------
+    //
+    // `render_page` recibe ya la `Config`, así que el valor entra por ahí sin
+    // cambiar su firma. La prueba lo fija por la vía inyectable
+    // (`Config::from_env_iter`).
+    //
+    // El respaldo de texto (`render_text_fallback`) no pudo probarse en RED: su
+    // firma ganó un `retry_after: u32` en GREEN, así que entonces no compilaba
+    // con la nueva ni probaba nada con la vieja. Se cubre aquí abajo, con el
+    // parámetro ya en su sitio.
+
+    /// [`fixtures_config`] con `RETRY_AFTER` fijado: misma forma, sin tocar el
+    /// ayudante que usan las pruebas del valor por defecto.
+    fn fixtures_config_con_retry_after(value: &str) -> Config {
+        Config::from_env_iter([
+            (
+                "CONTENT_DIR".to_string(),
+                fixtures_content_dir().to_string_lossy().into_owned(),
+            ),
+            ("RETRY_AFTER".to_string(), value.to_string()),
+        ])
+        .expect("la configuración de fixtures debe construirse")
+    }
+
+    #[test]
+    fn el_503_lleva_el_retry_after_configurado() {
+        let config = fixtures_config_con_retry_after("30");
+        let page = render_page(&config, 503, Format::Text).unwrap();
+
+        assert_eq!(
+            header(&page, "Retry-After"),
+            Some("30"),
+            "el `503` debe llevar el valor configurado, no el 120 del defecto"
+        );
+    }
+
+    #[test]
+    fn el_429_lleva_el_retry_after_configurado() {
+        // Los dos códigos que llevan la cabecera comparten el valor: la variable
+        // es una sola, así que dos respuestas no pueden desincronizarse.
+        let config = fixtures_config_con_retry_after("45");
+        let page = render_page(&config, 429, Format::Text).unwrap();
+
+        assert_eq!(
+            header(&page, "Retry-After"),
+            Some("45"),
+            "el `429` debe llevar el valor configurado, no el 120 del defecto"
+        );
+    }
+
+    #[test]
+    fn el_retry_after_cero_sale_en_la_cabecera() {
+        // Decisión D2 de `design.md`: `0` es un `delay-seconds` legal de
+        // RFC 9110 («reintenta ya») y tiene que salir tal cual. Con un
+        // `if secs > 0` en `companion_headers`, el árbol seguiría verde y la
+        // cabecera desaparecería en silencio.
+        let config = fixtures_config_con_retry_after("0");
+        let page = render_page(&config, 503, Format::Text).unwrap();
+
+        assert_eq!(
+            header(&page, "Retry-After"),
+            Some("0"),
+            "un `RETRY_AFTER=0` debe emitir `Retry-After: 0`, no suprimir la cabecera"
+        );
+    }
+
+    #[test]
+    fn el_404_no_lleva_retry_after_ni_configurado() {
+        // Guarda, no RED: hoy ya pasa, porque `404` no es un código que lleve la
+        // cabecera. Fija que `RETRY_AFTER` configura **el valor** de los códigos
+        // que la llevan, no **qué** códigos la llevan.
+        let config = fixtures_config_con_retry_after("30");
+        let page = render_page(&config, 404, Format::Text).unwrap();
+
+        assert_eq!(
+            header(&page, "Retry-After"),
+            None,
+            "un `404` no lleva `Retry-After` por mucho que haya `RETRY_AFTER` configurado"
+        );
+    }
+
+    #[test]
+    fn el_respaldo_de_texto_lleva_el_retry_after_configurado() {
+        // La mitad que el RED no pudo fijar (tasks.md 1.5): cuando falta el HTML
+        // del `503` —y el del código por defecto— se responde el respaldo de
+        // texto, y ese camino también tiene que llevar el valor configurado, no
+        // el `120` del defecto. Aquí el `503` sale del mismo valor que `render`
+        // recibe de la `Config` en producción (`config.retry_after`).
+        let page = render_text_fallback(503, 30);
+
+        assert_eq!(
+            header(&page, "Retry-After"),
+            Some("30"),
+            "el respaldo del `503` debe llevar el valor configurado"
+        );
+        assert_eq!(page.status, StatusCode::SERVICE_UNAVAILABLE);
     }
 }

@@ -18,6 +18,7 @@
 //!     pub log_format: LogFormat,
 //!     pub content_dir: PathBuf,
 //!     pub default_error_page: u16,
+//!     pub retry_after: u32,
 //! }
 //!
 //! #[derive(Debug)]
@@ -25,6 +26,7 @@
 //!     InvalidPort(String),
 //!     UnknownLogFormat(String),
 //!     DefaultErrorPageOutOfRange(String),
+//!     InvalidRetryAfter(String),
 //! }
 //! impl std::fmt::Display for ConfigError { /* ... */ }
 //! impl std::error::Error for ConfigError {}
@@ -52,6 +54,7 @@
 //! | `LOG_FORMAT`         | `text`    |
 //! | `CONTENT_DIR`        | `content` |
 //! | `DEFAULT_ERROR_PAGE` | `404`     |
+//! | `RETRY_AFTER`        | `120`     |
 //!
 //! No se lee ningún fichero de configuración (`config.yml` ni similar).
 //!
@@ -59,6 +62,14 @@
 //! formato de los registros: `text`, el de siempre, por defecto, y `json` para
 //! que un colector los parsee sin expresiones regulares. Es un enumerado
 //! ([`LogFormat`]) y no una cadena porque solo hay dos valores válidos.
+//!
+//! `RETRY_AFTER` (change `retry-after-configurable`, spec `error-page`) fija los
+//! segundos de la cabecera `Retry-After` de los **dos** códigos que la llevan,
+//! `429` y `503`; qué códigos la llevan no se configura, lo decide el código. El
+//! valor es un `delay-seconds` de RFC 9110 —nunca una fecha HTTP—, así que `0`
+//! es válido («reintenta ya») y no se acota por arriba: un valor enorme no rompe
+//! ningún contrato. Una variable presente pero no interpretable como `u32` es un
+//! error de arranque, no un `120` silencioso.
 //!
 //! Decisión de la fase RED, justificada: la spec exige que una variable
 //! **presente pero vacía no se confunda con una ausente**, y `tasks.md` 3.2
@@ -86,12 +97,16 @@ const DEFAULT_LOG_FORMAT: LogFormat = LogFormat::Text;
 const DEFAULT_CONTENT_DIR: &str = "content";
 /// Código de error por defecto cuando la petición no da ninguna pista.
 const DEFAULT_ERROR_PAGE: u16 = 404;
+/// Segundos de la cabecera `Retry-After` por defecto: el valor actual del
+/// servicio y el de `error-pages`, así que quien no configure no ve cambios.
+const DEFAULT_RETRY_AFTER: u32 = 120;
 
 const PORT_VAR: &str = "PORT";
 const LOG_LEVEL_VAR: &str = "LOG_LEVEL";
 const LOG_FORMAT_VAR: &str = "LOG_FORMAT";
 const CONTENT_DIR_VAR: &str = "CONTENT_DIR";
 const DEFAULT_ERROR_PAGE_VAR: &str = "DEFAULT_ERROR_PAGE";
+const RETRY_AFTER_VAR: &str = "RETRY_AFTER";
 
 /// Formato de los registros del servicio.
 ///
@@ -135,6 +150,9 @@ pub struct Config {
     pub content_dir: PathBuf,
     /// Código que se sirve cuando la petición no aporta ningún código.
     pub default_error_page: u16,
+    /// Segundos de la cabecera `Retry-After` de los códigos que la llevan
+    /// (`429` y `503`). `0` es válido («reintenta ya»).
+    pub retry_after: u32,
 }
 
 /// Error de arranque por una variable de entorno presente pero inválida.
@@ -152,6 +170,9 @@ pub enum ConfigError {
     /// `DEFAULT_ERROR_PAGE` no es un código de error utilizable
     /// (`400..=599`), o no es un entero sin signo de 16 bits.
     DefaultErrorPageOutOfRange(String),
+    /// `RETRY_AFTER` no es un entero sin signo de 32 bits (la cadena vacía
+    /// incluida).
+    InvalidRetryAfter(String),
 }
 
 impl fmt::Debug for ConfigError {
@@ -189,6 +210,12 @@ impl fmt::Display for ConfigError {
                  {MAX_ERROR_CODE} (¿una variable vacía?). Omitir la variable usa \
                  {DEFAULT_ERROR_PAGE}."
             ),
+            ConfigError::InvalidRetryAfter(value) => write!(
+                f,
+                "`{RETRY_AFTER_VAR}` está presente pero no son segundos válidos: {value:?}. \
+                 Se espera un entero de segundos (¿una variable vacía?). Omitir la variable \
+                 usa {DEFAULT_RETRY_AFTER}."
+            ),
         }
     }
 }
@@ -204,15 +231,19 @@ impl Config {
     /// están presentes: una variable presente pero vacía no cae al defecto,
     /// es un [`ConfigError`]. `DEFAULT_ERROR_PAGE` tiene que estar además en el
     /// rango utilizable `400..=599`. `LOG_FORMAT` tiene que ser `text` o `json`
-    /// con el mismo criterio. Las claves desconocidas se ignoran.
+    /// con el mismo criterio. `RETRY_AFTER` también es obligatoriamente numérica
+    /// cuando está presente, pero **sin** rango: `0` es válido. Las claves
+    /// desconocidas se ignoran.
     ///
     /// # Errors
     ///
     /// Devuelve [`ConfigError::InvalidPort`] si `PORT` está presente y su valor
     /// no se puede interpretar como `u16`, [`ConfigError::UnknownLogFormat`] si
-    /// `LOG_FORMAT` está presente y su valor no es `text` ni `json`, y
+    /// `LOG_FORMAT` está presente y su valor no es `text` ni `json`,
     /// [`ConfigError::DefaultErrorPageOutOfRange`] si `DEFAULT_ERROR_PAGE` está
-    /// presente y su valor no es un entero de `400` a `599`.
+    /// presente y su valor no es un entero de `400` a `599`, y
+    /// [`ConfigError::InvalidRetryAfter`] si `RETRY_AFTER` está presente y su
+    /// valor no se puede interpretar como `u32`.
     pub fn from_env_iter<I>(iter: I) -> Result<Config, ConfigError>
     where
         I: IntoIterator<Item = (String, String)>,
@@ -248,6 +279,20 @@ impl Config {
             None => DEFAULT_ERROR_PAGE,
         };
 
+        // `RETRY_AFTER` es un `delay-seconds` de RFC 9110: solo la forma
+        // numérica, nunca una fecha HTTP (aceptar texto libre convertiría una
+        // variable de entorno en un canal para escribir cabeceras arbitrarias).
+        // No se acota: `0` significa «reintenta ya» y un valor enorme no rompe
+        // ningún contrato. Pero una variable presente y no interpretable —la
+        // cadena vacía incluida— sí aborta el arranque, como las demás
+        // numéricas: quien la escribe cree que está configurando algo.
+        let retry_after = match vars.get(RETRY_AFTER_VAR) {
+            Some(raw) => raw
+                .parse::<u32>()
+                .map_err(|_| ConfigError::InvalidRetryAfter(raw.clone()))?,
+            None => DEFAULT_RETRY_AFTER,
+        };
+
         // `LOG_FORMAT` solo admite los dos formatos que el servicio sabe
         // emitir. Igual que con las numéricas, una variable presente pero vacía
         // es un error: no hay un tercer valor del que este enumerado pueda
@@ -277,6 +322,7 @@ impl Config {
             log_format,
             content_dir,
             default_error_page,
+            retry_after,
         })
     }
 
@@ -408,13 +454,13 @@ mod tests {
 
     // --- LOG_FORMAT (change `release-hardening`, tasks.md 1.8) -------------
     //
-    // El contrato fuerte sería `assert_eq!(config.log_format, LogFormat::Json)`,
-    // pero el tipo `LogFormat` **no existe todavía**: la fase RED no lo crea
-    // (crearlo sería implementar). Se observa el formato declarado por el
-    // `Debug` de `Config`, que es el único canal disponible sin el tipo: exige
-    // un campo `log_format` cuyo `Debug` sea un identificador PascalCase
-    // (`Json`) y no la cadena `"json"`, de modo que un `String` suelto no
-    // satisface la prueba. En GREEN la aserción se sustituye por la tipada.
+    // Estas tres pruebas observan el `Debug` de `Config` en vez del campo
+    // tipado: `assert_eq!(config.log_format, LogFormat::Json)` leería el tipo
+    // directamente. Sigue siendo una deuda pendiente —a diferencia de las de
+    // `RETRY_AFTER`, ya tipadas—, porque convertir estas aserciones es trabajo
+    // de otro change. El `Debug` observado exige un campo `log_format` cuyo
+    // `Debug` sea un identificador PascalCase (`Json`) y no la cadena `"json"`,
+    // de modo que un `String` suelto no satisface la prueba.
 
     #[test]
     fn log_format_json_declara_el_formato_json() {
@@ -496,5 +542,68 @@ mod tests {
                 panic!("un `LOG_FORMAT` vacío debe ser un error de arranque, no {config:?}")
             }
         }
+    }
+
+    // --- RETRY_AFTER (change `retry-after-configurable`, tasks.md 1.1-1.4) -
+    //
+    // La fase RED observó el `Debug` de `Config` —el campo no existía aún— para
+    // fallar por aserción y no por compilación; con el campo ya `pub`, las
+    // aserciones de abajo son tipadas.
+
+    #[test]
+    fn sin_retry_after_el_defecto_es_120() {
+        let config = Config::from_env_iter(env(&[])).unwrap();
+
+        assert_eq!(
+            config.retry_after, 120,
+            "sin `RETRY_AFTER` el defecto es 120, el valor actual y el de `error-pages`: {config:?}"
+        );
+    }
+
+    #[test]
+    fn el_retry_after_configurado_se_respeta() {
+        let config = Config::from_env_iter(env(&[("RETRY_AFTER", "30")])).unwrap();
+
+        assert_eq!(
+            config.retry_after, 30,
+            "`RETRY_AFTER=30` debe respetarse: {config:?}"
+        );
+    }
+
+    #[test]
+    fn un_retry_after_presente_pero_invalido_no_arranca() {
+        // Una variable presente pero vacía no es una variable ausente, y una no
+        // numérica tampoco cae al defecto en silencio: quien escribe
+        // `RETRY_AFTER` cree que está configurando algo. La forma numérica es la
+        // única admitida (un `delay-seconds` de RFC 9110), así que `-1` —que no
+        // es un `u32`— tampoco vale.
+        for value in ["", "medio minuto", "-1"] {
+            match Config::from_env_iter(env(&[("RETRY_AFTER", value)])) {
+                Err(err) => {
+                    let message = err.to_string();
+                    assert!(
+                        message.contains("RETRY_AFTER"),
+                        "el error de `{value:?}` debe nombrar la variable: {message}"
+                    );
+                }
+                Ok(config) => {
+                    panic!("`RETRY_AFTER={value:?}` debe ser un error de arranque, no {config:?}")
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn un_retry_after_cero_arranca() {
+        // `0` es un `delay-seconds` legal de RFC 9110 («reintenta ya»), no un
+        // error: la spec no acota la variable por arriba ni por abajo, a
+        // diferencia de `DEFAULT_ERROR_PAGE`, cuyo rango sí importa.
+        let config = Config::from_env_iter(env(&[("RETRY_AFTER", "0")]))
+            .expect("`RETRY_AFTER=0` debe ser válido, no un error de arranque");
+
+        assert_eq!(
+            config.retry_after, 0,
+            "`RETRY_AFTER=0` debe llegar tal cual, no como 120: {config:?}"
+        );
     }
 }
