@@ -20,6 +20,10 @@
 # El socket se monta con `CONTAINER_SOCKET`, cuyo valor por defecto es el de
 # docker. En podman rootless hay que apuntarlo al del usuario:
 #   CONTAINER_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock podman-compose up -d
+#
+# Este compose NO construye la imagen: descarga `ghcr.io/atareao/errors` (el
+# paquete publicado). `ERRORS_IMAGE=<referencia>` cambia eso, por ejemplo para
+# probar una etiqueta concreta o una imagen local hecha con `just build`.
 # =============================================================================
 
 name: errors-traefik-example
@@ -64,7 +68,10 @@ services:
   # El servicio del proyecto. Es el que responde las páginas con el código real.
   # ---------------------------------------------------------------------------
   errors:
-    image: ${ERRORS_IMAGE:-atareao/errors:latest}
+    # La imagen publicada, en GHCR: se descarga sola, no hay que construir nada.
+    # Con `ERRORS_IMAGE` se prueba otra etiqueta o una imagen local
+    # (`just build`), p. ej. `ERRORS_IMAGE=ghcr.io/atareao/errors:0.1.0`.
+    image: ${ERRORS_IMAGE:-ghcr.io/atareao/errors:latest}
     container_name: errors-demo-errors
     restart: unless-stopped
     environment:

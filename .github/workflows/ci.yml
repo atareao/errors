@@ -14,7 +14,7 @@ jobs:
     name: fmt, clippy y tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # El crate usa edition 2024, que exige rustc >= 1.85; `stable` lo cumple.
       - name: Instalar el toolchain

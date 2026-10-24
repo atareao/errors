@@ -39,6 +39,9 @@ Hay un **ejemplo ejecutable** en [`examples/traefik/`](examples/traefik/) —Tra
 [`compose.yml`](compose.yml) en la raíz listo para producción (solo el servicio, con los labels de
 Traefik para descomentar). El ejemplo explica además el matiz de quién decide el código HTTP.
 
+Los dos usan la **imagen publicada** (`ghcr.io/atareao/errors`), así que se levantan sin construir
+nada; `ERRORS_IMAGE` apunta a otra etiqueta o a una imagen local si hace falta.
+
 Una trampa que conviene conocer antes de copiar una regla de internet: ``HostRegexp(`{host:.+}`)`` es
 sintaxis de Traefik **v2** y en v3 **no casa con nada** —el router aparece `enabled` y Traefik
 responde su propio 404, sin llegar al servicio—. En v3 es ``HostRegexp(`.+`)``.
@@ -126,16 +129,79 @@ con codificación por trozos, sin `Content-Length`—, y declara `Vary: Accept-E
 cabeceras de correlación `X-Request-Id`, `X-Trace-Id`, `X-Correlation-Id` y `X-Amzn-Trace-Id`
 se copian de la petición a la respuesta cuando vienen; no se inventan.
 
-## Empaquetado
+## Imagen
+
+La imagen publicada está en **GHCR**, no en Docker Hub:
 
 ```sh
-just build          # imagen (docker por defecto; `just engine=podman build` para podman)
-just run            # contenedor en 8080
-just dev            # cargo run en el host, leyendo content/
+docker pull ghcr.io/atareao/errors:latest     # o una versión fija: :0.1.0
 ```
 
-La imagen es multi-stage, con enlace estático a musl, usuario no-root (uid 10001)
-y ~12 MB.
+El [`compose.yml`](compose.yml) de la raíz y el ejemplo de [`examples/traefik/`](examples/traefik/)
+la usan por defecto (`ERRORS_IMAGE` cambia la referencia), así que **no hay que construir nada** para
+probarlos. Si el `pull` responde `denied` sin credenciales, el paquete sigue privado: ver
+[Publicación](#publicación).
+
+Es multi-stage, con enlace estático a musl, usuario no-root (uid 10001) y ~12 MB.
+
+Para construirla en local (docker por defecto; `just engine=podman` para podman):
+
+```sh
+just build          # imagen, con la versión del último tag de git y `latest`
+just run            # contenedor en 8080
+just dev            # cargo run en el host, leyendo content/
+just login          # entra en GHCR (una vez por máquina)
+just push           # publica a mano la versión y `latest`
+```
+
+## Publicación
+
+Se publica **con una etiqueta**:
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+Eso dispara [`.github/workflows/release.yml`](.github/workflows/release.yml), que construye la
+imagen, la **prueba con docker de verdad** —que `/404` devuelva 404, el `HEALTHCHECK` del
+`Dockerfile` y el `USER 10001:10001`; en la máquina de desarrollo no hay docker, solo podman, que
+además descarta el healthcheck al construir en formato OCI—, la empuja a GHCR con su versión y
+`latest` y crea el Release con las notas generadas. Un `workflow_dispatch` republica una etiqueta ya
+existente, pero exige indicarla en el input `tag`: en un dispatch no hay etiqueta y
+`github.ref_name` es la rama.
+
+`main` y `development` están **protegidas**: todo entra por **PR** y ningún PR se fusiona hasta que
+el check **`fmt, clippy y tests`** está en verde. El release no sustituye a ese check.
+
+### La pega de GHCR: el paquete nace privado
+
+Los paquetes de GHCR **nacen privados** aunque el repositorio sea público, y la visibilidad **no se
+puede cambiar por API** —el `PATCH /user/packages/{type}/{name}` que circula por ahí ya no existe:
+medido, responde `404`, no está en el OpenAPI de GitHub y en GraphQL, para paquetes, solo hay
+`deletePackageVersion`—. Hay que hacerlo a mano, **una vez por paquete**:
+
+1. <https://github.com/users/atareao/packages/container/errors/settings>
+2. **Danger Zone** » **Change visibility** » **Public**, y confirmar escribiendo el nombre.
+
+Hasta entonces `docker pull ghcr.io/atareao/errors` sin credenciales responde `denied`, y quien
+clone el repositorio y haga `compose up` se queda sin arrancar: es exactamente el fallo que este
+pipeline cierra, y el job avisa de ello en su resumen cuando todavía no se ha hecho. Una vez
+público, lo está para **todas** las versiones siguientes (no hay que repetirlo en cada release).
+Ojo: no se puede deshacer, un paquete público no vuelve a privado.
+
+Comprobación sin credenciales —`200` público, `403` privado o aún sin publicar—:
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' "https://ghcr.io/token?scope=repository:atareao/errors:pull"
+```
+
+Y para leer la visibilidad del paquete hace falta el scope `read:packages`, que el token de `gh` no
+trae por defecto:
+
+```sh
+gh auth refresh -h github.com -s read:packages
+gh api /users/atareao/packages/container/errors --jq .visibility     # -> "public"
+```
 
 ## Desarrollo
 

@@ -134,6 +134,21 @@ just build | run | dev                      # empaquetado (docker por defecto; j
 
 Orden obligatorio antes de commit: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`.
 
+## Entrega
+
+- `main` y `development` están **protegidas**: PR obligatorio, el check `fmt, clippy y tests` en
+  verde y `strict` (la rama ha de estar al día). `enforce_admins` está activo, así que **tampoco el
+  dueño empuja directo**. El flujo es: rama `feature/...` desde `development` → PR a `development` →
+  PR de `development` a `main`.
+- La imagen y el Release se publican empujando una **etiqueta** `v*`: el workflow `release.yml`
+  construye, **prueba la imagen con docker real** (el runner sí lo tiene; aquí solo hay podman, que
+  además descarta el `HEALTHCHECK` al construir en formato OCI), publica en GHCR y crea el Release.
+  La etiqueta `latest` solo se mueve en versiones estables.
+- ⚠️ **Un paquete de GHCR nace privado** aunque el repositorio sea público, y su visibilidad **no se
+  puede cambiar por API** (verificado: `PATCH /user/packages/...` da 404; no existe en el OpenAPI ni
+  en GraphQL). Se cambia una vez a mano en los ajustes del paquete. Hasta entonces,
+  `docker pull ghcr.io/atareao/errors` responde `denied`.
+
 ## Quirks
 
 - **Edition 2024** exige `rustc` ≥ 1.85; no bajes la edición a 2021.

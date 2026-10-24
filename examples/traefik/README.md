@@ -8,6 +8,13 @@ docker compose up -d          # o: podman-compose up -d
 docker compose down
 ```
 
+La imagen **se descarga**, no se construye: el compose usa `ghcr.io/atareao/errors`. Con
+`ERRORS_IMAGE` puedes apuntar a otra etiqueta o a una imagen local que hayas construido con
+`just build`.
+
+Si el `pull` responde `denied`, el paquete de GHCR sigue privado (nace así aunque el repositorio sea
+público); se cambia una sola vez a mano, en los ajustes del paquete.
+
 En **podman rootless** hay que apuntar el socket del motor (sin esto, Traefik no ve los
 contenedores y todo responde su propio 404):
 
