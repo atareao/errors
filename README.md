@@ -154,6 +154,26 @@ just login          # entra en GHCR (una vez por máquina)
 just push           # publica a mano la versión y `latest`
 ```
 
+## CHANGELOG
+
+Se mantiene con [`git-cliff`](https://git-cliff.org) a partir de los commits convencionales:
+
+```sh
+just changelog              # antepone la sección de lo que aún no está etiquetado
+just changelog v0.2.0       # lo mismo, ya con el nombre del tag que se va a crear
+```
+
+Antepone, no regenera: la entrada de `0.1.0` está escrita a mano y el fichero no se pierde.
+
+## Dependencias
+
+`cargo deny check -D warnings` (con `deny.toml`) revisa avisos de seguridad, licencias, duplicaciones
+y fuentes. Corre en el CI, en el job `cargo-deny`:
+
+```sh
+cargo deny check -D warnings
+```
+
 ## Publicación
 
 Se publica **con una etiqueta**:

@@ -129,10 +129,25 @@ cargo test <substring>                      # un test por nombre
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo check --offline                       # el repo compila SIN RED (caché local de Cargo)
+cargo deny check -D warnings                # dependencias: avisos, licencias, duplicaciones y fuentes
+just changelog [v0.2.0]                     # antepone al CHANGELOG la sección de lo no etiquetado
 just build | run | dev                      # empaquetado (docker por defecto; just engine=podman ...)
 ```
 
 Orden obligatorio antes de commit: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`.
+
+## CHANGELOG
+
+Se mantiene con [`git-cliff`](https://git-cliff.org) (`cliff.toml`) y la receta `just changelog`, que
+**antepone** (`--prepend`) la sección de lo que todavía no está etiquetado:
+
+- `just changelog` escribe la sección «Sin publicar» (los commits posteriores al último tag).
+- `just changelog v0.2.0` escribe esa misma sección ya con el nombre del tag que se va a crear: es lo
+  que se hace justo antes de `git tag`.
+- La entrada de `0.1.0` está **escrita a mano** y es más rica que lo que saldría de los commits: el
+  fichero **no se regenera**, así que se conserva.
+- git-cliff no detecta una sección repetida y la escribiría dos veces, así que la receta **se niega**
+  a anteponer una sección que ya esté en el fichero: para rehacerla, se borra antes a mano.
 
 ## Entrega
 
@@ -140,6 +155,11 @@ Orden obligatorio antes de commit: `cargo fmt --check && cargo clippy --all-targ
   verde y `strict` (la rama ha de estar al día). `enforce_admins` está activo, así que **tampoco el
   dueño empuja directo**. El flujo es: rama `feature/...` desde `development` → PR a `development` →
   PR de `development` a `main`.
+- El CI (`.github/workflows/ci.yml`) tiene **dos jobs**: `fmt, clippy y tests` (las tres puertas) y
+  `cargo-deny` (la puerta de dependencias, con `deny.toml`). En la protección de rama **solo está
+  marcado como requerido el primero**; el de `cargo-deny` corre en cada PR pero su rojo no bloquea el
+  merge hasta que se añada a `required_status_checks` (medido con la API: los `contexts` de `main` y
+  de `development` son `["fmt, clippy y tests"]`).
 - La imagen y el Release se publican empujando una **etiqueta** `v*`: el workflow `release.yml`
   construye, **prueba la imagen con docker real** (el runner sí lo tiene; aquí solo hay podman, que
   además descarta el `HEALTHCHECK` al construir en formato OCI), publica en GHCR y crea el Release.
@@ -164,6 +184,16 @@ Orden obligatorio antes de commit: `cargo fmt --check && cargo clippy --all-targ
   el `Dockerfile` y el `.dockerignore`. No la dupliques.
 - Los tests de router usan `tower::ServiceExt::oneshot`; los de configuración no mutan el entorno
   (`Config::from_env_iter` existe para eso). No introduzcas `std::env::set_var` en pruebas.
+- **La puerta de dependencias es `cargo deny check -D warnings`** (`deny.toml`, job `cargo-deny` del
+  CI). Cada permiso del fichero lleva escrito su motivo: las licencias permitidas son las que hay de
+  verdad en el árbol —MIT y Apache-2.0 cubren casi todo (`BSD-3-Clause` viene de `matchit`,
+  `Unicode-3.0` de `unicode-ident`, y `0BSD`/`Zlib`/`BSL-1.0`/`Unlicense` son alternativas que
+  nunca se usan porque la expresión las satisface por otra rama)—, y el único `skip` es la
+  duplicación de `syn` 2/3, un proc-macro que no entra en el binario. El workflow **fija la versión
+  de cargo-deny** (`0.20.2`, la misma en la que está verificado el fichero): el formato de `deny.toml`
+  ha cambiado entre versiones —campos que se eliminan y pasan a ser error—, así que un binario nuevo
+  no debe romper el CI por su cuenta. `-D warnings` hace fallar también la higiene del fichero (una
+  licencia permitida que ya no use nadie).
 
 ## Referencia de implementación (qué no repetir)
 
