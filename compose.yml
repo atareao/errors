@@ -17,7 +17,7 @@ services:
   errors:
     # La imagen publicada está en **GHCR** (`docker pull ghcr.io/atareao/errors`):
     # no hay nada en Docker Hub. Versiona la etiqueta en producción
-    # (`ghcr.io/atareao/errors:0.1.0`); `latest` solo para probar. Si la has
+    # (`ghcr.io/atareao/errors:0.2.0`); `latest` solo para probar. Si la has
     # construido en local con `just build`, la etiqueta es esta misma.
     #
     # Si el `pull` responde `denied` sin credenciales, el paquete de GHCR sigue

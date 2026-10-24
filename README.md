@@ -203,7 +203,7 @@ está inflando el contador de un código, esa información ya está en `/metrics
 La imagen publicada está en **GHCR**, no en Docker Hub:
 
 ```sh
-docker pull ghcr.io/atareao/errors:latest     # o una versión fija: :0.1.0
+docker pull ghcr.io/atareao/errors:latest     # o una versión fija: :0.2.0
 ```
 
 El [`compose.yml`](compose.yml) de la raíz y el ejemplo de [`examples/traefik/`](examples/traefik/)
@@ -248,7 +248,7 @@ cargo deny check -D warnings
 Se publica **con una etiqueta**:
 
 ```sh
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.2.0 && git push origin v0.2.0
 ```
 
 Eso dispara [`.github/workflows/release.yml`](.github/workflows/release.yml), que construye la

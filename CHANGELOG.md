@@ -3,6 +3,33 @@
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el
 versionado, [SemVer](https://semver.org/lang/es/).
 
+## [0.2.0](https://github.com/atareao/errors/compare/v0.1.0..v0.2.0) - 2026-10-24
+
+### Añadido
+
+- Compresión, correlación, métricas, LOG_FORMAT y entrega
+- **release**: Publica la imagen en GHCR y crea el Release
+- **metrics**: Distingue el origen del código en el contador
+- **config**: El valor de Retry-After se configura con RETRY_AFTER
+
+### Corregido
+
+- **error-page**: Ningún estado de error del servidor de ficheros se escapa
+
+### Documentación
+
+- **traefik**: Ejemplo ejecutable y compose de producción
+- **release**: La visibilidad del paquete, según lo medido
+- La regla nueva del estado y el contador de dos etiquetas
+- RETRY_AFTER y el registro de peticiones
+
+### Mantenimiento
+
+- Audita las dependencias y automatiza el CHANGELOG
+- **compose**: Endurece el contenedor
+- **openspec**: Archiva el change security-hardening
+- **openspec**: Archiva el change retry-after-configurable
+
 ## [0.1.0] - 2026-10-24
 
 Primera versión.
