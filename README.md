@@ -77,6 +77,32 @@ El HTML se sirve de `CONTENT_DIR/<código>.html` (con caída al fichero del cód
 por defecto); JSON, XML y texto se generan del código, su razón canónica y su
 descripción.
 
+## Códigos cubiertos
+
+Once códigos tienen página propia: `400`, `401`, `403`, `404`, `405`, `408`, `429`, `500`, `502`,
+`503` y `504`. Cualquier otro cae al fichero del código por defecto, pero **el estado sigue siendo
+el código resuelto**: nunca verás un `504` servido como `404`.
+
+Todas las páginas comparten una sola hoja, `css/error.css`, y cada una se identifica con la clase
+de su código (`<body class="c504">`), que es lo que permite diferenciar su aspecto sin duplicar la
+hoja once veces.
+
+## Quién decide el código HTTP
+
+Depende de cómo esté montado el servicio detrás de Traefik, y conviene saberlo antes de confiar en
+él:
+
+| Montaje | Quién decide el estado | Nuestro código |
+|---|---|---|
+| Middleware `errors` sobre una aplicación | **Traefik**, que conserva el código del upstream | se ignora |
+| Acceso **directo** (router *catch-all*, *default backend*) | **nosotros** | es el que llega al cliente |
+
+Medido, no deducido: con el middleware interceptando, una configuración divergente —backend `503`
+con el middleware pidiendo `/404`— hizo llegar al cliente un `503`. El caso que justifica este
+proyecto es el segundo: ahí `error-pages` devuelve `200` y nosotros, el código real. El cuerpo y las
+cabeceras (`Retry-After`, `X-Robots-Tag`, `Content-Type`, negociación por `Accept`) sí son nuestros
+en los dos casos.
+
 ## Empaquetado
 
 ```sh

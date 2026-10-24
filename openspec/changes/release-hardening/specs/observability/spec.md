@@ -1,0 +1,44 @@
+# observability Specification (delta)
+
+## ADDED Requirements
+
+### Requirement: El formato del registro es configurable
+
+`LOG_FORMAT` SHALL decidir el formato de los registros: `text` —el actual— por defecto, y `json` para que un colector los parsee sin expresiones regulares. Un valor distinto de esos dos SHALL ser un error de arranque que nombre `LOG_FORMAT`.
+
+#### Scenario: json produce líneas parseables
+- **GIVEN** `LOG_FORMAT=json`
+- **WHEN** el servicio arranca y sirve una petición
+- **THEN** cada línea del registro SHALL ser un objeto JSON válido
+
+#### Scenario: el defecto es texto
+- **GIVEN** un entorno sin `LOG_FORMAT`
+- **WHEN** el servicio arranca
+- **THEN** los registros SHALL ir en texto
+
+#### Scenario: un formato desconocido no arranca
+- **GIVEN** `LOG_FORMAT=basura`
+- **WHEN** se carga la configuración
+- **THEN** SHALL fallar con un error que nombre `LOG_FORMAT`
+
+### Requirement: Las páginas servidas se cuentan por código
+
+El servicio SHALL contar las páginas de error servidas, por código, y exponerlas en `GET /metrics` en texto Prometheus. `GET /metrics` SHALL responder `200` como endpoint de servicio y NO SHALL pasar por la resolución de páginas de error.
+
+El contador NO SHALL crecer sin límite: solo cuenta códigos del rango utilizable.
+
+#### Scenario: el contador refleja lo servido
+- **GIVEN** un servicio recién arrancado
+- **WHEN** se piden N páginas de error con código `404` y M con código `503`
+- **THEN** `/metrics` SHALL declarar N para el `404` y M para el `503`
+
+#### Scenario: metrics es un endpoint de servicio
+- **GIVEN** un servicio en marcha
+- **WHEN** se pide `GET /metrics`
+- **THEN** SHALL responder `200`
+- **AND** el cuerpo NO SHALL ser una página de error
+
+#### Scenario: las métricas declaran su tipo
+- **GIVEN** una respuesta de `/metrics`
+- **WHEN** se inspecciona
+- **THEN** SHALL incluir la ayuda y el tipo del contador conforme al formato Prometheus

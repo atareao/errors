@@ -1,0 +1,145 @@
+/* Hoja de estilos de las páginas de error.
+ *
+ * Es la única hoja del proyecto y la comparten todas las páginas (400, 401,
+ * 403, 404, 405, 408, 429, 500, 502, 503 y 504). Se sirve como asset estático
+ * desde `CONTENT_DIR`, así que la ruta pública es `/css/error.css`.
+ *
+ * Una sola hoja, no una por código: la diferencia de aspecto se expresa con la
+ * clase `c<código>` del `body`, con un acento distinto por código. El `404` se
+ * queda con el acento por defecto de `:root`; los demás solo lo sobreescriben.
+ */
+
+:root {
+  color-scheme: light dark;
+  --fg: #1f2328;
+  --bg: #ffffff;
+  --muted: #59636e;
+  --accent: #0969da;
+  --rule: #d1d9e0;
+}
+
+/* Un acento por código (tema claro). Discreto: solo cambia el color del título
+ * y de los enlaces, que son los que usan `--accent`. */
+body.c400 {
+  --accent: #9a6700;
+}
+body.c401 {
+  --accent: #8250df;
+}
+body.c403 {
+  --accent: #cf222e;
+}
+body.c405 {
+  --accent: #1a7f37;
+}
+body.c408 {
+  --accent: #bc4c00;
+}
+body.c429 {
+  --accent: #0f766e;
+}
+body.c500 {
+  --accent: #a40e26;
+}
+body.c502 {
+  --accent: #bf3989;
+}
+body.c503 {
+  --accent: #57606a;
+}
+body.c504 {
+  --accent: #6639ba;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #e6edf3;
+    --bg: #0d1117;
+    --muted: #9198a1;
+    --accent: #4493f8;
+    --rule: #30363d;
+  }
+
+  /* Los mismos acentos, aclarados para el fondo oscuro. */
+  body.c400 {
+    --accent: #d29922;
+  }
+  body.c401 {
+    --accent: #a371f7;
+  }
+  body.c403 {
+    --accent: #f85149;
+  }
+  body.c405 {
+    --accent: #3fb950;
+  }
+  body.c408 {
+    --accent: #db6d28;
+  }
+  body.c429 {
+    --accent: #2dd4bf;
+  }
+  body.c500 {
+    --accent: #ff7b72;
+  }
+  body.c502 {
+    --accent: #f778ba;
+  }
+  body.c503 {
+    --accent: #9198a1;
+  }
+  body.c504 {
+    --accent: #7c8cff;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 2rem;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  text-align: center;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  line-height: 1.5;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(3rem, 12vw, 6rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--accent);
+}
+
+h2 {
+  margin: 0;
+  font-size: clamp(1.1rem, 3vw, 1.5rem);
+  font-weight: 600;
+}
+
+p {
+  margin: 0;
+  max-width: 34rem;
+  color: var(--muted);
+}
+
+hr {
+  width: 6rem;
+  margin: 1rem 0;
+  border: 0;
+  border-top: 1px solid var(--rule);
+}
+
+a {
+  color: var(--accent);
+}

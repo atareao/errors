@@ -15,11 +15,12 @@ Implementado, verificado y versionado. El change `error-pages-parity` está **ar
 - `src/path.rs` — normalización del path (percent-decode + plegado de `.`/`..`).
 - `src/resolve.rs` — cascadas de código y formato, rango `400..=599`, tabla de razones.
 - `src/render.rs` — cuerpo por formato y cabeceras.
-- `content/` — páginas HTML (`403`, `404`, `429`, `500`, `502`, `503`) y `content/css/404.css`.
+- `content/` — **once** páginas HTML (`400`, `401`, `403`, `404`, `405`, `408`, `429`, `500`, `502`, `503`, `504`), todas con la clase `c<código>` en el `body`, y la hoja única `content/css/error.css`.
 - `Dockerfile`, `.dockerignore`, `.justfile` — empaquetado (imagen ~12 MB, no-root uid 10001).
 - `README.md` — el contrato con Traefik y los ejemplos.
 
-Puertas en verde: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` y **82 tests**.
+Puertas en verde: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` y **85 tests**
+(82 unitarios + 3 de integración sobre el contenido de `content/`).
 Verificado además contra el servidor real y contra la imagen.
 
 ## Qué es
@@ -43,8 +44,13 @@ devuelve y la **negociación de formato** (HTML / JSON / XML / texto plano).
    de arranque**. El rango es `400..=599` porque es el que Traefik intercepta (`errors.status:
    400-599`), y porque `1xx` no es representable como respuesta final, `204`/`304` no admiten cuerpo
    y un `2xx` contradice el punto 1.
-3. **Un asset existente gana a la página de error.** La garantía del código aplica a las *páginas de
-   error*, no a los assets: `GET /css/404.css` es un `200 text/css`. No conviertas un asset en página
+3. **El código real solo manda en el acceso directo.** Con el middleware `errors` de Traefik
+   delante de una aplicación, **Traefik conserva el código del upstream y el nuestro se ignora**
+   (medido: backend `503` con el middleware pidiendo `/404` → el cliente recibió `503`). Nuestro
+   código decide en el acceso **directo** —router *catch-all*, *default backend*—, que es el caso
+   que justifica el proyecto. No prometas lo contrario en la documentación.
+4. **Un asset existente gana a la página de error.** La garantía del código aplica a las *páginas de
+   error*, no a los assets: `GET /css/error.css` es un `200 text/css`. No conviertas un asset en página
    de error por la cabecera `X-Code`.
 
 ## Cómo llega el código de error (contrato con Traefik)
