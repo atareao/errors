@@ -32,6 +32,17 @@ traefik.http.services.error-pages-service.loadbalancer.server.port: 8080
 
 La respuesta lleva el **código resuelto** como estado HTTP. Nunca 200.
 
+## Integración con Traefik
+
+Hay un **ejemplo ejecutable** en [`examples/traefik/`](examples/traefik/) —Traefik v3 + este servicio
++ un backend que devuelve 4xx/5xx— con un `check.sh` que comprueba los cuatro casos, y un
+[`compose.yml`](compose.yml) en la raíz listo para producción (solo el servicio, con los labels de
+Traefik para descomentar). El ejemplo explica además el matiz de quién decide el código HTTP.
+
+Una trampa que conviene conocer antes de copiar una regla de internet: ``HostRegexp(`{host:.+}`)`` es
+sintaxis de Traefik **v2** y en v3 **no casa con nada** —el router aparece `enabled` y Traefik
+responde su propio 404, sin llegar al servicio—. En v3 es ``HostRegexp(`.+`)``.
+
 ## Ejemplos
 
 ```sh

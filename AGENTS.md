@@ -110,6 +110,12 @@ traefik.http.middlewares.error-pages-middleware.errors.query: /{status}
 traefik.http.services.error-pages-service.loadbalancer.server.port: 8080
 ```
 
+Hay un **ejemplo ejecutable** en `examples/traefik/` (Traefik v3 + este servicio + un backend que
+falla, con `check.sh`) y un `compose.yml` de producción en la raíz: no hace falta inventarse los
+labels. ⚠️ ``HostRegexp(`{host:.+}`)`` es sintaxis de Traefik **v2** y en v3 **no casa con nada** —el
+router sale `enabled` y Traefik responde su propio 404 sin llegar al servicio—; en v3 es
+``HostRegexp(`.+`)``.
+
 `/{status}` es lo que produce la petición `/404`; no lo cambies a un header sin cambiar también la
 resolución del código. El puerto por defecto del servicio es **8080**, el mismo que publica el
 `Dockerfile` y la receta `run` del `.justfile`.

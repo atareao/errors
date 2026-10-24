@@ -1,0 +1,129 @@
+# =============================================================================
+# `errors` para una infraestructura que YA tiene Traefik.
+#
+#   TRAEFIK_NETWORK=<red de Traefik> docker compose up -d     # o podman-compose
+#
+# Solo el servicio: Traefik va aparte, en su propio compose o donde viva. Lo que
+# hay que darle a este contenedor es (a) la red por la que Traefik lo alcance y
+# (b) el router con el middleware `errors` (los labels de abajo, comentados).
+#
+# El ejemplo local, con Traefik y un backend de demostración incluidos, está en
+# `examples/traefik/`; este fichero no lo duplica.
+# =============================================================================
+
+name: errors
+
+services:
+  errors:
+    # Versiona la etiqueta en producción (`atareao/errors:0.1.0`): `latest` solo
+    # para probar. Si has construido la imagen en local con `just build`, la
+    # etiqueta ya es esta misma.
+    image: ${ERRORS_IMAGE:-atareao/errors:latest}
+    container_name: errors
+    restart: unless-stopped
+
+    # --- Configuración, solo por entorno --------------------------------------
+    # Son los valores por defecto de `src/config.rs`, escritos aquí para que
+    # quien lea el fichero no tenga que abrirlos. Una variable presente pero
+    # VACÍA es error de arranque, no "usa el defecto".
+    environment:
+      PORT: "8080"              # puerto de escucha dentro del contenedor
+      LOG_LEVEL: "info"         # filtro de tracing (debug, info, warn, error)
+      LOG_FORMAT: "text"        # text | json (json para recolectores)
+      CONTENT_DIR: "content"    # relativo a WORKDIR (/app/content en la imagen)
+      DEFAULT_ERROR_PAGE: "404" # fuera de 400..=599 es error de arranque
+
+    # --- Puertos --------------------------------------------------------------
+    # En producción NO se publica ninguno: Traefik llega al contenedor por la
+    # red interna, y publicarlo dejaría el servicio accesible por su cuenta.
+    # Para depurar el acceso directo (el caso que justifica el proyecto, y el
+    # único en el que nuestro código decide), descomenta esto y usa
+    # `curl -i localhost:8080/404`:
+    #ports:
+    #  - "127.0.0.1:8080:8080"
+
+    healthcheck:
+      # `/healthz` responde siempre 200 y no pasa por la resolución de páginas
+      # de error. `wget` es el de busybox, ya presente en la imagen: no se
+      # instala nada. La imagen ya declara este mismo healthcheck en su
+      # Dockerfile; repetirlo aquí lo deja a la vista y, sobre todo, cubre a
+      # quien construya la imagen en formato OCI (podman/buildah sin
+      # `--format docker`), que **descarta el HEALTHCHECK del Dockerfile**.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 2s
+
+    # Endurecimiento opcional (verificado con este mismo fichero): el binario
+    # es estático y el contenido va dentro de la imagen, así que no necesita
+    # escribir nada. Descomenta si te encaja:
+    #read_only: true
+
+    networks:
+      - proxy
+
+    # =========================================================================
+    # Traefik — LABELS LISTOS PARA DESCOMENTAR
+    #
+    # Requisitos en el Traefik que ya tengas:
+    #   --providers.docker=true
+    #   --providers.docker.exposedByDefault=false   (recomendado: solo publica
+    #                                                lo que lleve traefik.enable)
+    # y que Traefik esté en la MISMA red que este contenedor (la de abajo).
+    #
+    # El puerto del servicio es el **8080 interno del contenedor**, no un puerto
+    # del host: Traefik habla con el contenedor por la red del compose.
+    #
+    # Con esto montado, el servicio cubre dos sitios a la vez:
+    #   * el router de respaldo (`errors-catchall`): cualquier Host que no case
+    #     con otro router, sin upstream cuyo código conservar. Aquí el código lo
+    #     decide `errors` — es el caso que justifica el proyecto;
+    #   * `errpages`, el middleware para colgar de los routers de tus
+    #     aplicaciones (añade `middlewares: errpages@docker` al router, o el
+    #     label `traefik.http.routers.<tu-app>.middlewares`). Ahí el estado lo
+    #     conserva Traefik y el cuerpo y las cabeceras son nuestros.
+    #
+    #labels:
+    #  traefik.enable: "true"
+    #
+    #  # --- El servicio -------------------------------------------------------
+    #  traefik.http.services.errors.loadbalancer.server.port: "8080"
+    #
+    #  # --- El middleware ----------------------------------------------------
+    #  # `/{status}` es la plantilla que produce la petición `/404`: el código
+    #  # viaja en el path. No la cambies sin cambiar también el servicio.
+    #  traefik.http.middlewares.errpages.errors.status: "400-599"
+    #  traefik.http.middlewares.errpages.errors.service: errors
+    #  traefik.http.middlewares.errpages.errors.query: "/{status}"
+    #
+    #  # --- El router de respaldo --------------------------------------------
+    #  # Prioridad explícita y baja: sin ella Traefik ordena por longitud de la
+    #  # regla y este catch-all ganaría a tus routers.
+    #  # La regla es `HostRegexp(.+)` (sintaxis de Go, v3). NO uses
+    #  # `HostRegexp(`{host:.+}`)` de la guía de error-pages: es sintaxis v2 y en
+    #  # v3 no casa con nada (medido), con lo que te quedarías con el 404 en
+    #  # texto plano de Traefik. Alternativa v3: `PathPrefix(`/`)`.
+    #  traefik.http.routers.errors-catchall.rule: HostRegexp(`.+`)
+    #  traefik.http.routers.errors-catchall.entrypoints: web
+    #  traefik.http.routers.errors-catchall.service: errors
+    #  traefik.http.routers.errors-catchall.middlewares: errpages
+    #  traefik.http.routers.errors-catchall.priority: "1"
+    #
+    #  # Si prefieres no publicar el router de respaldo y solo usarlo como
+    #  # servicio de errores de tus aplicaciones, borra las cuatro líneas de
+    #  # `errors-catchall` y quédate con el servicio y el middleware.
+    # =========================================================================
+
+# Sin volúmenes: el binario es estático y las páginas van dentro de la imagen
+# (`CONTENT_DIR=content`), así que el contenedor no guarda estado y se puede
+# recrear cuando haga falta. No hay nada que persistir.
+
+networks:
+  # La red por la que Traefik alcanza este contenedor: la MISMA que Traefik ya
+  # usa. Por defecto se asume el nombre `traefik`; si el tuyo es otro, exporta
+  # `TRAEFIK_NETWORK=<nombre>` (lo ves con `docker network ls`). Al ser
+  # `external`, este compose no la crea: tiene que existir antes.
+  proxy:
+    external: true
+    name: ${TRAEFIK_NETWORK:-traefik}

@@ -1,0 +1,171 @@
+# =============================================================================
+# Ejemplo ejecutable: Traefik v3 + `errors` + un backend que devuelve 4xx/5xx.
+#
+#   cd examples/traefik
+#   podman-compose up -d          # o: docker compose up -d
+#   ./check.sh                    # los tres curl de la tabla del README
+#   podman-compose down           # o: docker compose down
+#
+# POR QUÉ LABELS DE DOCKER Y NO UN FICHERO DINÁMICO
+#   * Es el mecanismo que usa la guía oficial de `tarampampam/error-pages` para
+#     Traefik, así que quien llega desde allí reconoce la configuración tal cual.
+#   * Se verificó aquí **funcionando con podman**: el proveedor `docker` de
+#     Traefik habla con la API de podman (compatible) a través de su socket.
+#   * El precio es montar el socket del motor en el contenedor de Traefik. En
+#     este ejemplo es aceptable (quien puede escribir labels puede crear
+#     contenedores), pero NO es gratis: ver "El socket" en README.md. Si eso no
+#     te vale, el README documenta la variante con fichero dinámico, que no
+#     necesita socket y es idéntica en docker y en podman.
+#
+# El socket se monta con `CONTAINER_SOCKET`, cuyo valor por defecto es el de
+# docker. En podman rootless hay que apuntarlo al del usuario:
+#   CONTAINER_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock podman-compose up -d
+# =============================================================================
+
+name: errors-traefik-example
+
+services:
+  # ---------------------------------------------------------------------------
+  # Traefik: quien decide el estado HTTP cuando el middleware `errors` está
+  # delante de una aplicación (ver README.md).
+  # ---------------------------------------------------------------------------
+  traefik:
+    image: traefik:v3.6
+    container_name: errors-demo-traefik
+    restart: unless-stopped
+    command:
+      - --entrypoints.web.address=:80
+      # El proveedor por labels. `exposedByDefault=false` es importante: en esta
+      # máquina hay más contenedores en el motor y sin esto Traefik publicaría
+      # routers para todos. Solo entra el que lleva `traefik.enable=true`.
+      - --providers.docker=true
+      - --providers.docker.exposedByDefault=false
+      - --providers.docker.endpoint=unix:///var/run/docker.sock
+      - --ping=true
+      - --log.level=INFO
+      - --accesslog=true
+    ports:
+      # Puerto alto en el host para no chocar con nada; dentro sigue siendo :80,
+      # que es el entrypoint `web`. Traefik no es el servicio que se publica: es
+      # el que publica a los demás.
+      - "8474:80"
+    volumes:
+      - ${CONTAINER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock:z
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - net
+
+  # ---------------------------------------------------------------------------
+  # El servicio del proyecto. Es el que responde las páginas con el código real.
+  # ---------------------------------------------------------------------------
+  errors:
+    image: ${ERRORS_IMAGE:-atareao/errors:latest}
+    container_name: errors-demo-errors
+    restart: unless-stopped
+    environment:
+      # Los mismos valores por defecto que trae la imagen; explícitos para que
+      # el ejemplo se lea de un vistazo.
+      PORT: "8080"
+      LOG_LEVEL: "info"
+      LOG_FORMAT: "text"
+      CONTENT_DIR: "content"
+      DEFAULT_ERROR_PAGE: "404"
+    networks:
+      - net
+    labels:
+      traefik.enable: "true"
+
+      # --- Servicio ----------------------------------------------------------
+      # El puerto es el INTERNO del contenedor (8080), no uno del host: Traefik
+      # habla con el contenedor por la red del compose y no hace falta publicar
+      # nada con `ports:`.
+      traefik.http.services.errors.loadbalancer.server.port: "8080"
+
+      # --- Middleware `errors` -----------------------------------------------
+      # Intercepta cualquier respuesta 4xx/5xx del router al que se aplique y
+      # pide el cuerpo a `errservice` con la plantilla de `query`. `/{status}`
+      # es lo que produce la petición `/404`, que es donde `errors` lee el
+      # código: el contrato del proyecto depende de esa plantilla.
+      traefik.http.middlewares.errpages.errors.status: "400-599"
+      traefik.http.middlewares.errpages.errors.service: errors
+      traefik.http.middlewares.errpages.errors.query: "/{status}"
+
+      # --- Router de respaldo (catch-all) ------------------------------------
+      # Un Host que no case con ningún otro router cae aquí, NO tiene upstream y
+      # su código de error no lo puede conservar nadie: lo decide `errors`. Es
+      # el caso que justifica este proyecto (con `error-pages` sería un 200).
+      #
+      # La prioridad se pone a mano y baja: Traefik, sin prioridad explícita,
+      # ordena por longitud de la regla, y `HostRegexp(...)` es más larga que
+      # `Host(\`app.localtest.me\`)`, así que el catch-all ganaría a todo.
+      #
+      # OJO con la regla. La guía de error-pages y mil copias por ahí usan
+      # `HostRegexp(\`{host:.+}\`)`: es sintaxis de Traefik v2 (grupos con
+      # nombre al estilo gorilla/mux) y en v3 **no casa con nada** — Traefik
+      # responde su propio 404 en texto plano y nunca se llega al servicio de
+      # errores, que es justo el fallo que este proyecto existe para evitar.
+      # En v3 los matchers `*Regexp` usan la sintaxis de Go (ver
+      # doc.traefik.io/traefik/migrate/v2-to-v3-details/), así que va `.+\`
+      # a secas. Medido con v3.6: con `{host:.+}` el router está `enabled` pero
+      # no coincide con ninguna petición; con `.+\` coincide con todas.
+      # (Equivalente al gusto de v3: `PathPrefix(\`/\`)`.)
+      traefik.http.routers.errors-catchall.rule: HostRegexp(`.+`)
+      traefik.http.routers.errors-catchall.entrypoints: web
+      traefik.http.routers.errors-catchall.service: errors
+      traefik.http.routers.errors-catchall.middlewares: errpages
+      traefik.http.routers.errors-catchall.priority: "1"
+
+      # El middleware aquí es inofensivo: la petición que el propio middleware
+      # hace al servicio de errores no vuelve a pasar por los routers, así que
+      # no hay recursión (verificado: el cliente recibe 404, no un bucle).
+      #
+      # Extra didáctico: un router divergente, con el mismo backend pero un
+      # middleware que pide SIEMPRE `/404`, para comprobar de un curl quién
+      # decide el estado (Traefik conserva el 503 del backend; el cuerpo es el
+      # de nuestra página 404).
+      traefik.http.middlewares.errfixed.errors.status: "400-599"
+      traefik.http.middlewares.errfixed.errors.service: errors
+      traefik.http.middlewares.errfixed.errors.query: "/404"
+
+  # ---------------------------------------------------------------------------
+  # Backend de demostración: nginx con `return`, sin ficheros que buscar.
+  #   /     -> 404     /boom -> 503     /gone -> 410
+  # ---------------------------------------------------------------------------
+  backend:
+    image: nginx:1.29-alpine
+    container_name: errors-demo-backend
+    restart: unless-stopped
+    networks:
+      - net
+    volumes:
+      # Es configuración, no datos: bind mount en solo lectura, justificado.
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro,z
+    labels:
+      traefik.enable: "true"
+      traefik.http.services.backend.loadbalancer.server.port: "80"
+
+      # Router normal, con el middleware `errors` delante.
+      traefik.http.routers.backend.rule: Host(`app.localtest.me`)
+      traefik.http.routers.backend.entrypoints: web
+      traefik.http.routers.backend.service: backend
+      traefik.http.routers.backend.middlewares: errpages
+      traefik.http.routers.backend.priority: "10"
+
+      # El mismo backend con el middleware divergente. Misma regla de longitud
+      # que `backend`, por eso lleva prioridad más alta.
+      traefik.http.routers.diverge.rule: Host(`diverge.localtest.me`)
+      traefik.http.routers.diverge.entrypoints: web
+      traefik.http.routers.diverge.service: backend
+      traefik.http.routers.diverge.middlewares: errfixed
+      traefik.http.routers.diverge.priority: "20"
+
+networks:
+  # Red propia, no la default bridge: en la del compose los contenedores se
+  # resuelven por nombre y Traefik obtiene por la API la IP de cada uno.
+  net:
+    driver: bridge
