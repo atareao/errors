@@ -6,10 +6,11 @@
 
 ## Estado real del repositorio (verificado)
 
-Implementado, verificado y versionado. Cuatro changes están **archivados** en
-`openspec/changes/archive/` —`error-pages-parity`, `error-page-coverage`, `release-hardening` y
-`security-hardening`, los cuatro con fecha `2026-10-24`— y sus requisitos viven fusionados en los
-cuatro specs de `openspec/specs/`: `error-page`, `http-server`, `observability` y `response-extras`.
+Implementado, verificado y versionado. Cinco changes están **archivados** en
+`openspec/changes/archive/` —`error-pages-parity`, `error-page-coverage`, `release-hardening`,
+`security-hardening` y `retry-after-configurable`, los cinco con fecha `2026-10-24`— y sus
+requisitos viven fusionados en los cuatro specs de `openspec/specs/`: `error-page`, `http-server`,
+`observability` y `response-extras`.
 
 - `src/main.rs` — arranque, router, middleware de páginas de error, la lista `SERVICE_ENDPOINTS` que acota ese middleware, y los tests de router.
 - `src/config.rs` — configuración desde el entorno (`Config`, `ConfigError`, `from_env_iter`).
@@ -21,8 +22,8 @@ cuatro specs de `openspec/specs/`: `error-page`, `http-server`, `observability` 
 - `Dockerfile`, `.dockerignore`, `.justfile`, `compose.yml` — empaquetado (imagen ~12 MB, no-root uid 10001); el `compose.yml` va endurecido: `read_only: true`, `cap_drop: [ALL]`, `no-new-privileges:true` e `init: true`.
 - `README.md` — el contrato con Traefik y los ejemplos.
 
-Puertas en verde: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` y **114 tests**
-(111 unitarios + 3 de integración sobre el contenido de `content/`).
+Puertas en verde: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` y **124 tests**
+(121 unitarios + 3 de integración sobre el contenido de `content/`).
 Verificado además contra el servidor real y contra la imagen.
 
 ## Qué es
@@ -86,6 +87,7 @@ devuelve y la **negociación de formato** (HTML / JSON / XML / texto plano).
 | `CONTENT_DIR` | `content` | Páginas HTML y assets. |
 | `DEFAULT_ERROR_PAGE` | `404` | Código por defecto; fuera de `400..=599` es error de arranque. |
 | `LOG_FORMAT` | `text` | `text` o `json`; cualquier otro valor, o vacía, es error de arranque. |
+| `RETRY_AFTER` | `120` | Segundos de la cabecera `Retry-After` (solo `429` y `503`); no numérica, o vacía, es error de arranque. |
 
 `GET /metrics` es un endpoint de servicio (siempre `200`, fuera de la resolución de páginas de
 error) que expone el contador Prometheus de páginas servidas **por código y por el origen de ese
@@ -129,8 +131,9 @@ y cae en el cuarto caso, pero una petición sin `Accept` (curl, health-checks) r
 Sigue la cascada tal cual para no divergir de `error-pages`; no «arregles» el defecto a HTML.
 
 Cabeceras de toda página de error: `Content-Type` según el formato, `Content-Length`,
-`X-Robots-Tag: noindex, nofollow, nosnippet, noarchive`, y `Retry-After: 120` **solo** en `429` y
-`503` (el `Retry-After` describe el estado que se sirve, no el de la respuesta sustituida).
+`X-Robots-Tag: noindex, nofollow, nosnippet, noarchive`, y `Retry-After` con el valor de
+`RETRY_AFTER` (`120` por defecto) **solo** en `429` y `503` (el `Retry-After` describe el estado que
+se sirve, no el de la respuesta sustituida).
 
 Toda respuesta declara en `Vary` `Accept-Encoding` y los nombres de las cuatro cabeceras de
 correlación —`X-Request-Id`, `X-Trace-Id`, `X-Correlation-Id`, `X-Amzn-Trace-Id`—, **siempre**, las
@@ -160,7 +163,7 @@ resolución del código. El puerto por defecto del servicio es **8080**, el mism
 
 ```sh
 cargo run                                   # servidor
-cargo test                                  # 114 tests
+cargo test                                  # 124 tests
 cargo test <substring>                      # un test por nombre
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
@@ -231,6 +234,12 @@ Se mantiene con [`git-cliff`](https://git-cliff.org) (`cliff.toml`) y la receta 
   ha cambiado entre versiones —campos que se eliminan y pasan a ser error—, así que un binario nuevo
   no debe romper el CI por su cuenta. `-D warnings` hace fallar también la higiene del fichero (una
   licencia permitida que ya no use nadie).
+- **El registro de peticiones existe, pero está a `DEBUG`.** `TraceLayer` emite `on_request` y
+  `on_response` —método, ruta, latencia y estado—, y con el `LOG_LEVEL` por defecto (`info`) no se
+  ven: solo sale la línea de arranque. Se encienden **sin tocar código**:
+  `LOG_LEVEL="tower_http=debug,info"`; y para no traer de regalo el `on_failure` que marca todo `5xx`
+  como fallo, `LOG_LEVEL="tower_http::trace::on_failure=off,tower_http=debug,info"`. Medido: dos
+  líneas por petición —entrada y salida—, sin el falso «response failed» de cada `503`.
 
 ## Referencia de implementación (qué no repetir)
 
