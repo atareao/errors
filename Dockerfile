@@ -1,5 +1,5 @@
 ###############################################################################
-# errors — servidor de páginas de error para Traefik
+# errserve — servidor de páginas de error para Traefik
 #
 # Multi-stage:
 #   * builder  -> `rust:alpine`, cuyo target nativo del toolchain **ya es**
@@ -54,7 +54,7 @@ FROM ${RUNTIME_IMAGE} AS runtime
 
 # Etiquetas OCI en el **último** stage: las de un stage intermedio no llegan a
 # la imagen final (comprobado: puestas en `builder`, la imagen salía sin ellas).
-LABEL org.opencontainers.image.title="errors" \
+LABEL org.opencontainers.image.title="errserve" \
       org.opencontainers.image.description="Servidor de páginas de error para Traefik que devuelve el código HTTP real" \
       org.opencontainers.image.authors="Lorenzo Carbonell <a.k.a. atareao>"
 
@@ -72,7 +72,7 @@ WORKDIR /app
 # Aquí se copia `content/` a `/app/content`: una única ruta, coherente entre
 # código (`src/config.rs`), Dockerfile y `.dockerignore`. (El bug de
 # `simpleserver` era declarar `static` en el código y copiar `content/`.)
-COPY --from=builder --chown=10001:10001 /app/target/release/errors ./errors
+COPY --from=builder --chown=10001:10001 /app/target/release/errserve ./errserve
 COPY --chown=10001:10001 content ./content
 
 # Valores por defecto documentados; coinciden con `src/config.rs`.
@@ -94,4 +94,4 @@ EXPOSE 8080
 
 USER 10001:10001
 
-CMD ["/app/errors"]
+CMD ["/app/errserve"]

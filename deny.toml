@@ -1,4 +1,4 @@
-# cargo-deny — qué dependencias pueden entrar en `errors`.
+# cargo-deny — qué dependencias pueden entrar en `errserve`.
 # https://embarkstudios.github.io/cargo-deny/
 #
 # Se ejecuta en el CI (`.github/workflows/ci.yml`, job `dependencias`) y a mano

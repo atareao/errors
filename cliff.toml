@@ -1,4 +1,4 @@
-# git-cliff — cómo se genera el CHANGELOG de `errors`.
+# git-cliff — cómo se genera el CHANGELOG de `errserve`.
 # https://git-cliff.org/docs/configuration
 #
 # El CHANGELOG **no se regenera**: la receta `just changelog` **antepone** la
@@ -10,7 +10,7 @@
 # red: son dos cadenas que usa la plantilla.
 [remote.github]
 owner = "atareao"
-repo = "errors"
+repo = "errserve"
 
 [changelog]
 # Encabezado **estático** e idéntico al que ya tiene `CHANGELOG.md`. Con un

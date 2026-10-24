@@ -1,4 +1,4 @@
-# errors — AGENTS.md
+# errserve — AGENTS.md
 
 > Las directivas globales de este entorno (OpenSpec SDD + TDD, tags de estado, tabla de subagentes)
 > se inyectan ya en cada sesión desde `~/.config/opencode/AGENTS.md`. No se repiten aquí: lo de abajo
@@ -207,7 +207,12 @@ Se mantiene con [`git-cliff`](https://git-cliff.org) (`cliff.toml`) y la receta 
   da 404; no existe ni en el OpenAPI ni en GraphQL): solo a mano en los ajustes del paquete. En este
   repositorio, **medido** tras la primera publicación, el paquete quedó **público** —descarga anónima
   y `tags/list` responden `200`—, así que no hubo que tocar nada; pero si algún día un
-  `docker pull ghcr.io/atareao/errors` responde `denied`, ese es el motivo y ahí está el arreglo.
+  `docker pull ghcr.io/atareao/errserve` responde `denied`, ese es el motivo y ahí está el arreglo.
+- El paquete de GHCR `ghcr.io/atareao/errors` queda **congelado en `0.2.0`**: renombrar el repositorio
+  **no** renombra ni redirige el paquete, así que sigue publicado y descargable, pero **no recibe nada
+  nuevo** —lo que se publique a partir de ahora va a `ghcr.io/atareao/errserve`—. Y el nombre `errors`
+  **no debe reutilizarse nunca** para otro repositorio: GitHub deja redirecciones desde la ruta
+  antigua del repositorio renombrado, y un repositorio nuevo con ese nombre las rompe.
 
 ## Quirks
 
