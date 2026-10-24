@@ -82,8 +82,9 @@ impl NormalizedPath {
         }
     }
 
-    /// Path normalizado en texto. Es el que usan [`crate::resolve::resolve_code`]
-    /// y [`crate::resolve::resolve_format`] para clasificar.
+    /// Path normalizado en texto. Es el que usan
+    /// [`crate::resolve::resolve_code_with_source`] y
+    /// [`crate::resolve::resolve_format`] para clasificar.
     pub fn as_str(&self) -> &str {
         &self.text
     }

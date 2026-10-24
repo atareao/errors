@@ -186,10 +186,10 @@ pub fn render_text_fallback(code: u16) -> RenderedPage {
 
 /// Estado de la respuesta a partir del código resuelto.
 ///
-/// La resolución ([`crate::resolve::resolve_code`]) solo entrega códigos de
-/// `400` a `599` y `Config` rechaza un `DEFAULT_ERROR_PAGE` fuera de ese rango,
-/// así que la degradación a `500` es inalcanzable por esa vía: queda como red
-/// de seguridad y **nunca** podría producir un `200`.
+/// La resolución ([`crate::resolve::resolve_code_with_source`]) solo entrega
+/// códigos de `400` a `599` y `Config` rechaza un `DEFAULT_ERROR_PAGE` fuera de
+/// ese rango, así que la degradación a `500` es inalcanzable por esa vía: queda
+/// como red de seguridad y **nunca** podría producir un `200`.
 fn status_of(code: u16) -> StatusCode {
     StatusCode::from_u16(code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
 }
