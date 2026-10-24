@@ -27,6 +27,18 @@ services:
     container_name: errors
     restart: unless-stopped
 
+    # --- Parada limpia --------------------------------------------------------
+    # El binario es PID 1 del contenedor, y el kernel **no entrega a PID 1** las
+    # señales con acción por defecto: un `SIGTERM` no lo termina, así que
+    # `podman stop`/`docker stop` agota su tiempo de gracia y acaba en `SIGKILL`.
+    # Medido con este mismo fichero: sin `init` la parada tarda **10,4 s** y
+    # sale el aviso `StopSignal SIGTERM failed… resorting to SIGKILL`; con él,
+    # **0,4 s** y sin aviso. `init: true` pone a tini delante —lo mismo que hace
+    # la receta `just run` con `--init`—, que reenvía la señal al proceso. No es
+    # por el estado (este servicio no guarda ninguno, y sin esto no se pierde
+    # nada): es por no esperar diez segundos en cada `down`.
+    init: true
+
     # --- Configuración, solo por entorno --------------------------------------
     # Son los valores por defecto de `src/config.rs`, escritos aquí para que
     # quien lea el fichero no tenga que abrirlos. Una variable presente pero
@@ -60,10 +72,30 @@ services:
       retries: 3
       start_period: 2s
 
-    # Endurecimiento opcional (verificado con este mismo fichero): el binario
-    # es estático y el contenido va dentro de la imagen, así que no necesita
-    # escribir nada. Descomenta si te encaja:
-    #read_only: true
+    # --- Endurecimiento -------------------------------------------------------
+    # Las tres van puestas, y las tres son gratis aquí:
+    #
+    #   * `read_only`: el binario está enlazado estáticamente (musl: no carga
+    #     nada en tiempo de ejecución) y las páginas viven **dentro** de la
+    #     imagen (`CONTENT_DIR=content`), así que el proceso no escribe en
+    #     disco: solo abre ficheros en lectura. **No hace falta `tmpfs`**: no
+    #     hay temporales, ni caché, ni socket que crear —`wget` del healthcheck
+    #     escribe en `/dev/null`, que siempre existe aunque el sistema de
+    #     ficheros sea de solo lectura—. Añadir uno daría al contenedor un
+    #     sitio donde escribir sin que nada lo necesite.
+    #   * `cap_drop: [ALL]`: **ninguna** capacidad le hace falta. No abre
+    #     puertos privilegiados (el 8080 es interno, quien mapea al host es el
+    #     motor), no toca la red más allá de escuchar, no monta nada y no
+    #     cambia de usuario: el proceso ya arranca como uid/gid 10001, sin
+    #     shell de login (el `USER` del Dockerfile).
+    #   * `no-new-privileges:true`: cierra la puerta a que un binario setuid
+    #     que hubiera dentro de la imagen gane privilegios sobre el proceso que
+    #     lo lanza.
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
     networks:
       - proxy
