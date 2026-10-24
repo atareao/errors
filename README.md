@@ -30,7 +30,29 @@ traefik.http.middlewares.error-pages-middleware.errors.query: /{status}
 traefik.http.services.error-pages-service.loadbalancer.server.port: 8080
 ```
 
-La respuesta lleva el **código resuelto** como estado HTTP. Nunca 200.
+La respuesta lleva el **código resuelto** como estado HTTP. Nunca 200. Y eso vale también para lo
+que sirve el servidor de ficheros: cualquier respuesta suya **con estado de error** —no solo su
+`404`: también el `405` de un método que no sirve estáticos, el `416` de un `Range` múltiple y el
+`500` de un segmento de path que no cabe como nombre de fichero— se sustituye por la página de
+error, con **el código resuelto** (path → `X-Code` → `DEFAULT_ERROR_PAGE`), **nunca** con su estado:
+el estado del servidor de ficheros no es una fuente de la cascada.
+
+Con el binario anterior se veía el hueco: `GET /<300 caracteres>` respondía `500` **con el cuerpo
+vacío** (`content-length: 0`), sin `Content-Type`, sin `X-Robots-Tag` y sin que ninguna página lo
+hubiera producido; `PUT /css/error.css` respondía `405` y `Range: bytes=0-1,3-4` sobre un asset
+respondía `416`, los dos sin cuerpo y sin pasar por la cascada.
+
+Y hay **tres razones medidas** para no conservar su estado:
+
+- el `405` saldría **sin el `Allow`** que RFC 9110 exige: la página la construimos nosotros y esa
+  cabecera describe *su* respuesta, no la nuestra;
+- el estado y el cuerpo quedarían en desacuerdo —un `404` con `Retry-After: 120` y el cuerpo del
+  `503`—, contra la regla de que el `404` no lleva `Retry-After`;
+- con `DEFAULT_ERROR_PAGE=503`, cualquier asset inexistente saldría `404`, dejando sin efecto a
+  `X-Code`, que existe justo para los despliegues que no reescriben el path.
+
+Un asset **existente** sigue ganando, que es la otra mitad de la regla: `GET /css/error.css` es un
+`200 text/css` y no pasa por la página de error.
 
 ## Integración con Traefik
 
@@ -120,14 +142,32 @@ en los dos casos.
 
 ## Operación y observabilidad
 
-`GET /metrics` expone en texto Prometheus el contador de páginas servidas por código
-(`errors_pages_total{code="404"}`). Es un endpoint de servicio: siempre `200`, fuera de la
-resolución de páginas de error.
+`GET /metrics` expone en texto Prometheus el contador de páginas servidas, con **dos** etiquetas:
+
+```
+errors_pages_total{code="404",source="path"} 3
+errors_pages_total{code="503",source="header"} 1
+```
+
+`code` es el código servido y `source` dice de dónde salió ese código: `path`, `header` (`X-Code`)
+o `default` (`DEFAULT_ERROR_PAGE`). La etiqueta hace falta porque `X-Code` la elige quien llama: sin
+ella, cualquiera puede inflar a voluntad el contador de un código y fabricar la apariencia de una
+avalancha justo durante una incidencia; con ella, ese inflado se ve al leer el scrape.
+
+**No publiques `/metrics` en el router de respaldo.** Es un endpoint de servicio —siempre `200`,
+fuera de la resolución de páginas de error— y no una página de error: expone la actividad del propio
+servicio (qué códigos ha servido, que es el perfil de fallos de tu infraestructura), así que déjalo
+fuera del *catch-all* o ponle delante un middleware de Traefik (*basicAuth*, una `IPAllowList`). La
+aplicación **no** autentica nada: el sitio para eso es el proxy.
+
+`/version` sí se queda a la vista **a propósito**, por paridad con `error-pages`: publica la versión
+y nada más, y hoy no hay ningún aviso que lo haga explotable.
 
 La respuesta se comprime cuando el cliente envía `Accept-Encoding: gzip` —y entonces responde
-con codificación por trozos, sin `Content-Length`—, y declara `Vary: Accept-Encoding`. Las
-cabeceras de correlación `X-Request-Id`, `X-Trace-Id`, `X-Correlation-Id` y `X-Amzn-Trace-Id`
-se copian de la petición a la respuesta cuando vienen; no se inventan.
+con codificación por trozos, sin `Content-Length`—, y declara `Vary: Accept-Encoding, X-Request-Id,
+X-Trace-Id, X-Correlation-Id, X-Amzn-Trace-Id`: las cinco, siempre, las traiga la petición o no.
+Las cabeceras de correlación se copian de la petición a la respuesta cuando vienen —no se
+inventan—, así que una caché intermedia tiene que saber que la respuesta varía por ellas.
 
 ## Imagen
 

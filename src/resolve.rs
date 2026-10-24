@@ -7,8 +7,13 @@
 //! #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 //! pub enum Format { Html, Json, Xml, Text }
 //!
-//! /// Cascada del código: path -> `X-Code` -> `default`.
-//! pub fn resolve_code(path: &str, x_code: Option<&str>, default: u16) -> u16;
+//! /// Cascada del código: path -> `X-Code` -> `default`, con el origen
+//! /// (path, header o default) incluido.
+//! pub fn resolve_code_with_source(
+//!     path: &str,
+//!     x_code: Option<&str>,
+//!     default: u16,
+//! ) -> (u16, CodeSource);
 //!
 //! /// Cascada del formato: extensión -> `Content-Type` -> `X-Format` -> `Accept`
 //! /// -> `Format::Text`.
@@ -33,10 +38,10 @@
 //!
 //! Detalles que la fase GREEN debe respetar:
 //!
-//! - `resolve_code` extrae el entero del **primer segmento** del path, ignorando
-//!   la extensión (`/404.json` -> `404`). Un primer segmento no numérico
-//!   (`/`, `/foo`) no resuelve por esa vía.
-//! - `resolve_code` **no** depende del formato: `/503.xml` es un `503`.
+//! - La cascada del código extrae el entero del **primer segmento** del path,
+//!   ignorando la extensión (`/404.json` -> `404`). Un primer segmento no
+//!   numérico (`/`, `/foo`) no resuelve por esa vía.
+//! - La cascada del código **no** depende del formato: `/503.xml` es un `503`.
 //! - Para `Content-Type`, `X-Format` y `Accept` el match es de **tipo MIME**
 //!   (sufijo `; charset=...` admitido y listas de `Accept` separadas por comas
 //!   recorridas en orden, ganando el primer tipo soportado que aparezca —
@@ -90,7 +95,28 @@ pub fn is_usable_code(code: u16) -> bool {
     (MIN_ERROR_CODE..=MAX_ERROR_CODE).contains(&code)
 }
 
-/// Cascada del código: path -> `X-Code` -> `default`.
+/// Fuente de la que salió el código resuelto.
+///
+/// Existe porque el contador de páginas servidas distingue de dónde vino el
+/// código: sin esa distinción, una cabecera `X-Code` elegida por quien llama es
+/// indistinguible de un `503` real y el contador —la única señal de
+/// observabilidad del servicio— se puede inflar a voluntad justo durante una
+/// incidencia (spec `observability`).
+///
+/// Son tres y solo tres porque son los tres orígenes de la cascada de
+/// [`resolve_code_with_source`]; el estado que traiga una respuesta del servidor
+/// de ficheros sustituida **no** es un origen del código resuelto.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodeSource {
+    /// El código lo aportó el path (`/404`, `/503.xml`).
+    Path,
+    /// El código lo aportó la cabecera `X-Code`.
+    Header,
+    /// No lo aportó ninguna fuente: es el código por defecto.
+    Default,
+}
+
+/// Cascada del código: path -> `X-Code` -> `default`, con el origen incluido.
 ///
 /// El primer origen que hace match gana, así que el path siempre manda sobre
 /// la cabecera. No depende del formato: `/503.xml` es un `503`.
@@ -102,24 +128,32 @@ pub fn is_usable_code(code: u16) -> bool {
 /// el rango `400..=599`: el defecto nunca podría resolverse desde el path ni
 /// desde la cabecera, así que si llegara fuera de rango saldría una página de
 /// error con un estado no utilizable. El `debug_assert` lo vigila en pruebas.
-pub fn resolve_code(path: &str, x_code: Option<&str>, default: u16) -> u16 {
+///
+/// Es el **único** punto de entrada público de la cascada, y devuelve también
+/// de qué fuente salió —para etiquetar el contador de páginas servidas, ver
+/// [`CodeSource`]—, sin cambiar el código devuelto.
+pub fn resolve_code_with_source(
+    path: &str,
+    x_code: Option<&str>,
+    default: u16,
+) -> (u16, CodeSource) {
     debug_assert!(
         is_usable_code(default),
         "el código por defecto debe estar en 400..=599: {default}"
     );
 
     if let Some(code) = code_from_path(path).filter(|code| is_usable_code(*code)) {
-        return code;
+        return (code, CodeSource::Path);
     }
 
     if let Some(code) = x_code
         .and_then(parse_code)
         .filter(|code| is_usable_code(*code))
     {
-        return code;
+        return (code, CodeSource::Header);
     }
 
-    default
+    (default, CodeSource::Default)
 }
 
 /// Código que aporta el path por sí solo, si aporta alguno.
@@ -132,7 +166,7 @@ pub fn resolve_code(path: &str, x_code: Option<&str>, default: u16) -> u16 {
 /// sea utilizable como código de error. Es a propósito, porque lo usa el router
 /// para decidir si una petición *es* una página de error —`/200` lo es, y debe
 /// responder el código por defecto, no el fichero `200.html`—; quien recorta el
-/// rango es [`resolve_code`], con [`is_usable_code`].
+/// rango es [`resolve_code_with_source`], con [`is_usable_code`].
 pub fn code_from_path(path: &str) -> Option<u16> {
     let first_segment = path
         .trim_start_matches('/')
@@ -281,6 +315,11 @@ fn format_of_accept(value: &str) -> Option<Format> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// El código resuelto sin el origen: la cascada con la etiqueta descartada.
+    fn resolve_code(path: &str, x_code: Option<&str>, default: u16) -> u16 {
+        resolve_code_with_source(path, x_code, default).0
+    }
 
     // --- Cascada del código (tasks.md 1.2) ---------------------------------
 

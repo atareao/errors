@@ -6,21 +6,23 @@
 
 ## Estado real del repositorio (verificado)
 
-Implementado, verificado y versionado. El change `error-pages-parity` está **archivado**
-(`openspec/changes/archive/2026-10-24-error-pages-parity/`) y sus requisitos viven fusionados en
-`openspec/specs/error-page/` y `openspec/specs/http-server/`.
+Implementado, verificado y versionado. Cuatro changes están **archivados** en
+`openspec/changes/archive/` —`error-pages-parity`, `error-page-coverage`, `release-hardening` y
+`security-hardening`, los cuatro con fecha `2026-10-24`— y sus requisitos viven fusionados en los
+cuatro specs de `openspec/specs/`: `error-page`, `http-server`, `observability` y `response-extras`.
 
-- `src/main.rs` — arranque, router, middleware de páginas de error y los tests de router.
+- `src/main.rs` — arranque, router, middleware de páginas de error, la lista `SERVICE_ENDPOINTS` que acota ese middleware, y los tests de router.
 - `src/config.rs` — configuración desde el entorno (`Config`, `ConfigError`, `from_env_iter`).
 - `src/path.rs` — normalización del path (percent-decode + plegado de `.`/`..`).
 - `src/resolve.rs` — cascadas de código y formato, rango `400..=599`, tabla de razones.
 - `src/render.rs` — cuerpo por formato y cabeceras.
+- `src/metrics.rs` — contador de páginas servidas por código **y por origen del código**, y su serialización en texto Prometheus.
 - `content/` — **once** páginas HTML (`400`, `401`, `403`, `404`, `405`, `408`, `429`, `500`, `502`, `503`, `504`), todas con la clase `c<código>` en el `body`, y la hoja única `content/css/error.css`.
-- `Dockerfile`, `.dockerignore`, `.justfile` — empaquetado (imagen ~12 MB, no-root uid 10001).
+- `Dockerfile`, `.dockerignore`, `.justfile`, `compose.yml` — empaquetado (imagen ~12 MB, no-root uid 10001); el `compose.yml` va endurecido: `read_only: true`, `cap_drop: [ALL]`, `no-new-privileges:true` e `init: true`.
 - `README.md` — el contrato con Traefik y los ejemplos.
 
-Puertas en verde: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` y **101 tests**
-(98 unitarios + 3 de integración sobre el contenido de `content/`).
+Puertas en verde: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` y **114 tests**
+(111 unitarios + 3 de integración sobre el contenido de `content/`).
 Verificado además contra el servidor real y contra la imagen.
 
 ## Qué es
@@ -38,6 +40,15 @@ devuelve y la **negociación de formato** (HTML / JSON / XML / texto plano).
 ## Garantías que no se pueden romper
 
 1. **El estado de una página de error es el código resuelto.** Nunca `2xx`, ni `1xx`, ni `3xx`.
+   **Ninguna** respuesta del servidor de ficheros con estado de error se escapa ya —antes solo su
+   `404`: el `405` de un método que no sirve estáticos, el `416` de un `Range` múltiple y el `500`
+   de un segmento de path que no cabe como nombre de fichero salían crudos, sin cuerpo y sin
+   `X-Robots-Tag`—, y el estado de esa respuesta **no** es una fuente de la cascada: la página lleva
+   el código resuelto. Conservarlo obligaba a propagar cabeceras que describen *su* respuesta —el
+   `Allow` del `405`, el `Content-Range` del `416`— so pena de incumplir un `MUST` de RFC 9110, y
+   dejaba el estado y el cuerpo en desacuerdo (`404` con el cuerpo y el `Retry-After` del `503`). La
+   regla se revisó por eso: conservar el estado del servidor de ficheros —lo que hacía la primera
+   versión de este change— sale peor que sustituirlo, así que no la «arregles» de vuelta.
 2. **El código resuelto está en `400..=599`.** Una fuente (path, `X-Code`, o `DEFAULT_ERROR_PAGE`)
    que aporte un código fuera de ese rango se considera **vacía** y se continúa la cascada; si
    ninguna aporta uno utilizable, se usa el defecto. `DEFAULT_ERROR_PAGE` fuera de rango es **error
@@ -50,8 +61,21 @@ devuelve y la **negociación de formato** (HTML / JSON / XML / texto plano).
    código decide en el acceso **directo** —router *catch-all*, *default backend*—, que es el caso
    que justifica el proyecto. No prometas lo contrario en la documentación.
 4. **Un asset existente gana a la página de error.** La garantía del código aplica a las *páginas de
-   error*, no a los assets: `GET /css/error.css` es un `200 text/css`. No conviertas un asset en página
-   de error por la cabecera `X-Code`.
+   error*, no a los assets: `GET /css/error.css` es un `200 text/css`. Solo se sustituye una respuesta
+   del servidor de ficheros **con estado de error**; su `200` —y su cuerpo— se sirve tal cual. No
+   conviertas un asset en página de error por la cabecera `X-Code`.
+5. **Los endpoints de servicio quedan fuera de la sustitución.** `SERVICE_ENDPOINTS` —`/healthz`,
+   `/health`, `/health/live`, `/live`, `/version`, `/metrics`— se comprueba antes de interceptar: un
+   método que el endpoint no admite es un hecho sobre *esa ruta*, y axum lo dice con su `405` y su
+   `Allow`. Convertirlo en nuestra página daría un `404` que a la vez declara qué métodos admite la
+   ruta: incoherente, y una mentira sobre qué es esa ruta. Esa lista tiene que **seguir a las rutas
+   que declara `build_router`**: si añades una ruta de servicio, añádela también aquí. Límite
+   conocido y aceptado: un `5xx` de un endpoint de servicio no pasaría por esta vía —hoy no puede,
+   porque solo devuelven `200` o el `405` del router—.
+6. **El `304` de una petición condicional se deja pasar a propósito.** `ServeDir` **sí** emite `3xx`:
+   un `GET` de un asset con `If-Modified-Since` responde `304 Not Modified`, sin cuerpo y sin
+   `X-Robots-Tag`, que es justo la respuesta que el cliente pidió. `append_index_html_on_directories(false)`
+   suprime la redirección de directorio, **no** los `3xx`. No «endurezcas» esto leyendo lo contrario.
 
 ## Configuración (solo entorno)
 
@@ -64,8 +88,15 @@ devuelve y la **negociación de formato** (HTML / JSON / XML / texto plano).
 | `LOG_FORMAT` | `text` | `text` o `json`; cualquier otro valor, o vacía, es error de arranque. |
 
 `GET /metrics` es un endpoint de servicio (siempre `200`, fuera de la resolución de páginas de
-error) que expone el contador Prometheus de páginas servidas por código. El contador vive en el
-estado del router, no en un `static`: por eso dos routers no se contaminan entre sí.
+error) que expone el contador Prometheus de páginas servidas **por código y por el origen de ese
+código**: `errors_pages_total{code="404",source="path"} 3`. `source` vale `path`, `header` (`X-Code`)
+o `default` (`DEFAULT_ERROR_PAGE`), porque la cabecera la elige quien llama: sin esa etiqueta,
+cualquiera puede inflar a voluntad el contador de un código y fabricar la apariencia de una
+avalancha justo durante una incidencia. El contador vive en el estado del router, no en un `static`:
+por eso dos routers no se contaminan entre sí. **No se publica en el router de respaldo** —no es una
+página de error y delata el perfil de fallos de la infraestructura—: se deja fuera del *catch-all* o
+se protege con un middleware de Traefik, que es donde va la autenticación. `/version` se mantiene a
+la vista por paridad deliberada con `error-pages`.
 
 ## Cómo llega el código de error (contrato con Traefik)
 
@@ -99,7 +130,12 @@ Sigue la cascada tal cual para no divergir de `error-pages`; no «arregles» el 
 
 Cabeceras de toda página de error: `Content-Type` según el formato, `Content-Length`,
 `X-Robots-Tag: noindex, nofollow, nosnippet, noarchive`, y `Retry-After: 120` **solo** en `429` y
-`503`.
+`503` (el `Retry-After` describe el estado que se sirve, no el de la respuesta sustituida).
+
+Toda respuesta declara en `Vary` `Accept-Encoding` y los nombres de las cuatro cabeceras de
+correlación —`X-Request-Id`, `X-Trace-Id`, `X-Correlation-Id`, `X-Amzn-Trace-Id`—, **siempre**, las
+traiga la petición o no: la respuesta copia esas cabeceras, así que una caché intermedia tiene que
+saber que varía por ellas. Una lista que cambiase según la petición no le serviría a una caché.
 
 ## Integración Traefik (lo mínimo que debe aceptar el servicio)
 
@@ -124,7 +160,7 @@ resolución del código. El puerto por defecto del servicio es **8080**, el mism
 
 ```sh
 cargo run                                   # servidor
-cargo test                                  # 101 tests
+cargo test                                  # 114 tests
 cargo test <substring>                      # un test por nombre
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
@@ -179,7 +215,8 @@ Se mantiene con [`git-cliff`](https://git-cliff.org) (`cliff.toml`) y la receta 
   todo 5xx como fallo y lo registra en `ERROR`; como este servicio *sirve* páginas 5xx, cada `503`
   normal inundaría el log de errores falsos. No lo subas de vuelta.
 - `ServeDir` se construye con `append_index_html_on_directories(false)`: un servicio de errores no
-  debe emitir `307`.
+  debe emitir `307`. Ojo: eso suprime **la redirección de directorio**, no todos los `3xx` — el `304`
+  de una petición condicional sí aparece, y se deja pasar (garantía 6).
 - La ruta de estáticos es **una sola**: `CONTENT_DIR` (defecto `content`), coherente entre el código,
   el `Dockerfile` y el `.dockerignore`. No la dupliques.
 - Los tests de router usan `tower::ServiceExt::oneshot`; los de configuración no mutan el entorno
