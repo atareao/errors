@@ -19,8 +19,8 @@ Implementado, verificado y versionado. El change `error-pages-parity` está **ar
 - `Dockerfile`, `.dockerignore`, `.justfile` — empaquetado (imagen ~12 MB, no-root uid 10001).
 - `README.md` — el contrato con Traefik y los ejemplos.
 
-Puertas en verde: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` y **85 tests**
-(82 unitarios + 3 de integración sobre el contenido de `content/`).
+Puertas en verde: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` y **101 tests**
+(98 unitarios + 3 de integración sobre el contenido de `content/`).
 Verificado además contra el servidor real y contra la imagen.
 
 ## Qué es
@@ -52,6 +52,20 @@ devuelve y la **negociación de formato** (HTML / JSON / XML / texto plano).
 4. **Un asset existente gana a la página de error.** La garantía del código aplica a las *páginas de
    error*, no a los assets: `GET /css/error.css` es un `200 text/css`. No conviertas un asset en página
    de error por la cabecera `X-Code`.
+
+## Configuración (solo entorno)
+
+| Variable | Defecto | Para qué |
+|---|---|---|
+| `PORT` | `8080` | Puerto de escucha (bind `0.0.0.0`). |
+| `LOG_LEVEL` | `info` | Filtro de registro. |
+| `CONTENT_DIR` | `content` | Páginas HTML y assets. |
+| `DEFAULT_ERROR_PAGE` | `404` | Código por defecto; fuera de `400..=599` es error de arranque. |
+| `LOG_FORMAT` | `text` | `text` o `json`; cualquier otro valor, o vacía, es error de arranque. |
+
+`GET /metrics` es un endpoint de servicio (siempre `200`, fuera de la resolución de páginas de
+error) que expone el contador Prometheus de páginas servidas por código. El contador vive en el
+estado del router, no en un `static`: por eso dos routers no se contaminan entre sí.
 
 ## Cómo llega el código de error (contrato con Traefik)
 
@@ -104,7 +118,7 @@ resolución del código. El puerto por defecto del servicio es **8080**, el mism
 
 ```sh
 cargo run                                   # servidor
-cargo test                                  # 82 tests
+cargo test                                  # 101 tests
 cargo test <substring>                      # un test por nombre
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings

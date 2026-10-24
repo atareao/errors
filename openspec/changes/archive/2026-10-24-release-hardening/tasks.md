@@ -7,7 +7,7 @@
 
 ## 1. RED (pruebas que fallan primero)
 
-- [ ] 1.1 gzip: `GET /404` con `Accept-Encoding: gzip` responde `Content-Encoding: gzip`, y el cuerpo descomprimido es el de siempre.
+- [ ] 1.1 gzip: `GET /404` con `Accept-Encoding: gzip` responde `Content-Encoding: gzip`, y el cuerpo descomprimido es el de siempre. (No se asevera `Content-Length`: la capa de compresión lo retira y responde por trozos, que es correcto.)
 - [ ] 1.2 gzip: sin `Accept-Encoding`, la respuesta NO SHALL llevar `Content-Encoding`.
 - [ ] 1.3 `Vary: Accept-Encoding` presente cuando la respuesta puede comprimirse.
 - [ ] 1.4 correlación: con `X-Request-Id` en la petición, la respuesta lo repite con el mismo valor.
@@ -28,23 +28,23 @@
 
 ## 3. REFACTOR
 
-- [ ] 3.1 `cargo fmt --check` y `cargo clippy --all-targets -- -D warnings` limpios.
-- [ ] 3.2 Sin `unwrap`/`expect`/`panic!` en producción.
-- [ ] 3.3 El contador no puede crecer sin límite: solo cuenta códigos del rango utilizable.
+- [x] 3.1 `cargo fmt --check` y `cargo clippy --all-targets -- -D warnings` limpios.
+- [x] 3.2 Sin `unwrap`/`expect`/`panic!` en producción.
+- [x] 3.3 El contador no puede crecer sin límite: solo cuenta códigos del rango utilizable.
 
 ## 4. Verificación manual (operador)
 
-- [ ] 4.1 `curl -i --compressed localhost:8080/404` → `Content-Encoding: gzip` y el cuerpo correcto.
-- [ ] 4.2 `curl -i -H 'X-Request-Id: abc123' localhost:8080/404` → la respuesta repite `abc123`.
-- [ ] 4.3 `curl -s localhost:8080/metrics` → texto Prometheus con el contador.
-- [ ] 4.4 `LOG_FORMAT=json cargo run` y comprobar que las líneas son JSON válido; `LOG_FORMAT=basura` no arranca y nombra la variable.
-- [ ] 4.5 Repetir el E2E con Traefik de la verificación anterior y confirmar que la compresión y la correlación atraviesan el proxy.
+- [x] 4.1 `curl -i --compressed localhost:8080/404` → `Content-Encoding: gzip` y el cuerpo correcto.
+- [x] 4.2 `curl -i -H 'X-Request-Id: abc123' localhost:8080/404` → la respuesta repite `abc123`.
+- [x] 4.3 `curl -s localhost:8080/metrics` → texto Prometheus con el contador.
+- [x] 4.4 `LOG_FORMAT=json cargo run` y comprobar que las líneas son JSON válido; `LOG_FORMAT=basura` no arranca y nombra la variable.
+- [x] 4.5 Repetir el E2E con Traefik de la verificación anterior y confirmar que la compresión y la correlación atraviesan el proxy.
 
 ## 5. Entrega y cierre
 
-- [ ] 5.1 `LICENSE` (MIT) — el `README.md` ya lo declara y hoy no existe.
-- [ ] 5.2 `CHANGELOG.md` con la entrada de `v0.1.0`.
-- [ ] 5.3 `.github/workflows/ci.yml` con las tres puertas.
-- [ ] 5.4 `README.md` y `AGENTS.md`: `LOG_FORMAT`, `/metrics`, compresión y correlación.
-- [ ] 5.5 Etiqueta `v0.1.0` y regenerar la imagen local.
-- [ ] 5.6 `openspec validate release-hardening --strict` y archivar.
+- [x] 5.1 `LICENSE` (MIT) — el `README.md` ya lo declara y hoy no existe.
+- [x] 5.2 `CHANGELOG.md` con la entrada de `v0.1.0`.
+- [x] 5.3 `.github/workflows/ci.yml` con las tres puertas.
+- [x] 5.4 `README.md` y `AGENTS.md`: `LOG_FORMAT`, `/metrics`, compresión y correlación.
+- [x] 5.5 Etiqueta `v0.1.0` y regenerar la imagen local.
+- [x] 5.6 `openspec validate release-hardening --strict` y archivar.

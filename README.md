@@ -52,6 +52,7 @@ curl -s  localhost:8080/version              # {"version":"..."}
 | `LOG_LEVEL` | `info` | Filtro de `tracing-subscriber`. |
 | `CONTENT_DIR` | `content` | Directorio de páginas HTML y assets. |
 | `DEFAULT_ERROR_PAGE` | `404` | Código cuando el path y `X-Code` no aportan uno utilizable. |
+| `LOG_FORMAT` | `text` | Formato del registro: `text` o `json`. |
 
 No se lee ningún fichero de configuración. Una variable **presente pero vacía**
 es un error de arranque, no un valor por defecto. `DEFAULT_ERROR_PAGE` fuera del
@@ -103,6 +104,17 @@ proyecto es el segundo: ahí `error-pages` devuelve `200` y nosotros, el código
 cabeceras (`Retry-After`, `X-Robots-Tag`, `Content-Type`, negociación por `Accept`) sí son nuestros
 en los dos casos.
 
+## Operación y observabilidad
+
+`GET /metrics` expone en texto Prometheus el contador de páginas servidas por código
+(`errors_pages_total{code="404"}`). Es un endpoint de servicio: siempre `200`, fuera de la
+resolución de páginas de error.
+
+La respuesta se comprime cuando el cliente envía `Accept-Encoding: gzip` —y entonces responde
+con codificación por trozos, sin `Content-Length`—, y declara `Vary: Accept-Encoding`. Las
+cabeceras de correlación `X-Request-Id`, `X-Trace-Id`, `X-Correlation-Id` y `X-Amzn-Trace-Id`
+se copian de la petición a la respuesta cuando vienen; no se inventan.
+
 ## Empaquetado
 
 ```sh
@@ -127,9 +139,9 @@ caché local de Cargo (`cargo check --offline`).
 
 ## No incluye (a propósito)
 
-Sin motor de plantillas, sin localización, sin gzip, sin copia de
-`--proxy-headers`, sin generador estático y sin TLS (lo termina Traefik). Son
-extras de `error-pages` que no hacen falta detrás de un proxy.
+Sin motor de plantillas, sin localización, sin generador estático y sin TLS (lo
+termina Traefik). Se copian **solo** las cuatro cabeceras de correlación, no el
+conjunto completo de `--proxy-headers`, y la compresión se limita a gzip.
 
 ## Licencia
 

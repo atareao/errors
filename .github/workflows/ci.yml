@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main, development]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  puertas:
+    name: fmt, clippy y tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # El crate usa edition 2024, que exige rustc >= 1.85; `stable` lo cumple.
+      - name: Instalar el toolchain
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+
+      - name: Cache de Cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Las mismas tres puertas que se ejecutan a mano antes de commitear.
+      - name: Formato
+        run: cargo fmt --check
+
+      - name: Lint
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test

@@ -4,7 +4,10 @@
 
 ### Requirement: La respuesta se comprime cuando el cliente la pide
 
-Cuando la petición traiga `Accept-Encoding: gzip`, la respuesta SHALL ir comprimida con `Content-Encoding: gzip` y su `Content-Length` SHALL ser el del cuerpo comprimido. Sin esa cabecera, la respuesta NO SHALL ir comprimida.
+Cuando la petición traiga `Accept-Encoding: gzip`, la respuesta SHALL ir comprimida con `Content-Encoding: gzip`.
+Sin esa cabecera, la respuesta NO SHALL ir comprimida.
+
+Una respuesta comprimida NO SHALL anunciar un `Content-Length` que no corresponda a lo que se envía: omitirlo y responder con codificación por trozos es la forma correcta de servir un cuerpo comprimido, y es lo que hace la capa de compresión. Un `Content-Length` que describa el cuerpo **sin** comprimir sería el fallo que esta cláusula evita.
 
 Toda respuesta que pueda comprimirse SHALL declarar `Vary: Accept-Encoding`, para que ninguna caché intermedia entregue a un cliente un cuerpo comprimido que no pidió.
 
