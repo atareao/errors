@@ -36,6 +36,17 @@ versionado, [SemVer](https://semver.org/lang/es/).
 - **openspec**: Propone embeber las páginas en el binario
 - **ci**: El CI construye la imagen en cada propuesta de cambio —la puerta del empaquetado, que
   faltaba—: un `Dockerfile` que deje de compilar se ve en el PR, y no al publicar la etiqueta.
+- **release**: Un tag publica también el **crate en crates.io**, así que `cargo install errserve`
+  deja de instalar la `0.3.0`. El workflow de release gana un job `crate` que publica con
+  `cargo publish --locked` desde el **árbol de la etiqueta**, y un job `version` —el primero— que
+  comprueba que la versión del `Cargo.toml` es la de la etiqueta **antes** de publicar nada.
+  Publicar una versión ya publicada no falla (idempotencia, para republicar una etiqueta), y el CI
+  gana la puerta del paquete —`cargo publish --dry-run` en el job `puertas`—, que empaqueta y
+  compila el crate extraído en cada PR.
+- **release**: Ningún valor del evento entra en un `run:` del workflow de release: la etiqueta y la
+  versión entran por `env:` y su forma se valida antes de usarlas. La primera auditoría del cambio
+  dio NO APTO porque `${{ }}` se sustituye **antes** de que bash parsee el script, así que el filtro
+  llegaba tarde y un `v0.4.0-$(comando)` correría junto al paso que publica.
 
 ## [0.3.0](https://github.com/atareao/errserve/compare/v0.2.0..v0.3.0) - 2026-10-24
 
