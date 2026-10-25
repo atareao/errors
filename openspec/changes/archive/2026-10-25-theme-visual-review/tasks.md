@@ -70,7 +70,7 @@
       sigue listando la página y las seis hojas.
 - [x] 3.3 Medir el contraste de cada par texto/fondo de las seis hojas y **dejar los números escritos**
       (objetivo AA). Límite declarado en `design.md` D10: **ninguna guarda** mide el aspecto.
-- [ ] 3.4 Servir las seis hojas y mirar las seis páginas —claro y oscuro, y `default` con
+- [x] 3.4 Servir las seis hojas y mirar las seis páginas —claro y oscuro, y `default` con
       `prefers-reduced-motion: reduce`—, porque un número no distingue una jerarquía legible de una que no lo es.
 
 ## 4. Documentación
