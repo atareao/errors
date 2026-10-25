@@ -44,6 +44,7 @@
 //! es justo lo que este proyecto corrige.
 
 mod config;
+mod embedded;
 mod metrics;
 mod path;
 mod render;
