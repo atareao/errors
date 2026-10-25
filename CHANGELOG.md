@@ -3,6 +3,20 @@
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el
 versionado, [SemVer](https://semver.org/lang/es/).
 
+## [0.6.0](https://github.com/atareao/errserve/compare/v0.5.0..v0.6.0) - 2026-10-25
+
+### Añadido
+
+- **theme**: La guarda de las hojas mide el contrato que declara
+- **error-page**: Una plantilla rellenada al servir, y cualquier código con su propio cuerpo
+
+### Documentación
+
+- **theme**: Los dos contratos, y la cabecera de los cinco temas dice la verdad
+- **openspec**: Archiva theme-sheet-contracts
+- **error-page**: La página única, y la prosa de las seis hojas dice la verdad
+- **openspec**: Archiva error-page-template
+
 ## [0.5.0](https://github.com/atareao/errserve/compare/v0.4.0..v0.5.0) - 2026-10-25
 
 ### Añadido
