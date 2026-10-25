@@ -83,7 +83,7 @@
 
 ## 5. Cierre
 
-- [ ] 5.1 `openspec validate theme-visual-review --strict` limpio.
-- [ ] 5.2 `openspec archive theme-visual-review`, para fusionar la delta de `error-page`.
-- [ ] 5.3 Borrar `PLAN.md` si el flujo lo dejó.
+- [x] 5.1 `openspec validate theme-visual-review --strict` limpio.
+- [x] 5.2 `openspec archive theme-visual-review`, para fusionar la delta de `error-page`.
+- [x] 5.3 Borrar `PLAN.md` si el flujo lo dejó.
       > Sin commit ni PR hasta que el usuario lo decida.
