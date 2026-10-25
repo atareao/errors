@@ -215,6 +215,16 @@ descargadas—: una página que necesita la red para verse es exactamente el def
 corrige. Los cinco temas nuevos viven en `CONTENT_DIR` (`content/themes/`), así que además se sirven
 como assets —`GET /themes/terminal.css` es un `200 text/css`— y puedes verlos sin incrustar nada.
 
+Una hoja de tema **puede animar**: el movimiento es una decisión de aspecto, no un defecto de
+autocontención. Ahora bien, si anima tiene que declarar `@media (prefers-reduced-motion: reduce)`
+para poder apagarse —hay gente a la que el movimiento le marea, y una página de error que se mueve
+mientras intentas leer qué ha pasado es peor página de error—. Las hojas **incorporadas** cumplen dos
+contratos —no pedir nada por la red y poder apagar el movimiento—, y las pruebas del proyecto los
+comprueban. Esa comprobación cubre las **seis hojas que el proyecto entrega**, no la tuya: una hoja
+propia en `CONTENT_DIR/themes/<nombre>.css` es tuya y el servicio no la inspecciona. Y `url(#…)` —un
+filtro o degradado SVG— y `@font-face` con `src: local(...)` están **permitidos**, porque no piden
+nada a la red.
+
 `THEME` es el equivalente del `--template-name`/`$TEMPLATE_NAME` de `error-pages` —que por defecto usa
 `app-down`—, con una diferencia que se declara: allí la plantilla puede **rotar**
 (`--rotation-mode`) y aquí no (ver «No incluye»).

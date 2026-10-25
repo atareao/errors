@@ -27,8 +27,8 @@ Implementado, verificado y versionado. Ocho changes están **archivados** en
 - `Dockerfile`, `.dockerignore`, `.justfile`, `compose.yml` — empaquetado (imagen ~13 MB, no-root uid 10001); el `compose.yml` va endurecido: `read_only: true`, `cap_drop: [ALL]`, `no-new-privileges:true` e `init: true`.
 - `README.md` — el contrato con Traefik y los ejemplos.
 
-Puertas en verde: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` y **176 tests**
-(168 unitarios + 3 de integración sobre el contenido de `content/` + 5 sobre los respaldos de
+Puertas en verde: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` y **184 tests**
+(176 unitarios + 3 de integración sobre el contenido de `content/` + 5 sobre los respaldos de
 Traefik).
 Verificado además contra el servidor real y contra la imagen.
 
@@ -210,7 +210,7 @@ resolución del código. El puerto por defecto del servicio es **8080**, el mism
 
 ```sh
 cargo run                                   # servidor
-cargo test                                  # 176 tests
+cargo test                                  # 184 tests
 cargo test <substring>                      # un test por nombre
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
@@ -330,6 +330,33 @@ Se mantiene con [`git-cliff`](https://git-cliff.org) (`cliff.toml`) y la receta 
   esté en el árbol, tiene que estar **en el `builder`**. Un `Dockerfile` que solo copie `content/` al
   stage de runtime **no compila** —medido: `exit code 101` y doce `couldn't read` al etiquetar la
   `0.4.0`—: es justo lo que caza el job `imagen` del CI en cada propuesta de cambio.
+- **Los dos contratos de una hoja de tema, y por qué la guarda mira la regla y no la prosa.** La
+  guarda única de `self-contained-themes` prohibía seis tokens y los justificaba con un solo motivo
+  —«la página no puede necesitar la red»—, y el motivo solo valía para tres. Ahora son dos contratos
+  con nombres que dicen la verdad: `ninguna_hoja_puede_hacer_una_peticion` mide `@import` —en
+  **cualquiera** de sus formas, incluida `@import "otra.css";`, que no lleva `url(`— y cualquier
+  `url(...)` cuyo destino no sea el **propio documento**; `url(#gradiente)` —un filtro o degradado
+  SVG— es una referencia interna y **no** es una petición, mientras que un `url()` vacío o un `url(`
+  sin cerrar **sí** cuentan, conservador a propósito porque es una hoja rota. Y
+  `una_hoja_que_anima_respeta_reduced_motion` exige `prefers-reduced-motion` a la hoja que traiga
+  `animation`, `transition` o `@keyframes`. `@font-face` **no** está prohibido: solo puede pedir algo
+  por la red vía `url(...)` o `@import`, ya prohibidos, y `src: local("Arial")` usa una fuente ya
+  instalada.
+
+  Un tema **puede** animar —el movimiento es una decisión de aspecto, no un defecto de
+  autocontención—, pero tiene que poder apagarse: una página de error que se mueve mientras el usuario
+  intenta leer qué ha pasado es peor página de error. La guarda **no** mira la hoja del operador en
+  `CONTENT_DIR/themes/<nombre>.css`: cubre las hojas **incorporadas** al binario
+  (`THEMES[i].embedded`), y la del operador es suya —el servicio no parsea CSS al servir—. Y escanea
+  la hoja **sin sus comentarios** `/* … */` —textual sobre bytes, sin `regex` ni parser; el escaneo
+  **respeta las cadenas**: un `/*` dentro de un `"…"` o un `'…'` no abre un comentario, es CSS válido y
+  no puede tapar una petición que venga detrás, mientras que un `/*` que **no cierra** se lleva el resto
+  de la hoja—, porque un comentario no puede pedir nada ni animar: sin eso, la propia
+  cabecera de una hoja documentando qué no puede hacer contaba como incumplimiento. La detección es
+  **literal y sensible a mayúsculas** (las hojas son del proyecto y van en minúsculas), declarado a
+  propósito. Los dos contratos se comprueban con fixtures en línea a través de
+  `pub fn incumplimientos(hoja: &[u8])` y `pub enum Incumplimiento` —**bajo `#[cfg(test)]`**: el crate
+  es solo binario y el servicio no valida CSS—, más las dos guardas sobre la tabla `THEMES`.
 - **La prueba de paridad de las dos copias vive en el `#[cfg(test)]` de `src/embedded.rs`, y no en
   `tests/`.** El crate no tiene *lib target*, así que una prueba de integración no ve las constantes
   del binario; para verlas desde `tests/` habría que añadir un `lib` y cambiar la forma del crate

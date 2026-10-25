@@ -410,8 +410,27 @@ Una página **sin** el marcador —una página propia del operador, ya autoconte
 cual**, sin añadir ni sustituir nada, y sin que el servicio lea hoja alguna para servirla. Un `<link>` que
 **no** sea el marcador NO SHALL tocarse: es del operador.
 
-Ninguna hoja de tema SHALL referenciar recursos externos —ni `@import`, ni `url(...)` remotos, ni fuentes
-descargadas—: una página que necesita la red para verse es el mismo defecto que este requisito corrige.
+Ninguna hoja de tema SHALL poder hacer que el navegador **pida** algo por la red. En concreto: NO SHALL
+contener `@import` en ninguna de sus formas —incluida `@import "otra.css";`, que no lleva `url(`—, ni
+`url(...)` cuyo destino no sea **el propio documento**: una referencia interna como `url(#gradiente)`
+—un filtro o un degradado SVG— NO SHALL contar como recurso externo, porque no hay ninguna petición que
+hacer. El motivo SHALL quedar escrito: una página que necesita la red para verse es el mismo defecto que
+este requisito corrige, y se manifiesta sobre todo en el host de la aplicación, donde este servicio no
+sirve assets.
+
+`@font-face` NO SHALL estar prohibido, y el motivo SHALL quedar escrito: solo puede pedir algo por la red
+a través de `url(...)` o `@import`, que ya están prohibidos, y un `src: local(...)` usa una fuente que el
+usuario **ya tiene instalada**. Prohibirlo era prohibir un token sospechoso en vez de un contrato.
+
+La guarda automática SHALL medir **este contrato y nada más**, y SHALL cubrir las hojas **incorporadas al
+binario**: la hoja del operador en `CONTENT_DIR` es suya, y el servicio NO SHALL parsear CSS al servir
+—la hoja es adorno y un CSS roto no puede tumbar una página—.
+
+La guarda SHALL leer las **reglas** de la hoja, no su prosa: un comentario `/* … */` NO SHALL contar
+como una petición, porque un comentario no puede hacer que el navegador pida nada, y el escaneo
+SHALL ignorarlo. El motivo SHALL quedar escrito: las cabeceras de las hojas documentan por escrito
+qué no pueden hacer, así que leerlas como si fueran reglas convertiría la propia documentación de la
+hoja en un incumplimiento.
 
 #### Scenario: el 503 de una aplicación llega con los estilos dentro
 - **GIVEN** el ejemplo levantado, con el middleware `errors` delante de un backend que responde `503` en `/boom`
@@ -436,6 +455,22 @@ descargadas—: una página que necesita la red para verse es el mismo defecto q
 - **WHEN** se sirve en HTML
 - **THEN** el marcador SHALL quedar sustituido por el bloque `<style>`
 - **AND** el otro `<link>` SHALL seguir en el cuerpo
+
+#### Scenario: una referencia al propio documento no es una petición
+- **GIVEN** una hoja de tema con `url(#gradiente)` y con un `@font-face` cuyo `src` es `local("Arial")`
+- **WHEN** se comprueba contra el contrato de autocontención
+- **THEN** SHALL cumplirlo, porque no hay ninguna petición que el navegador tenga que hacer
+
+#### Scenario: una hoja que pide un fichero incumple
+- **GIVEN** una hoja de tema con `url(foto.png)`, otra con `url(https://ejemplo/x.png)` y otra con `@import "otra.css"`
+- **WHEN** se comprueban contra el contrato
+- **THEN** cada una SHALL incumplirlo, y el incumplimiento SHALL nombrar la hoja y el motivo
+
+#### Scenario: un comentario no es una petición
+- **GIVEN** una hoja cuyo único `url(` y cuyo único `@import` están dentro de un comentario `/* … */`
+- **WHEN** se comprueba contra el contrato de autocontención
+- **THEN** SHALL cumplirlo, porque un comentario no puede pedir nada
+- **AND** una hoja que mencione `url(` en un comentario **y** traiga un `url(foto.png)` de verdad SHALL incumplirlo
 
 ### Requirement: El tema del HTML es configurable
 
@@ -465,6 +500,15 @@ y el servicio SHALL usar la copia embebida, dejando constancia en el registro.
 
 El cuerpo de la respuesta depende de `X-Theme`, así que esa cabecera SHALL declararse en `Vary` (spec
 `response-extras`, «Las cabeceras de correlación se declaran en Vary»).
+
+Una hoja de tema PUEDE animar: el movimiento es una decisión de aspecto, no un defecto de
+autocontención. Pero una hoja que traiga `animation`, `transition` o `@keyframes` SHALL respetar también
+`prefers-reduced-motion`. El motivo SHALL quedar escrito: hay gente a la que el movimiento le produce
+mareo, y una página de error que se mueve mientras el usuario intenta leer qué ha pasado es peor página
+de error. La regla no prohíbe el adorno: prohíbe el adorno que no se puede apagar. El mismo principio
+rige para el movimiento: una hoja que mencione `animation` **solo dentro de un
+comentario** NO SHALL tener que declarar `prefers-reduced-motion`, porque un comentario no anima.
+Una hoja que no anima NO SHALL tener que declarar nada.
 
 #### Scenario: sin THEME el tema es el de siempre
 - **GIVEN** un entorno sin `THEME`
@@ -509,3 +553,15 @@ El cuerpo de la respuesta depende de `X-Theme`, así que esa cabecera SHALL decl
 - **GIVEN** una petición `GET /404` con `Accept: application/json` y `X-Theme: terminal`
 - **WHEN** se responde
 - **THEN** el cuerpo SHALL ser el JSON de siempre
+
+#### Scenario: una hoja que anima declara prefers-reduced-motion
+- **GIVEN** una hoja de tema con `animation`, `transition` o `@keyframes`
+- **WHEN** se comprueba contra el contrato de movimiento
+- **THEN** SHALL incumplirlo si no declara `prefers-reduced-motion`
+- **AND** SHALL cumplirlo si lo declara
+- **AND** una hoja sin animación SHALL cumplirlo sin declarar nada
+
+#### Scenario: un comentario no anima
+- **GIVEN** una hoja que menciona `animation` únicamente dentro de un comentario `/* … */`
+- **WHEN** se comprueba contra el contrato de movimiento
+- **THEN** SHALL cumplirlo sin declarar `prefers-reduced-motion`
