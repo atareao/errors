@@ -121,7 +121,22 @@ services:
       # a secas. Medido con v3.6: con `{host:.+}` el router está `enabled` pero
       # no coincide con ninguna petición; con `.+\` coincide con todas.
       # (Equivalente al gusto de v3: `PathPrefix(\`/\`)`.)
-      traefik.http.routers.errserve-catchall.rule: HostRegexp(`.+`)
+      #
+      # Y la regla no es sólo `HostRegexp`: lleva una segunda conjunción,
+      # `!Path(\`/metrics\`)`, que no es cosmética. El respaldo atiende
+      # **cualquier** Host, así que sin ella publica también los *endpoints de
+      # servicio* del binario —y `/metrics` no es una página de error: es un
+      # endpoint de servicio, siempre `200`, que expone `errors_pages_total`, o
+      # sea el perfil de fallos de la infraestructura— a quien pregunte por un
+      # Host que no exista. Medido: sin la exclusión, `curl -H 'Host:
+      # nada.localtest.me' .../metrics` devolvía `200` con el contador; con ella,
+      # esa misma petición recibe el `404` de Traefik —texto plano, 19 B, sin
+      # `X-Robots-Tag`: cuando no casa ningún router, responde Traefik y
+      # `errserve` ni se entera— y en ese mismo Host el respaldo sigue sirviendo
+      # `404` y `503` reales. La coincidencia es exacta, la del endpoint:
+      # `/metrics/` y `/METRICS` no lo son y caen en el respaldo como cualquier
+      # otro path, sin datos del contador.
+      traefik.http.routers.errserve-catchall.rule: HostRegexp(`.+`) && !Path(`/metrics`)
       traefik.http.routers.errserve-catchall.entrypoints: web
       traefik.http.routers.errserve-catchall.service: errserve
       traefik.http.routers.errserve-catchall.middlewares: errpages

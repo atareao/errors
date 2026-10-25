@@ -1,8 +1,15 @@
 /* Hoja de estilos de las páginas de error.
  *
- * Es la única hoja del proyecto y la comparten todas las páginas (400, 401,
- * 403, 404, 405, 408, 429, 500, 502, 503 y 504). Se sirve como asset estático
- * desde `CONTENT_DIR`, así que la ruta pública es `/css/error.css`.
+ * Es la hoja de las once páginas (400, 401, 403, 404, 405, 408, 429, 500, 502,
+ * 503 y 504) y el tema `default` de este servicio. El servidor la incrusta en
+ * el HTML al servir, sustituyendo el `<link>` de la página por un bloque de
+ * estilo con estas reglas; además se sigue sirviendo como asset estático desde
+ * `CONTENT_DIR`, así que la ruta pública `/css/error.css` no cambia.
+ *
+ * Las reglas son las de siempre, así que quien no configure `THEME` no ve
+ * ningún cambio de aspecto. Y por ese mismo cometido —viajar dentro de la
+ * página— no puede referenciar recursos externos: nada de hojas importadas ni
+ * de ficheros remotos.
  *
  * Una sola hoja, no una por código: la diferencia de aspecto se expresa con la
  * clase `c<código>` del `body`, con un acento distinto por código. El `404` se

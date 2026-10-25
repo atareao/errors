@@ -1,0 +1,68 @@
+/* Hoja del tema `terminal`.
+ *
+ * Es la hoja de las once páginas de error (400, 401, 403, 404, 405, 408, 429,
+ * 500, 502, 503 y 504). El servidor la incrusta en el HTML al servir,
+ * sustituyendo el `<link>` de la página por un bloque de estilo con estas
+ * reglas, así que no puede referenciar recursos externos ni animarse.
+ *
+ * Monoespaciada, fósforo verde sobre negro. Sin parpadeo, sin cursor y sin
+ * brillos: un terminal apagado. El marcado lleva la clase `c<código>` en el
+ * `body`, pero este tema no la usa.
+ */
+
+:root {
+  color-scheme: dark;
+  --bg: #0b0f0c;
+  --fg: #cdebd3;
+  --accent: #4ade80;
+  --muted: #6f8f78;
+  --rule: #1e2b21;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0 auto;
+  padding: 2rem;
+  max-width: 44rem;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.5rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono",
+    monospace;
+  line-height: 1.5;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(2.75rem, 10vw, 5rem);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+}
+
+h2 {
+  margin: 0;
+  font-size: clamp(1.1rem, 3vw, 1.5rem);
+  font-weight: 600;
+  color: var(--muted);
+}
+
+hr {
+  width: 100%;
+  margin: 0.75rem 0;
+  border: 0;
+  border-top: 1px dashed var(--rule);
+}
+
+p {
+  margin: 0;
+  max-width: 44rem;
+  color: var(--fg);
+}

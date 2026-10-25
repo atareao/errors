@@ -92,6 +92,44 @@ pub fn page(code: u16) -> Option<&'static str> {
         .map(|(_, html)| *html)
 }
 
+/// Los bytes de `content/css/error.css`, como `static` **de tipo array**.
+///
+/// Un `static` tiene **una sola dirección**, garantizada por el lenguaje, y de
+/// este se toman las dos referencias —la del asset y la del tema `default`— al
+/// **mismo** array, así que apuntan a la misma dirección. Es lo que hace que
+/// `std::ptr::eq` sobre [`DEFAULT_SHEET`] sea una comprobación **estable**.
+///
+/// El array intermedio **no es decorativo**: `static X: &[u8] =
+/// include_bytes!(…)` no basta, porque al leer esa `&[u8]` en el inicializador
+/// de otro `static` el compilador **inlinea** el `include_bytes!` de nuevo y
+/// cada expansión crea un `static` anónimo propio. Con varias *codegen units*,
+/// el enlazador no los funde y las direcciones difieren aunque los bytes sean
+/// iguales (medido con `cargo test`, que compila el binario en varias CGU). Un
+/// `static` de tipo array sí tiene una única dirección y `&DEFAULT_SHEET_BYTES`
+/// la referencia en todos los sitios.
+///
+/// El fichero tiene que existir al compilar (`include_bytes!` lo exige, D6), y
+/// `content/` viaja dentro del `.crate`, así que un binario instalado la sirve.
+pub static DEFAULT_SHEET_BYTES: [u8; include_bytes!("../content/css/error.css").len()] =
+    *include_bytes!("../content/css/error.css");
+
+/// La hoja de estilos de `content/css/error.css`, embebida **una sola vez**.
+///
+/// Es la **única** copia de esos bytes en el binario, y la comparten dos
+/// consumidores que no pueden divergir: el asset `/css/error.css`
+/// ([`ASSETS`]) y el tema `default` ([`crate::theme::THEMES`]). Si cada uno
+/// llevara su propio `include_bytes!`, el binario guardaría los mismos bytes
+/// dos veces y, peor, podrían separarse sin que nadie lo notase.
+///
+/// Apunta a [`DEFAULT_SHEET_BYTES`], un `static` de tipo array con **una sola
+/// dirección**: las dos lecturas de este valor de puntero —la de [`ASSETS`] y la
+/// de [`crate::theme::THEMES`]— dan la **misma** dirección, y la identidad se
+/// comprueba con `std::ptr::eq` (ver la documentación de
+/// [`DEFAULT_SHEET_BYTES`]). Con una `const`, o incluso con un `static` de tipo
+/// `&[u8]` que lleve el `include_bytes!` directamente, la identidad **no** es
+/// estable.
+pub static DEFAULT_SHEET: &[u8] = &DEFAULT_SHEET_BYTES;
+
 /// Assets embebidos, por su path **exacto**, con su `Content-Type`.
 ///
 /// El path se compara tal cual —sin prefijos, sin normalizar barras finales—
@@ -103,11 +141,11 @@ pub fn page(code: u16) -> Option<&'static str> {
 /// 290-291, con `append_index_html_on_directories(false)`— y, como el `fallback`
 /// no fuerza el estado de la respuesta, un `200` de más
 /// no lo corrige nadie (D2).
-const ASSETS: [(&str, &[u8], &str); 1] = [(
-    "/css/error.css",
-    include_bytes!("../content/css/error.css"),
-    "text/css",
-)];
+///
+/// La hoja es [`DEFAULT_SHEET`]: el asset y el tema `default` son la **misma**
+/// constante, no dos copias de los mismos bytes —y como [`DEFAULT_SHEET`] es un
+/// `static`, comparten literalmente el mismo puntero (ver su documentación)—.
+static ASSETS: [(&str, &[u8], &str); 1] = [("/css/error.css", DEFAULT_SHEET, "text/css")];
 
 /// Asset embebido por path **exacto** (`/css/error.css`), con su `Content-Type`.
 pub fn asset(path: &str) -> Option<(&'static [u8], &'static str)> {

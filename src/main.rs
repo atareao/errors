@@ -37,6 +37,12 @@
 //! de la spec `observability`: `GET /metrics` expone el contador de páginas
 //! servidas por código en texto Prometheus.
 //!
+//! Contrato de la spec `error-page` (change `self-contained-themes`): el HTML
+//! servido es **autocontenido** —el marcador `<link rel="stylesheet"
+//! href="/css/error.css" />` se sustituye al servir por un `<style>` con la hoja
+//! del tema elegido (ver [`theme`])—, el tema del servicio lo elige `THEME` y,
+//! por petición, `X-Theme`, que además se declara en `Vary`.
+//!
 //! El path se normaliza (percent-decode + plegado de `.` y `..`, ver
 //! [`path`]) **antes** de clasificarlo, y la misma cadena normalizada se
 //! reescribe en la URI que recibe `ServeDir`: si el clasificador mirara el path
@@ -49,6 +55,7 @@ mod metrics;
 mod path;
 mod render;
 mod resolve;
+mod theme;
 
 use crate::config::{Config, LogFormat};
 use crate::metrics::PageCounters;
@@ -364,23 +371,31 @@ async fn correlation(request: Request, next: Next) -> Response {
     response
 }
 
-/// Declara en `Vary` que la respuesta depende de las cabeceras de correlación
-/// (spec `response-extras`, "Las cabeceras de correlación se declaran en Vary").
+/// Declara en `Vary` que la respuesta depende de las cabeceras de correlación y
+/// de `X-Theme` (spec `response-extras`, "Las cabeceras de correlación se
+/// declaran en Vary").
 ///
-/// Su contenido cambia según esas cabeceras, porque se copian de la petición:
-/// sin declararlo, una caché intermedia podría servirle a un usuario el
-/// identificador de otro. Se añade **siempre**, haya o no cabeceras de
-/// correlación en la petición —una lista que cambiase según la petición no le
-/// serviría a una caché—, y con `append` porque `Vary` es una cabecera de lista:
-/// si alguna capa ya declaró algo, se une en vez de pisarse.
+/// Su contenido cambia según esas cabeceras: las de correlación se copian de la
+/// petición —sin declararlas, una caché intermedia podría servirle a un usuario
+/// el identificador de otro— y `X-Theme` cambia **el cuerpo** entero del HTML,
+/// porque elige la hoja que va incrustada (sin declararlo, a un cliente le
+/// llegaría el tema que pidió otro, o el cuerpo de otro).
 ///
-/// La lista declara también `Accept-Encoding` —que es lo que hace que la capa
-/// de compresión, al encontrarlo ya declarado, no añada un segundo `Vary` con
-/// lo mismo—, y va en un **único** valor: una caché tiene que leer las cinco
+/// Se añade **siempre**, traiga o no la petición esas cabeceras —una lista que
+/// cambiase según la petición no le serviría a una caché—, y con `append` porque
+/// `Vary` es una cabecera de lista: si alguna capa ya declaró algo, se une en vez
+/// de pisarse.
+///
+/// La lista declara también `Accept-Encoding` —que es lo que hace que la capa de
+/// compresión, al encontrarlo ya declarado, no añada un segundo `Vary` con lo
+/// mismo—, y va en un **único** valor: una caché tiene que leer las seis
 /// declaraciones juntas, y repartirlas en dos valores del mismo campo no aporta
 /// nada.
 fn declare_vary(headers: &mut HeaderMap) {
-    let value = format!("Accept-Encoding, {}", CORRELATION_HEADERS.join(", "));
+    let value = format!(
+        "Accept-Encoding, {}, X-Theme",
+        CORRELATION_HEADERS.join(", ")
+    );
 
     append_header(headers, header::VARY.as_str(), &value);
 }
@@ -397,12 +412,17 @@ fn correlation_headers(headers: &HeaderMap) -> Vec<(&'static str, HeaderValue)> 
         .collect()
 }
 
-/// Cabeceras de la petición que alimentan las cascadas de código y de formato.
+/// Cabeceras de la petición que alimentan las cascadas de código y de formato,
+/// y la elección de tema.
 struct Hints {
     x_code: Option<String>,
     content_type: Option<String>,
     x_format: Option<String>,
     accept: Option<String>,
+    /// `X-Theme`: el tema que pide **esta** petición. Es una pista, no un error
+    /// si viene mal: un valor desconocido cae al tema configurado (ver
+    /// [`theme::resolve`]).
+    x_theme: Option<String>,
 }
 
 impl Hints {
@@ -419,6 +439,7 @@ impl Hints {
             content_type: read(header::CONTENT_TYPE.as_str()),
             x_format: read("x-format"),
             accept: read(header::ACCEPT.as_str()),
+            x_theme: read("x-theme"),
         }
     }
 }
@@ -605,11 +626,18 @@ async fn error_response(state: &AppState, path: &NormalizedPath, hints: &Hints) 
         hints.accept.as_deref(),
     );
 
+    // El tema se resuelve por petición: un `X-Theme` **conocido** gana al tema
+    // configurado y un valor ausente o desconocido cae a él (ver
+    // [`theme::resolve`]). Es lo mismo que hacen las cascadas de código y de
+    // formato, y por eso el tema viaja hasta el render: sin `X-Theme` la hoja
+    // incrustada es siempre la del servicio.
+    let theme = theme::resolve(hints.x_theme.as_deref(), config.theme);
+
     state.counters.record(code, source);
 
     let rendered = tokio::task::spawn_blocking({
         let config = config.clone();
-        move || render_page(&config, code, format)
+        move || render_page(&config, code, format, theme)
     })
     .await;
 
@@ -775,6 +803,21 @@ mod tests {
     /// la embebida (`tests/fixtures/content/css/error.css`).
     const FIXTURE_CSS: &str = include_str!("../tests/fixtures/content/css/error.css");
 
+    /// El marcador del HTML autocontenido, tal cual está en las páginas de
+    /// `content/`: el render lo sustituye al servir por un `<style>` con la hoja
+    /// (change `self-contained-themes`).
+    const MARCADOR: &str = r#"<link rel="stylesheet" href="/css/error.css" />"#;
+
+    /// La página tal como se **sirve**: el marcador sustituido por un `<style>`
+    /// con la hoja. Es el contrato del HTML autocontenido —una página con
+    /// marcador ya no enlaza la hoja, la lleva dentro— y estas pruebas lo fijan
+    /// sin depender de la implementación.
+    fn pagina_autocontenida(pagina: &str, hoja: &str) -> Vec<u8> {
+        pagina
+            .replace(MARCADOR, &format!("<style>\n{hoja}\n</style>"))
+            .into_bytes()
+    }
+
     /// Directorio de contenido que **no existe**: el caso de un binario
     /// instalado sin ficheros de datos, con `CONTENT_DIR` apuntando a un
     /// `content` que no está.
@@ -818,6 +861,83 @@ mod tests {
         config.default_error_page = 418;
 
         config
+    }
+
+    /// Hoja de estilos de un tema **nuevo**: la fase GREEN la crea en
+    /// `content/themes/<nombre>.css` (tasks.md 2.2).
+    ///
+    /// Se lee en **tiempo de ejecución** —y no con `include_str!`— a propósito:
+    /// en RED el fichero todavía no existe, y un `include_str!` rompería la
+    /// **compilación** de toda la suite. Leída así, la prueba compila y falla
+    /// aquí, en el `expect`, que es como la fase RED debe fallar.
+    fn hoja_de_tema(nombre: &str) -> String {
+        let ruta = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("content/themes")
+            .join(format!("{nombre}.css"));
+        let mensaje = format!(
+            "la fase GREEN tiene que crear la hoja del tema `{nombre}` en {}",
+            ruta.display()
+        );
+
+        std::fs::read_to_string(&ruta).expect(&mensaje)
+    }
+
+    /// La configuración de las pruebas —la de las páginas **embebidas**, que son
+    /// las que llevan el marcador— con `THEME` puesto.
+    ///
+    /// Hoy `THEME` es una clave desconocida para [`Config::from_env_iter`], así
+    /// que en RED esta configuración sale con el tema por defecto y la prueba
+    /// llega a su aserción de comportamiento; en GREEN `THEME` se parsea.
+    fn config_con_theme(theme: &str) -> Config {
+        Config::from_env_iter([
+            (
+                "CONTENT_DIR".to_string(),
+                sin_contenido_dir().to_string_lossy().into_owned(),
+            ),
+            ("THEME".to_string(), theme.to_string()),
+        ])
+        .expect("la configuración de pruebas con `THEME` debe construirse")
+    }
+
+    /// Directorio de contenido con una hoja **propia del operador** para el tema
+    /// `terminal` (`tests/fixtures/tema-del-operador/themes/terminal.css`) y
+    /// **sin** `404.html`: la página sale de la capa embebida y lo que se prueba
+    /// es que su hoja gana a la copia embebida del tema.
+    fn tema_del_operador_dir() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tema-del-operador")
+    }
+
+    /// `Config` con la hoja del operador de [`tema_del_operador_dir`] y
+    /// `THEME=terminal`.
+    fn config_tema_del_operador() -> Config {
+        Config::from_env_iter([
+            (
+                "CONTENT_DIR".to_string(),
+                tema_del_operador_dir().to_string_lossy().into_owned(),
+            ),
+            ("THEME".to_string(), "terminal".to_string()),
+        ])
+        .expect("la configuración del fixture `tema-del-operador` debe construirse")
+    }
+
+    /// Directorio de contenido donde el tema `terminal` espera su hoja en
+    /// `themes/terminal.css`, pero ahí hay un **directorio**
+    /// (`tests/fixtures/hoja-ilegible`): leerlo es un error real y la hoja no se
+    /// puede obtener.
+    fn hoja_ilegible_dir() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hoja-ilegible")
+    }
+
+    /// `Config` con la hoja ilegible de [`hoja_ilegible_dir`] y `THEME=terminal`.
+    fn config_hoja_ilegible() -> Config {
+        Config::from_env_iter([
+            (
+                "CONTENT_DIR".to_string(),
+                hoja_ilegible_dir().to_string_lossy().into_owned(),
+            ),
+            ("THEME".to_string(), "terminal".to_string()),
+        ])
+        .expect("la configuración del fixture `hoja-ilegible` debe construirse")
     }
 
     fn get(uri: &str) -> Request<Body> {
@@ -2092,7 +2212,9 @@ mod tests {
     async fn sin_directorio_una_pagina_html_sirve_la_copia_embebida_con_su_estado() {
         // tasks.md 1.3: hoy `/503.html` con `CONTENT_DIR` inexistente responde
         // un `503` con el respaldo de texto (`text/plain`); en GREEN responde la
-        // página embebida del `503` (`text/html`).
+        // página embebida del `503` (`text/html`). Y desde
+        // `self-contained-themes` la sirve **autocontenida**: el marcador sale
+        // sustituido por el `<style>` con la hoja del tema.
         let response = build_router(&sin_contenido_config())
             .oneshot(get("/503.html"))
             .await
@@ -2108,8 +2230,8 @@ mod tests {
         let body = body_bytes(response).await;
         assert_eq!(
             body,
-            EMBEDDED_503_HTML.as_bytes(),
-            "el cuerpo tiene que ser la página embebida de `content/503.html`"
+            pagina_autocontenida(EMBEDDED_503_HTML, EMBEDDED_CSS),
+            "el cuerpo tiene que ser la página embebida de `content/503.html`, autocontenida"
         );
     }
 
@@ -2174,8 +2296,9 @@ mod tests {
         let body = body_bytes(response).await;
         assert_eq!(
             body,
-            EMBEDDED_404_HTML.as_bytes(),
-            "el cuerpo tiene que ser la página embebida del `404`, no un asset ni el respaldo"
+            pagina_autocontenida(EMBEDDED_404_HTML, EMBEDDED_CSS),
+            "el cuerpo tiene que ser la página embebida del `404`, autocontenida, no un asset \
+             ni el respaldo"
         );
     }
 
@@ -2374,10 +2497,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sin_directorio_la_pagina_embebida_enlaza_a_la_hoja_embebida() {
-        // tasks.md 1.10: la página embebida del `404` referencia `css/error.css`
-        // y esa ruta resuelve como `200 text/css`, no como página de error —el
-        // «404 dentro del 404» que D2 existe para evitar—.
+    async fn sin_directorio_la_pagina_embebida_se_sirve_autocontenida() {
+        // tasks.md 1.8 (change `self-contained-themes`): la página embebida del
+        // `404` ya **no** enlaza a `css/error.css` —lleva la hoja incrustada en
+        // un bloque `<style>`—, así que el navegador no pide ningún fichero para
+        // verse. En RED esta primera mitad **falla**: hoy el cuerpo sigue siendo
+        // el marcado con su `<link rel="stylesheet">`.
         let router = build_router(&sin_contenido_config());
 
         let response = router
@@ -2387,15 +2512,23 @@ mod tests {
             .unwrap();
         let body = String::from_utf8(body_bytes(response).await).unwrap();
         assert!(
-            body.contains("css/error.css"),
-            "la página embebida tiene que enlazar a `css/error.css`, fue: {body}"
+            body.contains("<style"),
+            "la página embebida tiene que servirse autocontenida, con un bloque `<style>`, \
+             fue: {body}"
+        );
+        assert!(
+            !body.contains("rel=\"stylesheet\""),
+            "la página embebida servida no puede enlazar ninguna hoja, fue: {body}"
         );
 
+        // La segunda mitad **no** cambia con el change: la hoja se sigue
+        // sirviendo como asset —`200 text/css`— aunque la página ya no la
+        // enlace. No es una página de error.
         let response = router.oneshot(get("/css/error.css")).await.unwrap();
         assert_eq!(
             response.status(),
             StatusCode::OK,
-            "la hoja referenciada tiene que servirse como asset, no como página de error"
+            "la hoja se sirve como asset aunque la página ya no la enlace, no como página de error"
         );
         assert!(
             content_type(&response).starts_with("text/css"),
@@ -2456,6 +2589,354 @@ mod tests {
         assert!(
             body.contains("599"),
             "el respaldo de texto debe llevar el código: {body}"
+        );
+    }
+
+    // --- Temas autocontenidos (change `self-contained-themes`,
+    //     tasks.md 1.1-1.6) ---------------------------------------------------
+    //
+    // El HTML servido pasa a ser **autocontenido**: al servir, el marcador
+    // `<link rel="stylesheet" href="/css/error.css" />` se sustituye por un
+    // bloque `<style>` con la hoja del tema elegido, así que la página deja de
+    // pedir ningún fichero para verse. Es el arreglo del fallo medido en el
+    // host de la aplicación, donde `/css/error.css` lo sirve el upstream y el
+    // navegador rechaza la hoja por su `Content-Type`.
+    //
+    // Las pruebas que sirven una página **con** el marcador usan la copia
+    // **embebida** (`sin_contenido_config()`), porque son las páginas de
+    // `content/` —y su copia embebida— las que llevan el marcador; el
+    // `404.html` de los fixtures **no** lo lleva a propósito (ver
+    // `sin_marcador_la_pagina_se_sirve_byte_a_byte`).
+
+    #[tokio::test]
+    async fn el_html_servido_es_autocontenido() {
+        // tasks.md 1.2: la página servida no pide ningún fichero para verse.
+        // Para los dos códigos que cubren el ejemplo (`404` y `503`), el cuerpo
+        // lleva la hoja del tema `default` incrustada y **sin**
+        // `rel="stylesheet"`.
+        let router = build_router(&sin_contenido_config());
+
+        for code in [404u16, 503u16] {
+            let request = get_with_headers(&format!("/{code}"), &[("Accept", "text/html")]);
+            let response = router.clone().oneshot(request).await.unwrap();
+
+            assert_eq!(response.status().as_u16(), code);
+
+            let body = String::from_utf8(body_bytes(response).await).unwrap();
+            assert!(
+                body.contains(EMBEDDED_CSS),
+                "`/{code}`: el cuerpo tiene que llevar la hoja `default` incrustada, fue: {body}"
+            );
+            assert!(
+                !body.contains("rel=\"stylesheet\""),
+                "`/{code}`: la página servida no puede enlazar ninguna hoja, fue: {body}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sin_theme_la_hoja_incrustada_es_la_de_siempre() {
+        // tasks.md 1.3: sin `THEME` el aspecto no cambia. La hoja incrustada es
+        // la de `content/css/error.css`, que es también el asset
+        // `/css/error.css`.
+        let response = build_router(&sin_contenido_config())
+            .oneshot(get_with_headers("/404", &[("Accept", "text/html")]))
+            .await
+            .unwrap();
+
+        let body = String::from_utf8(body_bytes(response).await).unwrap();
+        assert!(
+            body.contains(EMBEDDED_CSS),
+            "sin `THEME` la hoja incrustada tiene que ser la `default`, fue: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn theme_cambia_la_hoja_de_todo_el_servicio() {
+        // tasks.md 1.3: `THEME` es del **servicio**, no de la petición.
+        let response = build_router(&config_con_theme("terminal"))
+            .oneshot(get_with_headers("/404", &[("Accept", "text/html")]))
+            .await
+            .unwrap();
+
+        let body = String::from_utf8(body_bytes(response).await).unwrap();
+        let terminal = hoja_de_tema("terminal");
+
+        assert!(
+            body.contains(&terminal),
+            "con `THEME=terminal` el cuerpo tiene que llevar la hoja del tema `terminal`"
+        );
+        assert!(
+            !body.contains(EMBEDDED_CSS),
+            "con `THEME=terminal` el cuerpo NO puede llevar la hoja `default`"
+        );
+    }
+
+    #[tokio::test]
+    async fn la_hoja_de_un_tema_del_operador_gana_a_la_embebida() {
+        // La delta exige que la hoja de un tema se resuelva **como un asset**
+        // para *cualquier* tema, no solo para `default`. Aquí `THEME=terminal` y
+        // el `CONTENT_DIR` trae su propio `themes/terminal.css`: la página sale
+        // de la capa embebida (ese directorio no tiene `404.html` a propósito) y
+        // lo que se prueba es que la hoja incrustada es la **del disco** y no la
+        // embebida.
+        let response = build_router(&config_tema_del_operador())
+            .oneshot(get_with_headers("/404", &[("Accept", "text/html")]))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body = String::from_utf8(body_bytes(response).await).unwrap();
+        let del_disco = include_str!("../tests/fixtures/tema-del-operador/themes/terminal.css");
+
+        assert!(
+            body.contains(del_disco),
+            "la hoja del operador (`themes/terminal.css`) tiene que ganar a la embebida, fue: {body}"
+        );
+        assert!(
+            !body.contains(&hoja_de_tema("terminal")),
+            "con su propia hoja, el tema no puede incrustar la copia embebida"
+        );
+    }
+
+    #[tokio::test]
+    async fn la_hoja_ilegible_cae_a_la_embebida_sin_tumbar_la_pagina() {
+        // La delta exige el escenario «la hoja existe y no se puede leer»: un
+        // `warn!` y la hoja embebida, **sin** que la página deje de servirse.
+        // El fixture pone un **directorio** donde el tema espera su fichero
+        // (`themes/terminal.css`): `std::fs::read` de un directorio falla en
+        // Linux —un error de lectura real y reproducible—, a diferencia de un
+        // fichero con permisos `000`, que en CI (corriendo como `root`) se lee
+        // igual y probaría la rama equivocada.
+        let response = build_router(&config_hoja_ilegible())
+            .oneshot(get_with_headers("/404", &[("Accept", "text/html")]))
+            .await
+            .unwrap();
+
+        // El estado sigue siendo el código resuelto (`404`), ni un `500` ni el
+        // texto plano del respaldo: la hoja es adorno y no puede degradar la
+        // página.
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(
+            content_type(&response).starts_with("text/html"),
+            "Content-Type inesperado: {}",
+            content_type(&response)
+        );
+
+        let body = String::from_utf8(body_bytes(response).await).unwrap();
+        assert!(
+            body.contains(&hoja_de_tema("terminal")),
+            "sin poder leer la hoja del operador, se incrusta la embebida, fue: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn x_theme_elige_el_tema_de_esa_peticion() {
+        // tasks.md 1.4/D6: `X-Theme` elige el tema **de esa petición**, con la
+        // precedencia de siempre: gana al `THEME` configurado (aquí, el de por
+        // defecto).
+        let response = build_router(&config_con_theme("default"))
+            .oneshot(get_with_headers(
+                "/404",
+                &[("Accept", "text/html"), ("X-Theme", "terminal")],
+            ))
+            .await
+            .unwrap();
+
+        let body = String::from_utf8(body_bytes(response).await).unwrap();
+        assert!(
+            body.contains(&hoja_de_tema("terminal")),
+            "`X-Theme: terminal` tiene que elegir la hoja del tema `terminal`"
+        );
+    }
+
+    #[tokio::test]
+    async fn un_x_theme_desconocido_cae_al_tema_configurado() {
+        // tasks.md 1.4/D6: `X-Theme` la elige quien llama, así que un valor
+        // desconocido **no** es un error: cae al tema configurado, porque un
+        // cliente no puede romper el servicio.
+        let response = build_router(&config_con_theme("minimal"))
+            .oneshot(get_with_headers(
+                "/404",
+                &[("Accept", "text/html"), ("X-Theme", "neon")],
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body = String::from_utf8(body_bytes(response).await).unwrap();
+        assert!(
+            body.contains(&hoja_de_tema("minimal")),
+            "un `X-Theme` desconocido tiene que caer al tema configurado (`minimal`)"
+        );
+        assert!(
+            !body.contains(&hoja_de_tema("terminal")),
+            "un `X-Theme` desconocido no puede elegir la hoja de otro tema"
+        );
+    }
+
+    #[tokio::test]
+    async fn x_theme_no_afecta_al_json() {
+        // tasks.md 1.4/D6: sin hoja que incrustar, el tema se ignora. El cuerpo
+        // es el JSON de siempre, con su código.
+        let response = build_router(&sin_contenido_config())
+            .oneshot(get_with_headers(
+                "/404",
+                &[("Accept", "application/json"), ("X-Theme", "terminal")],
+            ))
+            .await
+            .unwrap();
+
+        assert!(
+            content_type(&response).starts_with("application/json"),
+            "Content-Type inesperado: {}",
+            content_type(&response)
+        );
+
+        let body = body_bytes(response).await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            json.get("code").and_then(|value| value.as_u64()),
+            Some(404),
+            "el JSON no depende del tema: {json}"
+        );
+    }
+
+    #[tokio::test]
+    async fn x_theme_no_afecta_a_xml_ni_a_texto() {
+        // La delta nombra los tres formatos que **no** son HTML; el JSON se
+        // cubre arriba y aquí los otros dos. Para XML y texto, el cuerpo con
+        // `X-Theme: terminal` tiene que ser **idéntico** al de la misma petición
+        // sin la cabecera: sin hoja que incrustar, el tema se ignora.
+        let router = build_router(&sin_contenido_config());
+
+        for accept in ["application/xml", "text/plain"] {
+            let con = router
+                .clone()
+                .oneshot(get_with_headers(
+                    "/404",
+                    &[("Accept", accept), ("X-Theme", "terminal")],
+                ))
+                .await
+                .unwrap();
+            let sin = router
+                .clone()
+                .oneshot(get_with_headers("/404", &[("Accept", accept)]))
+                .await
+                .unwrap();
+
+            assert_eq!(con.status(), sin.status(), "el estado no depende del tema");
+            assert!(
+                content_type(&con).starts_with(accept),
+                "Content-Type inesperado para `{accept}`: {}",
+                content_type(&con)
+            );
+
+            assert_eq!(
+                body_bytes(con).await,
+                body_bytes(sin).await,
+                "`X-Theme` no puede cambiar el cuerpo de `{accept}`"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn el_asset_de_la_hoja_no_sigue_al_tema_configurado() {
+        // El tema y el asset son independientes: `THEME=terminal` cambia la hoja
+        // que se **incrusta** en el HTML, no la que sirve `/css/error.css`. Ese
+        // path es el asset público del tema `default` y sigue devolviendo esa
+        // hoja.
+        let response = build_router(&config_con_theme("terminal"))
+            .oneshot(get("/css/error.css"))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            content_type(&response).starts_with("text/css"),
+            "Content-Type inesperado: {}",
+            content_type(&response)
+        );
+
+        let body = body_bytes(response).await;
+        assert_eq!(
+            body,
+            EMBEDDED_CSS.as_bytes(),
+            "`/css/error.css` es el asset del tema `default`: `THEME` no lo cambia"
+        );
+        assert_ne!(
+            body,
+            hoja_de_tema("terminal").as_bytes(),
+            "el asset no puede seguir al tema configurado"
+        );
+    }
+
+    #[tokio::test]
+    async fn vary_declara_x_theme() {
+        // tasks.md 1.4/D7: el cuerpo depende de `X-Theme`, así que una caché
+        // intermedia tiene que saberlo. Se declara **siempre**, traiga o no la
+        // petición la cabecera.
+        let router = build_router(&sin_contenido_config());
+
+        for peticion in [
+            get("/404"),
+            get_with_headers("/404", &[("X-Theme", "terminal")]),
+        ] {
+            let response = router.clone().oneshot(peticion).await.unwrap();
+            let names = vary_names(&response);
+
+            assert!(
+                names.contains(&"x-theme".to_string()),
+                "`Vary` tiene que declarar `X-Theme` (Vary = {names:?})"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn un_enlace_ajeno_se_deja_en_paz() {
+        // tasks.md 1.1/D2: solo el marcador se sustituye. La página del fixture
+        // `con-marcador` lleva el marcador **y** un `<link>` ajeno: el marcador
+        // desaparece —su hoja se incrusta— y el enlace ajeno sigue en el cuerpo.
+        let content_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/con-marcador");
+        let config = Config::from_env_iter([(
+            "CONTENT_DIR".to_string(),
+            content_dir.to_string_lossy().into_owned(),
+        )])
+        .expect("la configuración del fixture `con-marcador` debe construirse");
+
+        let response = build_router(&config)
+            .oneshot(get_with_headers("/404", &[("Accept", "text/html")]))
+            .await
+            .unwrap();
+
+        let body = String::from_utf8(body_bytes(response).await).unwrap();
+        assert!(
+            !body.contains("href=\"/css/error.css\""),
+            "el marcador tiene que quedar sustituido por el bloque `<style>`, fue: {body}"
+        );
+        assert!(
+            body.contains("href=\"/css/otra.css\""),
+            "un `<link>` que no es el marcador tiene que seguir en el cuerpo, fue: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn sin_marcador_la_pagina_se_sirve_byte_a_byte() {
+        // tasks.md 1.1/D2 (guarda: hoy ya pasa). Una página sin el marcador se
+        // sirve **tal cual**, sin leer ninguna hoja para servirla. El `404.html`
+        // de los fixtures no lleva marcador.
+        let response = build_router(&fixtures_config())
+            .oneshot(get_with_headers("/404", &[("Accept", "text/html")]))
+            .await
+            .unwrap();
+
+        let body = body_bytes(response).await;
+        assert_eq!(
+            body,
+            include_str!("../tests/fixtures/content/404.html").as_bytes(),
+            "sin marcador, la página se sirve byte a byte"
         );
     }
 }

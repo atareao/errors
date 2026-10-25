@@ -19,15 +19,17 @@ Implementado, verificado y versionado. Ocho changes están **archivados** en
 - `src/config.rs` — configuración desde el entorno (`Config`, `ConfigError`, `from_env_iter`).
 - `src/path.rs` — normalización del path (percent-decode + plegado de `.`/`..`).
 - `src/resolve.rs` — cascadas de código y formato, rango `400..=599`, tabla de razones.
-- `src/render.rs` — cuerpo por formato y cabeceras; la cascada del HTML tiene **dos capas** (`CONTENT_DIR` entera y, después, la copia embebida, D1).
-- `src/embedded.rs` — la tabla embebida: las once páginas (`PAGES`, con `PAGE_CODES` y `page(code)` derivados), la hoja `css/error.css` y `asset(path)`, la consulta de assets por path exacto. `PAGES` es la única fuente de verdad de qué códigos tienen página, y aquí vive la prueba de paridad (D5).
+- `src/render.rs` — cuerpo por formato y cabeceras; la cascada del HTML tiene **dos capas** (`CONTENT_DIR` entera y, después, la copia embebida, D1), y el HTML se sirve **autocontenido** (`autocontenido`: el marcador se sustituye por un `<style>` con la hoja del tema).
+- `src/theme.rs` — los **seis temas** (`THEMES`, `theme_by_name`, `resolve`), la ruta de cada hoja dentro de `CONTENT_DIR` (`css/error.css` para `default`, `themes/<nombre>.css` para los demás) y `Theme::sheet`, que resuelve la hoja **como un asset** (disco si se puede leer, embebida si no).
+- `src/embedded.rs` — la tabla embebida: las once páginas (`PAGES`, con `PAGE_CODES` y `page(code)` derivados), la hoja `css/error.css` (`DEFAULT_SHEET_BYTES`/`DEFAULT_SHEET`) y `asset(path)`, la consulta de assets por path exacto. `PAGES` es la única fuente de verdad de qué códigos tienen página, y aquí vive la prueba de paridad (D5).
 - `src/metrics.rs` — contador de páginas servidas por código **y por origen del código**, y su serialización en texto Prometheus.
-- `content/` — **once** páginas HTML (`400`, `401`, `403`, `404`, `405`, `408`, `429`, `500`, `502`, `503`, `504`), todas con la clase `c<código>` en el `body`, y la hoja única `content/css/error.css`; esas mismas once páginas y esa misma hoja son las que van **embebidas** en el binario.
+- `content/` — **once** páginas HTML (`400`, `401`, `403`, `404`, `405`, `408`, `429`, `500`, `502`, `503`, `504`), todas con la clase `c<código>` en el `body` y el marcador `<link rel="stylesheet" href="/css/error.css" />`, la hoja `content/css/error.css` —el tema `default`— y las cinco hojas de `content/themes/`; esas mismas once páginas y esas seis hojas son las que van **embebidas** en el binario.
 - `Dockerfile`, `.dockerignore`, `.justfile`, `compose.yml` — empaquetado (imagen ~13 MB, no-root uid 10001); el `compose.yml` va endurecido: `read_only: true`, `cap_drop: [ALL]`, `no-new-privileges:true` e `init: true`.
 - `README.md` — el contrato con Traefik y los ejemplos.
 
-Puertas en verde: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` y **143 tests**
-(140 unitarios + 3 de integración sobre el contenido de `content/`).
+Puertas en verde: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` y **176 tests**
+(168 unitarios + 3 de integración sobre el contenido de `content/` + 5 sobre los respaldos de
+Traefik).
 Verificado además contra el servidor real y contra la imagen.
 
 ## Qué es
@@ -40,7 +42,11 @@ porque asume que el proxy reescribe solo el cuerpo y conserva el código. Este s
 **código de error real**. Si una respuesta de página de error sale con `200`, el proyecto está roto.
 
 La paridad con `error-pages` se mantiene en **dos ejes independientes**: el **código** que se
-devuelve y la **negociación de formato** (HTML / JSON / XML / texto plano).
+devuelve y la **negociación de formato** (HTML / JSON / XML / texto plano). Y el change
+`self-contained-themes` cerró un **tercer** hueco de paridad: sus páginas son «fully self-contained»
+—incrustan estilos e imágenes en el HTML—, y aquí el HTML servido lleva la hoja del tema **dentro**,
+con `THEME`/`X-Theme` como equivalente de su `--template-name`/`$TEMPLATE_NAME` (por defecto
+`app-down`); su rotación (`--rotation-mode`) **no** existe aquí, y es un no-goal declarado.
 
 ## Garantías que no se pueden romper
 
@@ -107,6 +113,7 @@ devuelve y la **negociación de formato** (HTML / JSON / XML / texto plano).
 | `DEFAULT_ERROR_PAGE` | `404` | Código por defecto; fuera de `400..=599` es error de arranque. |
 | `LOG_FORMAT` | `text` | `text` o `json`; cualquier otro valor, o vacía, es error de arranque. |
 | `RETRY_AFTER` | `120` | Segundos de la cabecera `Retry-After` (solo `429` y `503`); no numérica, o vacía, es error de arranque. |
+| `THEME` | `default` | Tema de las páginas **HTML**: `default`, `minimal`, `terminal`, `paper`, `amber` o `compact`; cualquier otro valor, o vacía, es error de arranque. |
 
 `GET /metrics` es un endpoint de servicio (siempre `200`, fuera de la resolución de páginas de
 error) que expone el contador Prometheus de páginas servidas **por código y por el origen de ese
@@ -116,8 +123,16 @@ cualquiera puede inflar a voluntad el contador de un código y fabricar la apari
 avalancha justo durante una incidencia. El contador vive en el estado del router, no en un `static`:
 por eso dos routers no se contaminan entre sí. **No se publica en el router de respaldo** —no es una
 página de error y delata el perfil de fallos de la infraestructura—: se deja fuera del *catch-all* o
-se protege con un middleware de Traefik, que es donde va la autenticación. `/version` se mantiene a
-la vista por paridad deliberada con `error-pages`.
+se protege con un middleware de Traefik, que es donde va la autenticación. Dejarlo fuera es una
+conjunción en la regla —``HostRegexp(`.+`) && !Path(`/metrics`)``—, y la llevan los tres ficheros que
+entregan un respaldo desplegable (`compose.yml`, `examples/traefik/compose.yml` y el fragmento de
+*provider de fichero* de `examples/traefik/README.md`). La guarda es `tests/traefik_catchall.rs`,
+porque el CI no puede levantar contenedores y comprobarlo de extremo a extremo: la prueba lee esos
+tres ficheros versionados y falla en cuanto un respaldo pierde la conjunción. Quitarla vuelve a
+publicar el contador a cualquiera —una petición a `/metrics` en un Host sin router propio casa con el
+respaldo y devuelve el perfil de fallos de la infraestructura—; con ella, Traefik responde su propio
+`404` y el servicio ni se entera. `/version` se mantiene a la vista por paridad deliberada con
+`error-pages`.
 
 ## Cómo llega el código de error (contrato con Traefik)
 
@@ -126,6 +141,15 @@ tanto **el código viaja en el path**: una página 404 llega como `GET /404`. `X
 
 Orden de resolución (el **primero** que haga match): **path** (`/404`, `/404.html`, `/404.json`,
 `/503.xml`…) → cabecera **`X-Code`** → **`DEFAULT_ERROR_PAGE`** (defecto `404`).
+
+El **tema** es un eje aparte, y solo toca al HTML: lo elige `THEME` (entorno, al arrancar) y, por
+petición, la cabecera **`X-Theme`**, con el mismo principio —el **primer** origen que haga match, así
+que un `X-Theme` conocido gana a `THEME`—. Un `X-Theme` ausente, desconocido o vacío **no** es un
+error: cae al configurado, porque esa cabecera la elige quien llama y un cliente no puede romper el
+servicio. Comparación **exacta** (`X-Theme: Terminal` no es `terminal`). `THEME`, en cambio, la
+escribe el operador: un valor que no sea uno de los seis nombres —o la cadena vacía— **aborta el
+arranque** con un error que nombra la variable y enumera los nombres válidos, como `LOG_FORMAT`. En
+JSON, XML y texto plano no hay hoja que incrustar, así que el tema se ignora.
 
 ## Normalización del path (no romper)
 
@@ -154,10 +178,14 @@ Cabeceras de toda página de error: `Content-Type` según el formato, `Content-L
 `RETRY_AFTER` (`120` por defecto) **solo** en `429` y `503` (el `Retry-After` describe el estado que
 se sirve, no el de la respuesta sustituida).
 
-Toda respuesta declara en `Vary` `Accept-Encoding` y los nombres de las cuatro cabeceras de
-correlación —`X-Request-Id`, `X-Trace-Id`, `X-Correlation-Id`, `X-Amzn-Trace-Id`—, **siempre**, las
-traiga la petición o no: la respuesta copia esas cabeceras, así que una caché intermedia tiene que
-saber que varía por ellas. Una lista que cambiase según la petición no le serviría a una caché.
+Toda respuesta declara en `Vary` `Accept-Encoding`, los nombres de las cuatro cabeceras de
+correlación —`X-Request-Id`, `X-Trace-Id`, `X-Correlation-Id`, `X-Amzn-Trace-Id`— y **`X-Theme`**,
+**siempre**, las traiga la petición o no: la respuesta copia las cabeceras de correlación, así que una
+caché intermedia tiene que saber que varía por ellas; y **el cuerpo** del HTML depende de `X-Theme` —la
+hoja que va incrustada—, así que sin declararla una caché le entregaría a un cliente el tema que pidió
+otro, o el cuerpo entero de otro. Sin caché por medio el impacto es nulo (Traefik no cachea por
+defecto), pero con un CDN delante no. Una lista que cambiase según la petición no le serviría a una
+caché: por eso es fija.
 
 ## Integración Traefik (lo mínimo que debe aceptar el servicio)
 
@@ -182,7 +210,7 @@ resolución del código. El puerto por defecto del servicio es **8080**, el mism
 
 ```sh
 cargo run                                   # servidor
-cargo test                                  # 143 tests
+cargo test                                  # 176 tests
 cargo test <substring>                      # un test por nombre
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
@@ -316,6 +344,39 @@ Se mantiene con [`git-cliff`](https://git-cliff.org) (`cliff.toml`) y la receta 
   la auditoría I-1—, así que **no puede hacer E/S de disco**: los bytes son una tabla en memoria. Es
   también la razón de que sea un `Router` de axum y no un `struct` con `impl Service`:
   `tower::Service` solo es dependencia de desarrollo y no se puede nombrar en producción.
+- **El HTML servido es autocontenido, y el marcador vive en el fichero.** Las páginas de `content/`
+  conservan `<link rel="stylesheet" href="/css/error.css" />` y el servidor lo sustituye **al servir**
+  por un `<style>` con la hoja del tema (`src/render.rs::autocontenido`). El fichero conserva el
+  enlace a propósito: sigue siendo legible y previsualizable, y así no se duplican las once páginas
+  por tema. Tres reglas que no se tocan: **sin marcador no se lee ninguna hoja** y el HTML se devuelve
+  byte a byte —no es un atajo: es lo que impide que un CSS roto afecte a una página que no lo
+  necesita, y lo que mantiene válidos los fixtures y las páginas propias del operador—; un `<link>`
+  que **no** sea el marcador se deja intacto (es del operador); y se sustituye **cada** aparición, no
+  solo la primera. El escaneo es **por bytes**, no por `str`, a propósito: el marcador es ASCII puro,
+  así que una página del operador en otra codificación (ISO-8859-1, Shift_JIS) tiene que incrustar la
+  hoja igual; decodificar a `str` y rendirse ante bytes no-UTF-8 dejaría el enlace roto y la página
+  **sin estilos en silencio** —el `warn!` no saltaría, porque no hay error—, que es justo el fallo que
+  el change arregla. La detección tolera el orden de atributos, las dos comillas y las mayúsculas del
+  nombre de etiqueta, y no usa `regex` ni un parser: el árbol compila sin red.
+- **La hoja de `default` se embebe una sola vez, y el `static` intermedio tiene su motivo.**
+  `embedded::DEFAULT_SHEET_BYTES` es un `static` **de tipo array**; `DEFAULT_SHEET` es un `static`
+  `&[u8]` que apunta a él, y ese mismo par alimenta el asset `/css/error.css` y el tema `default` de
+  `src/theme.rs`. Un `static X: &[u8] = include_bytes!(…)` **no basta**: al leerlo en el inicializador
+  de otro `static` el compilador re-inlinea el `include_bytes!` y con varias *codegen units* las
+  direcciones difieren (medido: `ptr::eq` da `false` con `cargo test`), así que
+  `la_hoja_default_es_la_del_asset` —que exige **el mismo puntero**, no solo los mismos bytes— se
+  pondría en rojo. No «simplifiques» el array intermedio.
+- **La hoja del operador gana a la embebida y no puede divergir del asset que el mismo servicio
+  publica.** `Theme::sheet` aplica a la hoja la misma regla que a cualquier asset: un fichero
+  **legible** en `CONTENT_DIR/<sheet_path>` gana a la copia embebida. Es lo que impide la divergencia
+  silenciosa —`/css/error.css` sirviendo una hoja y la página incrustando otra—, y como se resuelve
+  **al servir**, un operador que edite su hoja la ve cambiar sin reiniciar, como le pasa con sus
+  páginas. Un fichero **ausente** cae a la embebida **sin** `warn` (es lo normal en un binario
+  instalado sin ficheros de datos); uno **presente pero ilegible** deja un `warn!` que nombra el
+  fichero y su causa, y **también** usa la embebida. Es una divergencia **consciente** de la Opción A
+  (garantía 7), que para las **páginas** manda el respaldo de texto: la página es *contenido* y la
+  hoja es *adorno*, así que tumbar un `503` a texto plano porque un CSS no se pudo leer empeoraría el
+  síntoma que el servicio existe para aliviar.
 - **El `Dockerfile` copia `content/` dos veces, y la primera no es un «por si acaso»: es una entrada de
   la compilación.** El stage `builder` necesita las páginas y la hoja **para compilar** —las macros
   resuelven la ruta en tiempo de compilación—, así que su `COPY content ./content` es **obligatorio**:
