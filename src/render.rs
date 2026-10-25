@@ -319,6 +319,15 @@ mod tests {
     /// Fichero de fixture que representa `content/404.html`.
     const FIXTURE_404_HTML: &str = include_str!("../tests/fixtures/content/404.html");
 
+    /// Página **embebida** del `404`: es `content/404.html` del repositorio, que
+    /// la fase GREEN embebe y que **difiere** del fixture de 271 bytes
+    /// (`FIXTURE_404_HTML`). No las mezcles: son ficheros distintos a propósito,
+    /// y esa diferencia es la que impide invertir la precedencia.
+    const EMBEDDED_404_HTML: &str = include_str!("../content/404.html");
+
+    /// Página **embebida** del `503`: es `content/503.html` del repositorio.
+    const EMBEDDED_503_HTML: &str = include_str!("../content/503.html");
+
     fn fixtures_content_dir() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/content")
     }
@@ -329,6 +338,36 @@ mod tests {
             fixtures_content_dir().to_string_lossy().into_owned(),
         )])
         .unwrap()
+    }
+
+    /// Directorio de contenido que **no existe**: el caso de un binario
+    /// instalado sin ficheros de datos, con `CONTENT_DIR` apuntando a un
+    /// `content` que no está.
+    ///
+    /// La aserción de abajo impide que alguien cree el directorio por accidente
+    /// y convierta estas pruebas en otra cosa.
+    fn sin_contenido_dir() -> PathBuf {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/inexistente-y-ademas-inexistente");
+
+        assert!(
+            !dir.exists(),
+            "el fixture `sin contenido` no puede existir: {}",
+            dir.display()
+        );
+
+        dir
+    }
+
+    /// `Config` con un `CONTENT_DIR` inexistente y el defecto por defecto
+    /// (`404`): la capa del operador no aporta nada y tiene que entrar la
+    /// embebida.
+    fn sin_contenido_config() -> Config {
+        Config::from_env_iter([(
+            "CONTENT_DIR".to_string(),
+            sin_contenido_dir().to_string_lossy().into_owned(),
+        )])
+        .expect("la configuración de fixtures debe construirse")
     }
 
     fn header<'a>(page: &'a RenderedPage, name: &str) -> Option<&'a str> {
@@ -595,5 +634,72 @@ mod tests {
             "el respaldo del `503` debe llevar el valor configurado"
         );
         assert_eq!(page.status, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    // --- Página embebida sin ficheros de datos (change `embedded-error-pages`,
+    //     tasks.md 1.1-1.2, 1.14) --------------------------------------------
+    //
+    // La fase GREEN embebe los once códigos (y su hoja) con
+    // `include_str!`/`include_bytes!`, así que un `CONTENT_DIR` que no existe
+    // deja de ser un `MissingHtml`: la cascada del disco se agota **entera**
+    // (D1) y entonces entra la copia embebida. Estas pruebas fijan el orden y el
+    // caso límite que el camino del respaldo conserva (D4).
+
+    #[test]
+    fn sin_directorio_el_cuerpo_html_sale_de_la_copia_embebida_del_codigo() {
+        // tasks.md 1.1: hoy `render_body(503, 404, Html, &dir_inexistente)`
+        // devuelve `Err(MissingHtml)`; en GREEN devuelve la página embebida del
+        // `503`. La firma no cambia, así que falla por aserción, no por
+        // compilación.
+        let body = render_body(503, 404, Format::Html, &sin_contenido_dir())
+            .expect("la página embebida del `503` debe existir aunque no haya directorio");
+
+        assert_eq!(
+            body,
+            EMBEDDED_503_HTML.as_bytes(),
+            "sin directorio, el cuerpo tiene que ser la copia embebida de `content/503.html`"
+        );
+    }
+
+    #[test]
+    fn sin_directorio_el_cuerpo_cae_a_la_copia_embebida_del_defecto_conservando_el_codigo() {
+        // tasks.md 1.2: no hay página embebida del `418`, así que el cuerpo es
+        // la copia embebida del código por defecto (`404`), y `render_page`
+        // conserva el estado `418`.
+        let body = render_body(418, 404, Format::Html, &sin_contenido_dir())
+            .expect("la página embebida del defecto debe existir aunque no haya directorio");
+        assert_eq!(
+            body,
+            EMBEDDED_404_HTML.as_bytes(),
+            "no hay `418` embebida: el cuerpo tiene que ser la del defecto (`404`)"
+        );
+
+        let page = render_page(&sin_contenido_config(), 418, Format::Html)
+            .expect("la página embebida del defecto debe existir");
+        assert_eq!(
+            page.status,
+            StatusCode::IM_A_TEAPOT,
+            "el estado sigue siendo el código resuelto (`418`), nunca el del cuerpo"
+        );
+        assert_eq!(
+            page.body,
+            EMBEDDED_404_HTML.as_bytes(),
+            "el cuerpo es la copia embebida del defecto (`404`)"
+        );
+    }
+
+    #[test]
+    fn sin_pagina_en_ninguna_capa_sigue_dando_missing_html() {
+        // tasks.md 1.14 / D4: la cascada no se revoca. Con un código que no está
+        // en la tabla embebida (`599`) y un defecto que tampoco (`418`), no hay
+        // página en ninguna capa y el resultado sigue siendo `MissingHtml`, que
+        // es lo que mantiene vivo el respaldo de texto. Es una guarda: pasa en
+        // RED y tiene que seguir pasando en GREEN.
+        match render_body(599, 418, Format::Html, &sin_contenido_dir()) {
+            Err(RenderError::MissingHtml { .. }) => {}
+            other => {
+                panic!("sin página ni en el disco ni embebida debe ser `MissingHtml`: {other:?}")
+            }
+        }
     }
 }
