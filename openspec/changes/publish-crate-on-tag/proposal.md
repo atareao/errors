@@ -27,15 +27,19 @@ tocaba era el momento de publicarlo, que es justo cuando ya no hay vuelta atrás
 
 ## What Changes
 
-1. **`release.yml` gana un job `crate`, con `needs: imagen`.** El crate SHALL publicarse **solo si**
-   la imagen se ha construido, se ha probado y se ha publicado. Es deliberado: lo **irreversible**
-   va al final, y solo cuando todo lo demás ha pasado. `cargo publish` no se puede deshacer; construir
-   y probar la imagen, sí, así que el orden no es cosmético.
-2. **La versión de `Cargo.toml` y la de la etiqueta SHALL coincidir.** Si no cuadran, la publicación
-   **falla** en vez de publicar una versión que no es la que se está anunciando. La razón es que
-   `cargo publish` publica **lo que diga `Cargo.toml`**, no lo que diga el tag: etiquetar `v0.4.1` con
-   `Cargo.toml` en `0.4.0` publicaría la `0.4.0` —o fallaría por ya publicada— **en silencio**, que es
-   el peor de los desenlaces posibles para un artefacto irreversible.
+1. **`release.yml` pasa de un solo job a tres, y el primero es `version`.** `version` resuelve la
+   etiqueta y comprueba que la versión de `Cargo.toml` coincide con ella **una sola vez y antes de
+   que se publique nada**; `imagen` no cambia; `crate` SHALL publicarse **solo si** la imagen se ha
+   construido, probado y publicado (`needs: [version, imagen]`). Es deliberado: lo **irreversible**
+   va al final, y solo cuando todo lo demás ha pasado. `cargo publish` no se puede deshacer;
+   construir y probar la imagen, sí, así que el orden no es cosmético.
+2. **La versión de `Cargo.toml` y la de la etiqueta SHALL coincidir, y la comprobación SHALL ser la
+   primera.** Si no cuadran, la publicación **falla** nombrando el desajuste **antes de publicar
+   nada** —ni imagen, ni Release, ni crate—, en vez de anunciar una versión que no es la que se
+   publica. La razón es que `cargo publish` publica **lo que diga `Cargo.toml`**, no lo que diga el
+   tag: etiquetar `v0.4.1` con `Cargo.toml` en `0.4.0` publicaría la `0.4.0` —o fallaría por ya
+   publicada— **en silencio**, que es el peor de los desenlaces posibles para un artefacto
+   irreversible.
 3. **Republicar NO SHALL fallar por una versión ya publicada.** El workflow está diseñado para
    re-ejecutarse —el `workflow_dispatch` con input `tag` sobre una etiqueta ya publicada; el paso del
    Release ya reutiliza el existente—, así que el paso **detecta** que la versión ya está en crates.io
@@ -49,6 +53,15 @@ tocaba era el momento de publicarlo, que es justo cuando ya no hay vuelta atrás
 5. **El secreto `CARGO_REGISTRY_TOKEN` va como secreto del repositorio.** El token **NO SHALL**
    escribirse en ningún fichero: se pasa al paso como variable de entorno y se consume en el momento
    de publicar.
+6. **El crate SHALL salir del árbol de la ETIQUETA.** El `checkout` del job `crate` fija el `ref` de
+   la etiqueta y un paso afirma que el commit que se publica es el que comprobó `version`, de modo
+   que un `workflow_dispatch` no puede publicar en crates.io —de forma irreversible— el árbol de la
+   rama bajo la versión de una etiqueta que apunta a otro commit.
+7. **Ningún valor del evento entra en un `run:`.** La etiqueta y la versión llegan a los scripts por
+   `env:` —como **dato**, no como código— y se validan contra un *whitelist* de caracteres
+   (`^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z][0-9A-Za-z.-]*)?$`): un `${{ … }}` interpolado se
+   sustituiría **antes** de que bash parseara el script, así que el filtro llegaba tarde y no
+   protegía de nada.
 
 ## Capabilities
 
@@ -78,11 +91,18 @@ que el paquete tenga puerta)
 - **No se toca el `exclude` de `Cargo.toml`.** El paquete ya lleva lo que tiene que llevar —las once
   páginas y la hoja, que son las que el binario embebe—, y `/.github` no es del crate; cablear el
   workflow **no cambia** el artefacto que se publica.
+- **No se endurece la publicación más de lo que se puede medir aquí.** Quedan **fuera** de este
+  change dos cosas, y van a `design.md` como preguntas abiertas: mover el token a un *environment*
+  de GitHub con revisores obligatorios —lo correcto para una publicación irreversible, pero
+  convertiría cada release en un acto manual— y el `concurrency` del fichero, que usa la cola por
+  defecto y puede dejar una ejecución **cancelada y en gris**: sin imagen, sin crate y sin rojo.
 
 ## Impact
 
-- `.github/workflows/release.yml` — un job nuevo (`crate`), con `needs: imagen`, la comprobación de
-  versión contra la etiqueta, la idempotencia y el `cargo publish --locked`.
+- `.github/workflows/release.yml` — pasa de **un** job a **tres**: un job `version` (**el
+  primero**, del que dependen los otros dos, que resuelve etiqueta y versión **antes de publicar
+  nada**) y un job `crate` (`needs: [version, imagen]`, con la idempotencia y el `cargo publish
+  --locked` desde el árbol de la etiqueta). El job `imagen` no cambia.
 - `.github/workflows/ci.yml` — un paso nuevo en el job `puertas` (`cargo publish --dry-run --locked`),
   que no necesita ningún check requerido nuevo porque va dentro de uno que ya lo es.
 - `AGENTS.md` — la sección de entrega (el tag publica imagen **y** crate, y el secreto que hace falta)
