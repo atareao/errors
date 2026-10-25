@@ -33,6 +33,17 @@ jobs:
       - name: Tests
         run: cargo test
 
+      # La lección de `fix-image-build`, ahora sobre el crate: el empaquetado no puede descubrirse
+      # por primera vez al publicar, y menos a mano. `--dry-run` empaqueta, compila el paquete y
+      # valida sus metadatos SIN subir nada (lo dice cargo: «aborting upload due to dry run»), así
+      # que cabe aquí, en el job que ya tiene toolchain y caché. Y no es teórico: `content/` viaja
+      # dentro del `.crate` —las once páginas y la hoja, medido: 12 de los 39 ficheros del paquete—,
+      # y eso es lo único que hace que el binario instalado sirva las páginas de verdad; hasta hoy
+      # solo lo comprobaba una medición a mano. No hace falta un check requerido nuevo: va dentro de
+      # `puertas`, que ya lo es.
+      - name: Paquete publicable
+        run: cargo publish --dry-run --locked
+
   # Puerta de dependencias. Va aparte de las tres anteriores —y no dentro del
   # mismo job— porque no necesita compilar nada: si el `Cargo.lock` trae un aviso
   # de seguridad, una licencia incompatible o una fuente inesperada, esto se ve
