@@ -3,6 +3,24 @@
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el
 versionado, [SemVer](https://semver.org/lang/es/).
 
+## [0.7.0](https://github.com/atareao/errserve/compare/v0.6.0..v0.7.0) - 2026-10-25
+
+### Cambiado
+
+- **theme**: La guarda de movimiento exige neutralizar, no nombrar
+- **theme**: Repasa las seis hojas y firma la página
+
+### Documentación
+
+- **openspec**: Propone theme-visual-review
+- **theme**: La guarda endurecida, el marcado y el separador decorativo
+- **openspec**: Archiva theme-visual-review
+- **openspec**: Cierra la revisión a ojo de las seis páginas
+
+### Pruebas
+
+- **theme**: Las pruebas del contrato de movimiento, que hoy fallan
+
 ## [0.6.0](https://github.com/atareao/errserve/compare/v0.5.0..v0.6.0) - 2026-10-25
 
 ### Añadido
