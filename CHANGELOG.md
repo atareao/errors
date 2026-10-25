@@ -17,9 +17,9 @@ versionado, [SemVer](https://semver.org/lang/es/).
 - **`CONTENT_DIR` pasa a ser un *override*** de esos recursos embebidos: misma variable, mismo
   defecto `content`, y sigue siendo la única ruta de estáticos. Un fichero que se pueda leer sigue
   ganando —también para la hoja—, y la cascada del directorio se agota entera antes de entrar en la
-  copia embebida. **La imagen no cambia**: el `Dockerfile` sigue copiando `content/` y la capa del
-  disco gana, así que quien la despliegue sirve los mismos bytes que en `0.3.0` y no tiene que hacer
-  nada.
+  copia embebida. **La imagen no cambia para quien la despliegue**: el `Dockerfile` copia `content/`
+  —en el stage de compilación, porque el binario la embebe, y también en el de ejecución— y la capa del
+  disco gana, así que sirve los mismos bytes que en `0.3.0` y no hay que hacer nada.
 
 ### Documentación
 
@@ -34,6 +34,8 @@ versionado, [SemVer](https://semver.org/lang/es/).
 ### Mantenimiento
 
 - **openspec**: Propone embeber las páginas en el binario
+- **ci**: El CI construye la imagen en cada propuesta de cambio —la puerta del empaquetado, que
+  faltaba—: un `Dockerfile` que deje de compilar se ve en el PR, y no al publicar la etiqueta.
 
 ## [0.3.0](https://github.com/atareao/errserve/compare/v0.2.0..v0.3.0) - 2026-10-24
 
