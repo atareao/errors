@@ -100,12 +100,18 @@ Los cinco arreglos que salieron de la auditoría de seguridad (la primera dio **
 
 ## 3. Verificación
 
-- [ ] 3.1 La publicación de verdad, con el `workflow_dispatch` que ya existe sobre la etiqueta
+- [x] 3.1 La publicación de verdad, con el `workflow_dispatch` que ya existe sobre la etiqueta
       `v0.4.0`: el job `crate` corre, y **el crate aparece en crates.io**. Antes, la imagen se
       republica **sin daño** —misma `0.4.0` y `latest`— y el Release **se reutiliza** (no se duplica).
-- [ ] 3.2 La idempotencia, medida: re-ejecutar el mismo `workflow_dispatch` sobre `v0.4.0` termina
+      Medido: el crate **está en crates.io** (`max_version = 0.4.0`, versiones
+      `['0.4.0','0.3.0']`) y su `.cargo_vcs_info.json` registra `43e3c3a…`, el commit de la
+      etiqueta. La imagen se republicó sin daño (`["0.3.0","latest","0.4.0"]`) y el Release **se
+      reutilizó**.
+- [x] 3.2 La idempotencia, medida: re-ejecutar el mismo `workflow_dispatch` sobre `v0.4.0` termina
       **en verde**, con el paso de publicación detectando que la versión ya está y continuando sin
-      error.
+      error. Medido: un segundo `workflow_dispatch` sobre `v0.4.0` terminó **en verde** con
+      `Publicar en crates.io` **omitido**, y el paso de la consulta diciendo «ok, el .crate
+      publicado lo empaquetó este mismo commit».
 - [x] 3.3 Reauditar el job `crate` —y el `version`— con veredicto **APTO**: inyección de comandos
       (ningún valor del evento en un `run:`), privilegio mínimo del job e idempotencia. La auditoría
       anterior dio **NO APTO**; esta casilla cierra que los cinco arreglos lo pasan.
@@ -123,23 +129,51 @@ Los cinco arreglos que salieron de la auditoría de seguridad (la primera dio **
 
 ## 4. La verificación que cierra el motivo del change
 
-- [ ] 4.1 **Desde un directorio vacío**, con el binario **instalado con `cargo install`**, medir lo que
-      motivó el change: `GET /404` con `Accept: text/html` responde `404` con `text/html` —la página
-      de verdad, no el respaldo de texto— y `GET /css/error.css` responde `200 text/css`. Es
-      literalmente el defecto que abrió `embedded-error-pages`, y la primera vez que se puede medir de
-      punta a punta: hasta hoy, quien instalaba con cargo seguía recibiendo `text/plain` y un `404`.
-- [ ] 4.2 La comprobación de versión **falla antes de publicar nada**: con `Cargo.toml` en una
+- [x] 4.1 **Desde un directorio vacío**, con el binario **instalado con `cargo install`**, medir lo
+      que motivó el change: `GET /404` con `Accept: text/html` responde `404` con `text/html` —la
+      página de verdad, no el respaldo de texto— y `GET /css/error.css` responde `200 text/css`. Es
+      literalmente el defecto que abrió `embedded-error-pages`, y la primera vez que se puede medir
+      de punta a punta: hasta hoy, quien instalaba con cargo seguía recibiendo `text/plain` y un
+      `404`. Medido: desde un directorio **vacío**, con el binario instalado con
+      `cargo install errserve --locked` (instaló la `0.4.0`), `GET /404` con `Accept: text/html`
+      responde **`404 text/html`** (460 bytes, byte a byte idéntico a `content/404.html`) y
+      `GET /css/error.css` **`200 text/css`** (2533 bytes). Sin `Accept`, `text/plain` (que es la
+      cascada documentada y no cambia).
+- [x] 4.2 La comprobación de versión **falla antes de publicar nada**: con `Cargo.toml` en una
       versión y una etiqueta desajustada, el release no deja **ni** imagen en GHCR **ni** Release
       —el job `version` falla el primero y los otros dos ni arrancan—. Medible con el
       `workflow_dispatch` sobre una etiqueta desajustada.
+      Medido: una etiqueta `v0.4.1` sobre `main` (con `Cargo.toml` en `0.4.0`) hace que el job
+      `comprobar la etiqueta y la versión` **falle** con «la etiqueta v0.4.1 y la versión de
+      Cargo.toml ('0.4.0') no coinciden: 'cargo publish' publicaría '0.4.0', no '0.4.1'», y que
+      `construir, probar y publicar` y `publicar el crate` queden **`skipped`**, sin un solo paso
+      ejecutado. GHCR (`["0.3.0","latest","0.4.0"]`), los Releases y crates.io quedaron idénticos
+      antes y después; la etiqueta de prueba se borró (local y remota).
 
 ## 5. Documentación y cierre
 
-- [ ] 5.1 `AGENTS.md`: la sección de entrega —el tag publica imagen **y** crate, y el secreto
+- [x] 5.1 `AGENTS.md`: la sección de entrega —el tag publica imagen **y** crate, y el secreto
       `CARGO_REGISTRY_TOKEN` que hace falta— y, si procede, un quirk sobre la idempotencia de
-      republicar una versión ya publicada.
-- [ ] 5.2 `CHANGELOG.md`: un bullet de Mantenimiento en la `0.4.0` —que no está publicada en
-      crates.io y por tanto se puede corregir sin reescribir historia publicada—.
-- [ ] 5.3 `openspec validate publish-crate-on-tag --strict` limpio.
-- [ ] 5.4 `openspec archive publish-crate-on-tag`, para fusionar la delta en
+      republicar una versión ya publicada. Hecho: la sección de entrega (los tres jobs, la
+      comprobación primero, el crate desde el árbol de la etiqueta, el secreto
+      `CARGO_REGISTRY_TOKEN`), la garantía del `cargo install` con la medida, y un quirk sobre la
+      idempotencia y la puerta del paquete.
+- [x] 5.2 `CHANGELOG.md`: un bullet de Mantenimiento en la `0.4.0` —que todavía no estaba publicada
+      en crates.io cuando se redactó esta tabla, y por tanto se podía corregir sin reescribir
+      historia publicada—. Hecho: el bullet de Mantenimiento en la `0.4.0`.
+- [x] 5.3 `openspec validate publish-crate-on-tag --strict` limpio.
+      Hecho, **con el change todavía activo**: `openspec validate
+      publish-crate-on-tag --strict` → «Change 'publish-crate-on-tag' is valid», y
+      `openspec validate --all --strict` → **5 passed, 0 failed** (los cuatro specs **más** este
+      change). Ya archivado, ese mismo `--all --strict` mide **4 passed, 0 failed** —los cuatro
+      specs, sin changes activos, porque `openspec list` → «No active changes found»—: el **5** y
+      el **4** son la misma medición en dos momentos distintos.
+- [x] 5.4 `openspec archive publish-crate-on-tag`, para fusionar la delta en
       `openspec/specs/http-server/`.
+      Hecho: `openspec archive publish-crate-on-tag --yes` → archivado como
+      `2026-10-25-publish-crate-on-tag`, con el requisito fusionado en
+      `openspec/specs/http-server/spec.md` (línea 126, `### Requirement: Un tag publica el crate
+      además de la imagen`) y **sin changes activos**. El archivo avisó de las casillas sin marcar;
+      la **3.4** se queda así **a propósito**: es la deuda declarada (el *environment* con
+      revisores, la cola del `concurrency` y la asimetría etiqueta/rama), y no se arregla en este
+      change.
