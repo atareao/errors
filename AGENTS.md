@@ -6,13 +6,14 @@
 
 ## Estado real del repositorio (verificado)
 
-Implementado, verificado y versionado. Siete changes están **archivados** en
+Implementado, verificado y versionado. Ocho changes están **archivados** en
 `openspec/changes/archive/` —`error-pages-parity`, `error-page-coverage`, `release-hardening`,
-`security-hardening`, `retry-after-configurable`, `embedded-error-pages` y `fix-image-build`, los
-cinco primeros con fecha `2026-10-24` y los dos últimos con `2026-10-25`— y sus requisitos viven
-fusionados en los cuatro specs de `openspec/specs/`: `error-page`, `http-server`, `observability` y
-`response-extras`. Las deltas del último de los antiguos entraron en `error-page` y `http-server`; las
-de `fix-image-build`, en `http-server`.
+`security-hardening`, `retry-after-configurable`, `embedded-error-pages`, `fix-image-build` y
+`publish-crate-on-tag`, los cinco primeros con fecha `2026-10-24` y los tres últimos con
+`2026-10-25`— y sus requisitos viven fusionados en los cuatro specs de `openspec/specs/`:
+`error-page`, `http-server`, `observability` y `response-extras`. Las deltas de
+`embedded-error-pages` entraron en `error-page` y `http-server`; las de `fix-image-build` y
+`publish-crate-on-tag`, en `http-server`.
 
 - `src/main.rs` — arranque, router, middleware de páginas de error, la lista `SERVICE_ENDPOINTS` que acota ese middleware, el *fallback* de assets embebidos del servidor de ficheros, y los tests de router.
 - `src/config.rs` — configuración desde el entorno (`Config`, `ConfigError`, `from_env_iter`).
@@ -84,6 +85,9 @@ devuelve y la **negociación de formato** (HTML / JSON / XML / texto plano).
    `css/error.css` van **dentro** del ejecutable (`include_str!`/`include_bytes!`), así que un
    `cargo install errserve` —un binario y ningún fichero de datos, con `CONTENT_DIR` por defecto
    apuntando a un `content` que no existe— sirve las páginas de verdad, no el respaldo de texto.
+   Y **está medido**: desde un directorio vacío, el binario instalado desde crates.io con
+   `cargo install errserve --locked` responde `404 text/html` a `GET /404` con `Accept: text/html`
+   —byte a byte la misma página que `content/404.html`— y `200 text/css` a `GET /css/error.css`.
    `CONTENT_DIR` es solo el *override*: la **capa del operador se agota entera** —el fichero del
    código pedido y, si falta, el del código por defecto— antes de entrar en la copia embebida
    (D1), que repite esa misma cascada. Y lo que gana es **un fichero que se pueda leer**, no
@@ -217,13 +221,31 @@ Se mantiene con [`git-cliff`](https://git-cliff.org) (`cliff.toml`) y la receta 
   que el rojo de cualquiera de ellos bloquea el merge (medido con la API: los `contexts` de las dos
   ramas son `["fmt, clippy y tests", "cargo-deny", "imagen"]`). Para volver a medirlo:
   `gh api repos/atareao/errserve/branches/main/protection --jq '.required_status_checks.contexts'`.
-- La imagen y el Release se publican empujando una **etiqueta** `v*`: el workflow `release.yml`
-  construye, **prueba la imagen con docker real** (el runner sí lo tiene; aquí solo hay podman, que
-  además descarta el `HEALTHCHECK` al construir en formato OCI), publica en GHCR y crea el Release.
-  La etiqueta `latest` solo se mueve en versiones estables.
-  Ojo: el `release.yml` construye la imagen **desde la rama**, no desde el árbol de la etiqueta; para
-  una etiqueta ya publicada eso es lo que se quiere (republicar), pero una etiqueta que **nunca publicó**
-  nada se puede mover al commit correcto en vez de reconstruirla desde la rama.
+  Y el job `puertas` —el de las tres puertas— verifica **además** que el **paquete del crate es
+  publicable**: `cargo publish --dry-run --locked`, que empaqueta, compila el paquete **extraído** y
+  valida sus metadatos sin subir nada. Es la misma lección que la puerta de la imagen, ahora sobre
+  el crate: sin ella, el empaquetado del crate solo se descubría al publicar. No hace falta un check
+  requerido nuevo: va dentro de `puertas`, que ya lo es.
+- La **etiqueta** `v*` publica **tres cosas**: la imagen, el **crate en crates.io** y el Release. El
+  workflow `release.yml` tiene **tres jobs** —`version` → `imagen` → `crate`—, y el orden es
+  deliberado: **la comprobación va la primera** y **lo irreversible, al final** —`cargo publish`;
+  una versión publicada solo se puede *yank*—. `version` resuelve etiqueta, versión e imagen **una
+  sola vez** y comprueba que la versión del `Cargo.toml` **es la de la etiqueta** **antes** de
+  publicar nada: un desajuste (`Cargo.toml` en `0.4.0` y etiqueta `v0.4.1`) para el release entero
+  sin dejar **ni** imagen **ni** Release **ni** crate. `imagen` construye, **prueba la imagen con
+  docker real** (el runner sí lo tiene; aquí solo hay podman, que además descarta el `HEALTHCHECK`
+  al construir en formato OCI), publica en GHCR —`latest` solo se mueve en versiones estables— y
+  crea el Release, reutilizándolo si ya existe. `crate` publica con `cargo publish --locked` usando
+  el secreto **`CARGO_REGISTRY_TOKEN`** (un token de crates.io; **sin él el job falla nombrando el
+  secreto**) y es **idempotente**: si la versión ya está en el registro, no republica y sigue en
+  verde —el `workflow_dispatch` existe justo para republicar una etiqueta—. Los **dos
+  disparadores** siguen siendo el `push` de una etiqueta y el `workflow_dispatch` con el input `tag`
+  obligatorio. Ojo a la asimetría: el `release.yml` construye la imagen **desde la rama**, no desde
+  el árbol de la etiqueta; para una etiqueta ya publicada eso es lo que se quiere (republicar), pero
+  una etiqueta que **nunca publicó** nada se puede mover al commit correcto en vez de
+  reconstruirla desde la rama. **El crate, en cambio, sale del árbol de la etiqueta**, porque
+  `cargo publish` publica lo que hay en el árbol de trabajo y en un `workflow_dispatch` el
+  `github.sha` por defecto es la rama: esa asimetría está declarada.
 - La visibilidad del paquete en GHCR **no se puede cambiar por API** (verificado: `PATCH /user/packages/...`
   da 404; no existe ni en el OpenAPI ni en GraphQL): solo a mano en los ajustes del paquete. La primera
   medición fue del paquete **viejo**, `ghcr.io/atareao/errors`, publicado antes del renombrado:
@@ -301,6 +323,22 @@ Se mantiene con [`git-cliff`](https://git-cliff.org) (`cliff.toml`) y la receta 
   `runtime`, es la decisión que sigue abierta: `CONTENT_DIR` es la única ruta de estáticos y, como la
   capa del disco gana (D1), la imagen sirve esos ficheros y no los del binario, de modo que quitarla
   cambiaría qué bytes se sirven en producción. Es la pregunta abierta de `design.md`, y ahí sigue.
+- **La publicación del crate tiene su propia puerta y su propio aviso, y los dos son deliberados.**
+  `cargo publish --dry-run --locked` es la puerta del paquete en `puertas`, y es real: compila el
+  paquete **extraído** (`target/package/errserve-<versión>`), así que un `content/` que no viaje en
+  el `.crate` rompe el CI. Y no da falsos rojos por las dos causas que parecen probables: **no
+  necesita token** (un PR de fork no rompe) y sobre una versión **ya publicada** solo avisa
+  («already exists on crates.io index») y termina en verde. En `release.yml`, ni republicar falla ni
+  falla avisar de que el `.crate` publicado venga de otro commit: el job `crate` compara el sha1 que
+  `cargo package` deja dentro del `.crate` (`.cargo_vcs_info.json`) con el commit del árbol, y si no
+  coincide **avisa** —`::warning::` y una línea en el resumen— y **sigue**. Los dos datos que lo
+  justifican: en esa rama ya no hay nada que reparar (la publicación es irreversible y está hecha, y
+  un rojo solo bloquearía republicar la imagen y reutilizar el Release, que es el camino que el
+  `workflow_dispatch` existe para hacer), y el `.crate` publicado de la `0.3.0` **a mano** registra
+  `bdb76fa…`, que **no** es el commit de su etiqueta `v0.3.0` (`d0032a2…`): una puerta dura daría
+  rojo en la primera republicación legítima. El `ref` del `checkout` va **cualificado a
+  `refs/tags/…`**, porque un `ref` sin cualificar se resuelve prefiriendo una **rama** del mismo
+  nombre a la etiqueta.
 
 ## Referencia de implementación (qué no repetir)
 
