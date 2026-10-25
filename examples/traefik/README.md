@@ -48,8 +48,20 @@ en los dos casos.
 | `app.localtest.me/boom` | `503` | Idem con un 503, más `Retry-After: 120`. |
 | `nada.localtest.me/x` | `404` | **Catch-all sin upstream: el código lo decidimos nosotros.** Es la razón del proyecto. |
 | `diverge.localtest.me/boom` | `503` | Backend 503 con el middleware pidiendo `/404`: manda Traefik. |
+| `nada.localtest.me/metrics` | no `200` | El respaldo **no** publica el endpoint de servicio `/metrics`. |
 
 `check.sh` sale con estado 1 si algo no cuadra, así que sirve también en un pipeline.
+
+### El respaldo no publica el endpoint de servicio
+
+El bloque de `/metrics` pide ese path en `nada.localtest.me` —un Host sin router propio, el caso del
+*catch-all*— y exige que la respuesta **no** sea la del endpoint: ni el estado `200`, ni el
+`Content-Type` `text/plain; version=0.0.4` que firma a `/metrics`, ni el contador
+`errors_pages_total` en el cuerpo. La ausencia de `X-Robots-Tag` es solo una **guarda**, no un
+discriminante —`/metrics` es un endpoint de servicio y nunca lleva esa cabecera, así que se cumple en
+los dos estados—: está para que nadie «arregle» la fuga convirtiendo `/metrics` en una página de
+error. Todo el montaje —y la medición— está explicado en «Operación y observabilidad» del
+[`README.md`](../../README.md) raíz y en «Variante sin socket», abajo.
 
 ## La trampa de `HostRegexp`
 
@@ -60,14 +72,20 @@ la vieja no falla: simplemente no casa.**
 # MAL en Traefik v3 — sintaxis v2 (placeholder {nombre:regexp})
 traefik.http.routers.errserve.rule: HostRegexp(`{host:.+}`)
 
-# BIEN en Traefik v3 — regexp de Go
-traefik.http.routers.errserve.rule: HostRegexp(`.+`)
+# BIEN en Traefik v3 — regexp de Go, con la regla completa del respaldo
+traefik.http.routers.errserve.rule: HostRegexp(`.+`) && !Path(`/metrics`)
 ```
 
 Medido en v3.6: ``HostRegexp(`{host:.+}`)`` **no casa con nada** y ``HostRegexp(`.+`)`` casa. Lo
 peligroso es cómo se rompe: el router aparece como `enabled` en el dashboard y Traefik responde **su
 propio 404 en texto plano**, sin llegar nunca al servicio. Se parece a que todo funciona, y es
 exactamente el fallo que este proyecto existe para corregir.
+
+El bloque va de la **sintaxis**, y sólo de eso: el segundo arreglo —``&& !Path(`/metrics`)``— no tiene
+nada que ver con v2/v3, es la exclusión del endpoint de servicio que el respaldo necesita (se explica
+en «Variante sin socket», abajo, y en «Operación y observabilidad» del `README.md` raíz). La línea
+«BIEN» la lleva puesta a propósito, aunque alargue el ejemplo: es la regla desplegable, y una línea
+«BIEN» a medias es el vector por el que `/metrics` se filtró de verdad.
 
 ## El socket
 
@@ -102,11 +120,18 @@ http:
         servers: [{url: "http://errserve:8080"}]
   routers:
     catchall:
-      rule: "HostRegexp(`.+`)"
+      rule: "HostRegexp(`.+`) && !Path(`/metrics`)"
       entryPoints: [web]
       service: errservice
       priority: 1
 ```
+
+La conjunción `&& !Path(`/metrics`)` es la misma que en los labels, y por el mismo motivo: el respaldo
+atiende cualquier Host, y `/metrics` no es una página de error sino un *endpoint de servicio* del
+binario, así que publicarlo delata el perfil de fallos de la infraestructura. Con la exclusión, una
+petición a `/metrics` en un Host desconocido la contesta Traefik con su propio `404` en texto plano y
+el respaldo sigue sirviendo el código real en todo lo demás. Está explicado, con la medición, en el
+apartado «Operación y observabilidad» del [`README.md`](../../README.md) raíz.
 
 ## Producción
 

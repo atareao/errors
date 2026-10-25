@@ -141,7 +141,14 @@ services:
     #  # `HostRegexp(`{host:.+}`)` de la guía de error-pages: es sintaxis v2 y en
     #  # v3 no casa con nada (medido), con lo que te quedarías con el 404 en
     #  # texto plano de Traefik. Alternativa v3: `PathPrefix(`/`)`.
-    #  traefik.http.routers.errserve-catchall.rule: HostRegexp(`.+`)
+    #  # Y lleva una segunda conjunción, `&& !Path(`/metrics`)`, que tampoco es
+    #  # opcional: el respaldo atiende cualquier Host, así que sin ella publica
+    #  # los endpoints de servicio del binario —y `/metrics` expone el contador
+    #  # de páginas servidas, que es el perfil de fallos de tu infraestructura—
+    #  # a quien pregunte por un Host que no exista. Con la exclusión, ese caso
+    #  # lo contesta Traefik con su propio 404 en texto plano (19 B) y el
+    #  # respaldo sigue sirviendo `404` y `503` reales en el mismo Host.
+    #  traefik.http.routers.errserve-catchall.rule: HostRegexp(`.+`) && !Path(`/metrics`)
     #  traefik.http.routers.errserve-catchall.entrypoints: web
     #  traefik.http.routers.errserve-catchall.service: errserve
     #  traefik.http.routers.errserve-catchall.middlewares: errpages

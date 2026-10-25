@@ -116,8 +116,16 @@ cualquiera puede inflar a voluntad el contador de un código y fabricar la apari
 avalancha justo durante una incidencia. El contador vive en el estado del router, no en un `static`:
 por eso dos routers no se contaminan entre sí. **No se publica en el router de respaldo** —no es una
 página de error y delata el perfil de fallos de la infraestructura—: se deja fuera del *catch-all* o
-se protege con un middleware de Traefik, que es donde va la autenticación. `/version` se mantiene a
-la vista por paridad deliberada con `error-pages`.
+se protege con un middleware de Traefik, que es donde va la autenticación. Dejarlo fuera es una
+conjunción en la regla —``HostRegexp(`.+`) && !Path(`/metrics`)``—, y la llevan los tres ficheros que
+entregan un respaldo desplegable (`compose.yml`, `examples/traefik/compose.yml` y el fragmento de
+*provider de fichero* de `examples/traefik/README.md`). La guarda es `tests/traefik_catchall.rs`,
+porque el CI no puede levantar contenedores y comprobarlo de extremo a extremo: la prueba lee esos
+tres ficheros versionados y falla en cuanto un respaldo pierde la conjunción. Quitarla vuelve a
+publicar el contador a cualquiera —una petición a `/metrics` en un Host sin router propio casa con el
+respaldo y devuelve el perfil de fallos de la infraestructura—; con ella, Traefik responde su propio
+`404` y el servicio ni se entera. `/version` se mantiene a la vista por paridad deliberada con
+`error-pages`.
 
 ## Cómo llega el código de error (contrato con Traefik)
 

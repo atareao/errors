@@ -68,7 +68,9 @@ nada; `ERRSERVE_IMAGE` apunta a otra etiqueta o a una imagen local si hace falta
 
 Una trampa que conviene conocer antes de copiar una regla de internet: ``HostRegexp(`{host:.+}`)`` es
 sintaxis de Traefik **v2** y en v3 **no casa con nada** —el router aparece `enabled` y Traefik
-responde su propio 404, sin llegar al servicio—. En v3 es ``HostRegexp(`.+`)``.
+responde su propio 404, sin llegar al servicio—. En v3 es ``HostRegexp(`.+`)``. Es el mismo tipo de
+trampa de copia-pega que la del *catch-all*: si copias esa regla, mira el párrafo de `/metrics` en
+«Operación y observabilidad», porque además lleva una exclusión.
 
 ## Ejemplos
 
@@ -176,7 +178,21 @@ avalancha justo durante una incidencia; con ella, ese inflado se ve al leer el s
 fuera de la resolución de páginas de error— y no una página de error: expone la actividad del propio
 servicio (qué códigos ha servido, que es el perfil de fallos de tu infraestructura), así que déjalo
 fuera del *catch-all* o ponle delante un middleware de Traefik (*basicAuth*, una `IPAllowList`). La
-aplicación **no** autentica nada: el sitio para eso es el proxy.
+aplicación **no** autentica nada: el sitio para eso es el proxy. Y dejarlo fuera del *catch-all* no
+es un detalle de la prosa: es una conjunción en la regla, y es lo que llevan **los tres** ficheros
+que entregan un respaldo desplegable —el ejemplo de `examples/traefik/`, la plantilla de producción
+de `compose.yml` y la variante de *provider de fichero* del README del ejemplo—:
+
+```yaml
+traefik.http.routers.errserve-catchall.rule: HostRegexp(`.+`) && !Path(`/metrics`)
+```
+
+`tests/traefik_catchall.rs` la guarda, porque la comprobación de extremo a extremo necesita un motor
+de contenedores y no corre en el CI: sin esa prueba, la fuga solo se descubriría volviendo a
+desplegar. Y quitarla no rompe el respaldo: una petición a `/metrics` no casa con ningún router,
+Traefik responde su propio `404` —19 B, texto plano, sin `X-Robots-Tag`— y el servicio ni se entera,
+mientras que para cualquier otro path el respaldo sigue sirviendo el código real (`/` → `404` con la
+firma del servicio, `/503` → `503` con su `Retry-After`).
 
 `/version` sí se queda a la vista **a propósito**, por paridad con `error-pages`: publica la versión
 y nada más, y hoy no hay ningún aviso que lo haga explotable.
