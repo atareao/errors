@@ -7,15 +7,23 @@
  * estas reglas; además se sigue sirviendo como asset estático desde
  * `CONTENT_DIR`, así que la ruta pública `/css/error.css` no cambia.
  *
- * Las reglas son las de siempre, así que quien no configure `THEME` no ve
- * ningún cambio de aspecto. Y por ese mismo cometido —viajar dentro de la
- * página— no puede referenciar recursos externos: nada de hojas importadas ni
- * de ficheros remotos.
+ * Es el tema sobrio de la casa y el **único** que anima: `<main>` entra con un
+ * movimiento de 180 ms que se neutraliza en `prefers-reduced-motion: reduce`,
+ * porque el movimiento es adorno y tiene que poder apagarse. Por ese mismo
+ * cometido —viajar dentro de la página— no puede referenciar recursos externos:
+ * nada de hojas importadas ni de ficheros remotos.
  *
  * Una sola hoja, no una por código: la diferencia de aspecto se expresa con la
  * clase `c<código>` del `body`, con un acento distinto por código. El `404` —y
  * cualquier código sin regla propia— se queda con el acento por defecto de
  * `:root`; los demás solo lo sobreescriben.
+ *
+ * El `<hr>` es un separador decorativo: la página se entiende igual sin él, y
+ * el 3:1 de WCAG 1.4.11 cubre el contenido no textual necesario para entender
+ * el contenido y los componentes de interfaz, no el adorno. Su `--rule` mide
+ * 1,43 sobre el fondo claro y 1,55 sobre el oscuro, y se queda ahí a propósito:
+ * es una decisión medida, no un descuido. Quien vuelva a medirla, que no la
+ * cuente como hallazgo.
  */
 
 :root {
@@ -122,6 +130,17 @@ body {
   background: var(--bg);
 }
 
+/* El bloque de contenido: el *landmark* que un lector de pantalla anuncia como
+ * «contenido principal», el que entra con la animación de la casa y el que la
+ * apaga cuando el sistema pide movimiento reducido. */
+main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  animation: entrada 180ms ease-out;
+}
+
 h1 {
   margin: 0;
   font-size: clamp(3rem, 12vw, 6rem);
@@ -149,6 +168,35 @@ hr {
   border-top: 1px solid var(--rule);
 }
 
+/* La firma: quién sirve la página. Más pequeña y en el tono atenuado, para que
+ * no compita con el código ni con la descripción. */
+footer {
+  margin-top: 0.75rem;
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
 a {
   color: var(--accent);
+}
+
+/* El movimiento de entrada: sobrio (180 ms, un fundido con un desplazamiento
+ * mínimo) y **neutralizable** —no un bucle—. La página de error no se hace
+ * esperar ni se mueve sola. */
+@keyframes entrada {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  main {
+    animation: none;
+  }
 }

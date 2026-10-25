@@ -128,6 +128,33 @@ fn clase_del_body(html: &str) -> Option<String> {
     Some(tras_prefijo[..tras_prefijo.find('"')?].to_string())
 }
 
+/// El elemento **completo** —etiqueta de apertura incluida y hasta su etiqueta
+/// de cierre—, si el documento lo lleva: `<footer …>…</footer>`.
+fn elemento_completo<'a>(html: &'a str, etiqueta: &str) -> Option<&'a str> {
+    let apertura = format!("<{etiqueta}");
+    let cierre = format!("</{etiqueta}>");
+
+    let desde = html.find(&apertura)?;
+    let resto = &html[desde..];
+    let fin = resto.find(&cierre)? + cierre.len();
+
+    Some(&resto[..fin])
+}
+
+/// El contenido **interno** de un elemento —lo que va entre su etiqueta de
+/// apertura y su etiqueta de cierre—, si el documento lo lleva.
+fn contenido_del_elemento<'a>(html: &'a str, etiqueta: &str) -> Option<&'a str> {
+    let apertura = format!("<{etiqueta}");
+    let cierre = format!("</{etiqueta}>");
+
+    let desde = html.find(&apertura)?;
+    let tras_apertura = &html[desde + apertura.len()..];
+    let cuerpo = &tras_apertura[tras_apertura.find('>')? + 1..];
+    let fin = cuerpo.find(&cierre)?;
+
+    Some(&cuerpo[..fin])
+}
+
 /// Falla con la lista completa de incumplimientos, uno por línea y precedido
 /// del motivo, en vez de con el primero encontrado.
 fn exigir_sin_fallos(motivo: &str, fallos: &[String]) {
@@ -287,5 +314,57 @@ fn cada_pagina_comparte_la_hoja_unica_y_se_identifica_con_su_clase() {
         "la página debe usar la hoja única `css/error.css` y llevar en el body el marcador de \
          su código",
         &fallos,
+    );
+}
+
+/// El **marcado nuevo** de la única página: un `<main>` que envuelve el contenido
+/// y un `<footer>` que firma la página con el nombre del servicio y **sin ningún
+/// `href`**. La página sigue siendo una plantilla: conserva los tres marcadores y
+/// el marcador del enlace a la hoja única, que el `<main>` y el `<footer>` se
+/// añaden **alrededor** del contenido y no en su lugar.
+#[test]
+fn la_pagina_envuelve_el_contenido_y_firma_sin_enlace() {
+    // El nombre del servicio con el que el `<footer>` firma la página.
+    const NOMBRE_DEL_SERVICIO: &str = "errserve";
+
+    let pagina = leer(&content_dir().join("404.html"));
+
+    // El `<main>` es el *landmark* del contenido —y el bloque que `default`
+    // anima—, así que envuelve `h1`, `h2`, `hr` y `p`: justo donde viven los tres
+    // marcadores de la plantilla.
+    let main = contenido_del_elemento(&pagina, "main").unwrap_or_else(|| {
+        panic!("la página tiene que llevar un `<main>` que envuelva el contenido: {pagina}")
+    });
+
+    for marcador in ["{{code}}", "{{reason}}", "{{description}}"] {
+        assert!(
+            main.contains(marcador),
+            "el `<main>` envuelve el contenido, y `{marcador}` tiene que quedar dentro: {pagina}"
+        );
+    }
+
+    // El `<footer>` firma la página con el nombre del servicio, y **sin ningún
+    // `href`: una firma no puede añadir una referencia local que el directorio
+    // tendría que resolver.
+    let footer = elemento_completo(&pagina, "footer").unwrap_or_else(|| {
+        panic!("la página tiene que llevar un `<footer>` con el nombre del servicio: {pagina}")
+    });
+
+    assert!(
+        contenido_del_elemento(&pagina, "footer")
+            .is_some_and(|texto| texto.contains(NOMBRE_DEL_SERVICIO)),
+        "el `<footer>` tiene que decir el nombre del servicio (`{NOMBRE_DEL_SERVICIO}`): {footer}"
+    );
+    assert!(
+        !footer.contains("href"),
+        "el `<footer>` no puede llevar ningún `href`: sería una referencia local que el \
+         directorio tendría que resolver, y no lo hace. Footer: {footer}"
+    );
+
+    // El marcado nuevo se añade **alrededor** del contrato de la plantilla, no en
+    // su lugar: el marcador del enlace a la hoja única sigue intacto.
+    assert!(
+        pagina.contains(r#"<link rel="stylesheet" href="/css/error.css" />"#),
+        "la página tiene que conservar el marcador del enlace a la hoja única: {pagina}"
     );
 }

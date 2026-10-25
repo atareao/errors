@@ -5,12 +5,18 @@
  * servidor la incrusta en el HTML al servir, sustituyendo el `<link>` de la
  * página por un bloque de estilo con estas reglas, así que no puede referenciar
  * recursos externos: nada de hojas importadas ni de ficheros remotos.
- * Si animase, tendría que declarar `prefers-reduced-motion`.
+ * Si animase, tendría que neutralizarlo en `prefers-reduced-motion: reduce`.
  *
  * Pensada para móvil y para la terminal: todo lo corto posible. El título y el
  * subtítulo van en línea para que la cabecera se lea de un golpe —«503 Service
  * Unavailable»—. El marcado lleva la clase `c<código>` en el `body`, pero este
  * tema no la usa.
+ *
+ * El `<hr>` decorativo —un separador, no información— se queda fuera del 3:1
+ * de WCAG 1.4.11, que cubre el contenido no textual necesario para entender el
+ * contenido y los componentes de interfaz. Su `--rule` mide 1,43 sobre el fondo
+ * claro y 1,55 sobre el oscuro: es una decisión medida, no un descuido, así que
+ * quien vuelva a medirla no debería contarla como hallazgo.
  */
 
 :root {
@@ -73,5 +79,12 @@ hr {
 p {
   margin: 0;
   max-width: 34rem;
+  color: var(--muted);
+}
+
+/* La firma: más pequeña y atenuada, para no añadir una línea de peso. */
+footer {
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
   color: var(--muted);
 }
