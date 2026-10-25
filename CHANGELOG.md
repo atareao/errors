@@ -3,6 +3,30 @@
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el
 versionado, [SemVer](https://semver.org/lang/es/).
 
+## [0.5.0](https://github.com/atareao/errserve/compare/v0.4.0..v0.5.0) - 2026-10-25
+
+### Añadido
+
+- **release**: Publica el crate en crates.io al etiquetar
+- **theme**: El HTML servido es autocontenido y el tema es configurable
+
+### Corregido
+
+- **release**: Cualifica el ref de los checkouts a refs/tags
+- **traefik**: El respaldo no publica el endpoint de servicio /metrics
+
+### Documentación
+
+- **openspec**: Propone publicar el crate en el release
+- **openspec**: Documenta el crate en el release y su guarda de versión
+- **openspec**: Cierra las casillas medidas del guion
+- **release**: El tag publica también el crate
+- **openspec**: Archiva publish-crate-on-tag
+
+### Mantenimiento
+
+- **openspec**: Archiva el change del build de la imagen
+
 ## [0.4.0](https://github.com/atareao/errserve/compare/v0.3.0..v0.4.0) - 2026-10-25
 
 ### Añadido

@@ -42,13 +42,15 @@ services:
     # --- Configuración, solo por entorno --------------------------------------
     # Son los valores por defecto de `src/config.rs`, escritos aquí para que
     # quien lea el fichero no tenga que abrirlos. Una variable presente pero
-    # VACÍA es error de arranque, no "usa el defecto".
+    # VACÍA es error de arranque, no "usa el defecto"; y `THEME` o `LOG_FORMAT`
+    # con un valor que no esté en su lista también lo son.
     environment:
       PORT: "8080"              # puerto de escucha dentro del contenedor
       LOG_LEVEL: "info"         # filtro de tracing (debug, info, warn, error)
       LOG_FORMAT: "text"        # text | json (json para recolectores)
       CONTENT_DIR: "content"    # relativo a WORKDIR (/app/content en la imagen)
       DEFAULT_ERROR_PAGE: "404" # fuera de 400..=599 es error de arranque
+      THEME: "default"          # default | minimal | terminal | paper | amber | compact
 
     # --- Puertos --------------------------------------------------------------
     # En producción NO se publica ninguno: Traefik llega al contenedor por la
@@ -141,7 +143,14 @@ services:
     #  # `HostRegexp(`{host:.+}`)` de la guía de error-pages: es sintaxis v2 y en
     #  # v3 no casa con nada (medido), con lo que te quedarías con el 404 en
     #  # texto plano de Traefik. Alternativa v3: `PathPrefix(`/`)`.
-    #  traefik.http.routers.errserve-catchall.rule: HostRegexp(`.+`)
+    #  # Y lleva una segunda conjunción, `&& !Path(`/metrics`)`, que tampoco es
+    #  # opcional: el respaldo atiende cualquier Host, así que sin ella publica
+    #  # los endpoints de servicio del binario —y `/metrics` expone el contador
+    #  # de páginas servidas, que es el perfil de fallos de tu infraestructura—
+    #  # a quien pregunte por un Host que no exista. Con la exclusión, ese caso
+    #  # lo contesta Traefik con su propio 404 en texto plano (19 B) y el
+    #  # respaldo sigue sirviendo `404` y `503` reales en el mismo Host.
+    #  traefik.http.routers.errserve-catchall.rule: HostRegexp(`.+`) && !Path(`/metrics`)
     #  traefik.http.routers.errserve-catchall.entrypoints: web
     #  traefik.http.routers.errserve-catchall.service: errserve
     #  traefik.http.routers.errserve-catchall.middlewares: errpages
