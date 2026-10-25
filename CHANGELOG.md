@@ -3,6 +3,38 @@
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el
 versionado, [SemVer](https://semver.org/lang/es/).
 
+## [0.4.0](https://github.com/atareao/errserve/compare/v0.3.0..v0.4.0) - 2026-10-25
+
+### Añadido
+
+- **embedded-error-pages**: El binario lleva **dentro** las once páginas de error y su hoja
+  `css/error.css`, así que un `cargo install errserve` —un ejecutable y ningún fichero de datos—
+  sirve las páginas de verdad en vez del respaldo de texto: `GET /404.html` pasa de `text/plain` a
+  `text/html`, y `GET /css/error.css` de `404` a `200 text/css`.
+
+### Cambiado
+
+- **`CONTENT_DIR` pasa a ser un *override*** de esos recursos embebidos: misma variable, mismo
+  defecto `content`, y sigue siendo la única ruta de estáticos. Un fichero que se pueda leer sigue
+  ganando —también para la hoja—, y la cascada del directorio se agota entera antes de entrar en la
+  copia embebida. **La imagen no cambia**: el `Dockerfile` sigue copiando `content/` y la capa del
+  disco gana, así que quien la despliegue sirve los mismos bytes que en `0.3.0` y no tiene que hacer
+  nada.
+
+### Documentación
+
+- Corrige el estado medido que quedó viejo tras el renombrado
+- **embedded-error-pages**: El contrato embebido en el README y en AGENTS
+
+### Pruebas
+
+- **embedded-error-pages**: RED, la página embebida sin ficheros de datos
+- **embedded-error-pages**: RED, la paridad de las dos copias
+
+### Mantenimiento
+
+- **openspec**: Propone embeber las páginas en el binario
+
 ## [0.3.0](https://github.com/atareao/errserve/compare/v0.2.0..v0.3.0) - 2026-10-24
 
 ### Cambiado
