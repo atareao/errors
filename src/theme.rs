@@ -524,6 +524,15 @@ mod tests {
         false
     }
 
+    /// ¿La hoja tiene algún incumplimiento de **movimiento**? Es la pregunta de
+    /// casi todas las pruebas de este contrato: la lista de incumplimientos se
+    /// consulta por el token, pero aquí lo único que importa es si hay alguno.
+    fn incumple_movimiento(hoja: &str) -> bool {
+        incumplimientos(hoja.as_bytes())
+            .iter()
+            .any(|i| matches!(i, Incumplimiento::Movimiento(_)))
+    }
+
     #[test]
     fn las_hojas_embebidas_son_byte_a_byte_las_de_content() {
         // D5: los bytes embebidos de cada tema igualan la lectura de
@@ -640,14 +649,16 @@ mod tests {
     #[test]
     fn cada_hoja_cubre_el_marcado() {
         // Sin esto, un tema que se olvide de un elemento deja una página a medio
-        // vestir y nadie se entera: las cinco etiquetas son las que lleva la
-        // única página de error.
+        // vestir y nadie se entera: las seis etiquetas son las que lleva la única
+        // página de error. `main` **no** está en la lista a propósito: es
+        // estructura —el bloque que `default` anima— y no todos los temas
+        // necesitan una regla para él, mientras que `footer` lo estilan las seis.
         let mut fallos = Vec::new();
 
         for theme in THEMES.iter() {
             let hoja = String::from_utf8_lossy(theme.embedded);
 
-            for selector in ["body", "h1", "h2", "hr", "p"] {
+            for selector in ["body", "h1", "h2", "hr", "p", "footer"] {
                 if !tiene_regla(&hoja, selector) {
                     fallos.push(format!(
                         "la hoja del tema `{}` no define `{selector}`",
@@ -724,6 +735,64 @@ body { transition: opacity 0.2s; }
     /// Una hoja quieta: no pide nada y no anima.
     const QUIETA: &str = r#"
 body { color: #222; }
+"#;
+
+    /// Una hoja que anima y **solo nombra** la media query: el bloque reduce
+    /// existe, pero su único contenido es un comentario, así que no apaga nada.
+    const NOMBRA_SIN_NEUTRALIZAR: &str = r#"
+main { animation: entrada 180ms ease-out; }
+@media (prefers-reduced-motion: reduce) { /* esta animación se apaga sola */ }
+"#;
+
+    /// Una hoja que anima y neutraliza bajo la preferencia **contraria**: el
+    /// bloque existe, pero es el que ve quien **no** pide movimiento reducido.
+    const NEUTRALIZA_BAJO_LA_OTRA_PREFERENCIA: &str = r#"
+main { animation: entrada 180ms ease-out; }
+@media (prefers-reduced-motion: no-preference) { main { animation: none; } }
+"#;
+
+    /// Una hoja que anima y trae el bloque reduce **vacío**.
+    const REDUCE_VACIO: &str = r#"
+main { animation: entrada 180ms ease-out; }
+@media (prefers-reduced-motion: reduce) { }
+"#;
+
+    /// La forma canónica de D2: fotogramas propios, la `animation` declarada y el
+    /// bloque reduce que la **neutraliza**.
+    const REDUCE_QUE_NEUTRALIZA: &str = r#"
+@keyframes entrada { from { opacity: 0 } to { opacity: 1 } }
+main { animation: entrada 180ms ease-out; }
+@media (prefers-reduced-motion: reduce) { main { animation: none; } }
+"#;
+
+    /// Una hoja que declara una `transition` y cuyo bloque reduce solo neutraliza
+    /// una `animation`: la transición declarada sigue viva.
+    const REDUCE_QUE_NEUTRALIZA_OTRA: &str = r#"
+main { transition: opacity 200ms; }
+@media (prefers-reduced-motion: reduce) { main { animation: none; } }
+"#;
+
+    /// Una hoja cuyo bloque reduce **anima** en vez de apagar.
+    const REDUCE_QUE_ANIMA: &str = r#"
+@media (prefers-reduced-motion: reduce) { main { animation: entrada 180ms ease-out; } }
+"#;
+
+    /// Unos fotogramas **sin ninguna declaración** que los use: definen fotogramas
+    /// y no animan a nadie, así que no obligan a nada.
+    const SOLO_FOTOGRAMAS: &str = r#"
+@keyframes entrada { from { opacity: 0 } to { opacity: 1 } }
+"#;
+
+    /// La neutralización vive en una **regla anidada** del bloque reduce y **no**
+    /// es la primera que se cierra: hay una regla antes que la neutralizadora, así
+    /// que el bloque tiene que delimitarse por su llave de apertura y **su** cierre
+    /// equilibrado, no por la primera `}` que aparezca.
+    const REDUCE_CON_REGLA_ANIDADA: &str = r#"
+main { animation: entrada 180ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  main { color: inherit; }
+  main { animation: none; }
+}
 "#;
 
     /// Las tres formas de pedir un fichero que el contrato prohíbe, con el token
@@ -826,25 +895,48 @@ body { background: url(foto.png); }
 
     #[test]
     fn una_hoja_que_anima_respeta_reduced_motion() {
-        // El segundo contrato, sobre las hojas **incorporadas** al binario.
-        // Animar **no** es un defecto de autocontención: el navegador ejecuta la
-        // animación sin pedirle nada a nadie, es cómputo local, y por eso es una
-        // decisión de aspecto y no se prohíbe. Pero hay gente a la que el
-        // movimiento le produce mareo, y una página de error que se mueve
-        // mientras el usuario intenta leer qué ha pasado es peor página de error.
-        // La regla no prohíbe el adorno: prohíbe el adorno que no se puede
-        // apagar, así que una hoja que traiga `animation`, `transition` o
-        // `@keyframes` tiene que traer también `prefers-reduced-motion`. Hoy
-        // ninguna de las seis anima, así que cumplen por vacío; el día que una
-        // anime, esta guarda es la que lo exige.
+        // El segundo contrato, cláusula a cláusula y sobre las hojas
+        // **incorporadas** al binario. Animar **no** es un defecto de
+        // autocontención: el navegador ejecuta la animación sin pedirle nada a
+        // nadie, es cómputo local, y por eso es una decisión de aspecto y no se
+        // prohíbe. Pero hay gente a la que el movimiento le produce mareo, y una
+        // página de error que se mueve mientras el usuario intenta leer qué ha
+        // pasado es peor página de error. La regla no prohíbe el adorno: prohíbe
+        // el adorno que no se puede apagar, así que una hoja que anime tiene que
+        // **neutralizar** cada animación declarada dentro de un bloque
+        // `@media (prefers-reduced-motion: reduce)`.
+
+        // 1. Incumple si anima y no neutraliza.
+        assert!(
+            incumple_movimiento(ANIMADA_SIN_FRENO),
+            "una hoja que anima y no neutraliza dentro de `@media \
+             (prefers-reduced-motion: reduce)` tiene que incumplir: {ANIMADA_SIN_FRENO:?}"
+        );
+
+        // 2. Cumple si neutraliza.
+        assert!(
+            !incumple_movimiento(ANIMADA_CON_FRENO),
+            "una hoja que anima **y** neutraliza dentro de `@media \
+             (prefers-reduced-motion: reduce)` tiene que cumplir: {ANIMADA_CON_FRENO:?}"
+        );
+
+        // 3. Una hoja sin animación cumple sin declarar nada.
+        assert!(
+            !incumple_movimiento(QUIETA),
+            "una hoja sin animación tiene que cumplir sin declarar nada: {QUIETA:?}"
+        );
+
+        // Y el barrido de las hojas embebidas: hoy ninguna de las seis anima, así
+        // que cumplen por vacío; el día que una anime, esta guarda es la que lo
+        // exige.
         let mut fallos = Vec::new();
 
         for theme in THEMES.iter() {
             for incumplimiento in incumplimientos(theme.embedded) {
                 if let Incumplimiento::Movimiento(token) = incumplimiento {
                     fallos.push(format!(
-                        "la hoja del tema `{}` anima con `{token}` y no declara \
-                         `prefers-reduced-motion`",
+                        "la hoja del tema `{}` anima con `{token}` y no neutraliza la animación \
+                         dentro de `@media (prefers-reduced-motion: reduce)`",
                         theme.name
                     ));
                 }
@@ -856,6 +948,101 @@ body { background: url(foto.png); }
             "una hoja que anima tiene que poder apagarse ({} incumplimiento(s)):\n- {}",
             fallos.len(),
             fallos.join("\n- ")
+        );
+    }
+
+    #[test]
+    fn una_hoja_que_solo_nombra_prefers_reduced_motion_incumple() {
+        // Nombrar la media query no es apagar nada: si el bloque existe pero su
+        // contenido es **solo un comentario**, la animación declarada sigue viva.
+        assert!(
+            incumple_movimiento(NOMBRA_SIN_NEUTRALIZAR),
+            "nombrar `prefers-reduced-motion` no neutraliza nada: el bloque reduce trae solo un \
+             comentario, así que la animación declarada sigue viva y la hoja tiene que incumplir. \
+             Hoja: {NOMBRA_SIN_NEUTRALIZAR:?}"
+        );
+    }
+
+    #[test]
+    fn una_media_query_que_no_es_la_de_movimiento_reducido_no_basta() {
+        // Neutralizar bajo `no-preference` no cuenta: quien pide movimiento
+        // reducido no ve ese bloque, así que no es la puerta que el usuario cierra.
+        assert!(
+            incumple_movimiento(NEUTRALIZA_BAJO_LA_OTRA_PREFERENCIA),
+            "neutralizar bajo `prefers-reduced-motion: no-preference` no es la puerta que el \
+             usuario cierra, así que la hoja tiene que incumplir. \
+             Hoja: {NEUTRALIZA_BAJO_LA_OTRA_PREFERENCIA:?}"
+        );
+    }
+
+    #[test]
+    fn un_bloque_reduce_vacio_no_basta() {
+        // El bloque tiene que existir **y** tener la neutralización: uno vacío no
+        // apaga nada, que es el agujero medido.
+        assert!(
+            incumple_movimiento(REDUCE_VACIO),
+            "el bloque `@media (prefers-reduced-motion: reduce)` tiene que **tener** la \
+             neutralización: uno vacío no apaga nada, así que la hoja tiene que incumplir. \
+             Hoja: {REDUCE_VACIO:?}"
+        );
+    }
+
+    #[test]
+    fn un_bloque_reduce_que_neutraliza_la_animacion_cumple() {
+        // La forma canónica: hay `@keyframes`, hay declaración que los usa y el
+        // bloque reduce neutraliza esa animación.
+        assert!(
+            !incumple_movimiento(REDUCE_QUE_NEUTRALIZA),
+            "una hoja que anima y neutraliza su animación dentro del bloque reduce tiene que \
+             cumplir: {REDUCE_QUE_NEUTRALIZA:?}"
+        );
+    }
+
+    #[test]
+    fn neutralizar_otra_animacion_distinta_de_la_declarada_no_basta() {
+        // Cada animación declarada tiene que quedar neutralizada por la forma que
+        // le corresponde: `animation: none` no apaga una transición.
+        assert!(
+            incumple_movimiento(REDUCE_QUE_NEUTRALIZA_OTRA),
+            "la hoja declara una `transition` y el bloque reduce solo trae `animation: none`: la \
+             transición declarada sigue sin neutralizarse, así que la hoja tiene que incumplir. \
+             Hoja: {REDUCE_QUE_NEUTRALIZA_OTRA:?}"
+        );
+    }
+
+    #[test]
+    fn una_animacion_declarada_dentro_del_bloque_reduce_no_se_neutraliza_sola() {
+        // El bloque reduce tiene que **apagar**, no animar: una animación
+        // declarada dentro del propio bloque no neutraliza la que la hoja anima.
+        assert!(
+            incumple_movimiento(REDUCE_QUE_ANIMA),
+            "el bloque reduce trae una declaración que **anima** en vez de apagar, así que no \
+             neutraliza nada y la hoja tiene que incumplir. Hoja: {REDUCE_QUE_ANIMA:?}"
+        );
+    }
+
+    #[test]
+    fn unos_fotogramas_sin_declaracion_que_los_use_no_obligan() {
+        // `@keyframes` define fotogramas y no anima mientras ninguna declaración
+        // los use: exigirle la media query a una hoja que no puede animar sería
+        // medir algo distinto del contrato.
+        assert!(
+            !incumple_movimiento(SOLO_FOTOGRAMAS),
+            "una hoja cuyo único contenido son `@keyframes` —sin ninguna declaración de \
+             `animation` ni de `transition`— tiene que cumplir sin necesitar el bloque reduce, \
+             porque definir fotogramas no anima nada. Hoja: {SOLO_FOTOGRAMAS:?}"
+        );
+    }
+
+    #[test]
+    fn una_regla_anidada_dentro_del_bloque_reduce_cuenta() {
+        // La neutralización vive en una regla anidada y **no** es la primera que
+        // se cierra: el bloque se delimita por su llave de apertura y **su** cierre
+        // equilibrado, así que la neutralizadora —que va después— cuenta igual.
+        assert!(
+            !incumple_movimiento(REDUCE_CON_REGLA_ANIDADA),
+            "la neutralización dentro de una regla anidada del bloque reduce tiene que contar, \
+             aunque no sea la primera regla que se cierra: {REDUCE_CON_REGLA_ANIDADA:?}"
         );
     }
 
