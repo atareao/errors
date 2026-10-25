@@ -53,6 +53,9 @@
 //! - Solo se resuelven **códigos de error utilizables** (`400..=599`): una
 //!   fuente que aporte otro código se considera **vacía** y se continúa con la
 //!   siguiente. Ver [`is_usable_code`].
+//! - `canonical_reason` y `description` son la **fuente única** del texto de los
+//!   cuatro formatos —HTML, JSON, XML y texto—: la razón y la descripción se
+//!   escriben una sola vez, aquí, y el HTML las incrusta al servir.
 
 use axum::http::StatusCode;
 
@@ -226,14 +229,20 @@ pub fn canonical_reason(code: u16) -> &'static str {
 }
 
 /// Descripción larga del código; genérica para los códigos no tabulados.
+///
+/// Es **la fuente única** del texto de los cuatro formatos: el HTML la incrusta
+/// al servir (rellenando `{{description}}`), y JSON, XML y texto la llevan tal
+/// cual. Por eso la redacción no puede tener dos versiones —antes el `<p>` de las
+/// páginas HTML escribía la suya a mano y cinco códigos decían una cosa en HTML y
+/// otra en JSON—.
 pub fn description(code: u16) -> &'static str {
     match code {
-        400 => "The server could not understand the request because of invalid syntax.",
-        401 => "Authentication is required and has either failed or not been provided.",
+        400 => "The server cannot process the request because the client sent something malformed.",
+        401 => "Authentication is required, and has either failed or not been provided.",
         403 => "The server understood the request but refuses to authorise it.",
         404 => "The requested resource could not be found on this server.",
-        405 => "The request method is known by the server but is not supported by the resource.",
-        408 => "The server timed out waiting for the request.",
+        405 => "The request method is not supported by the resource you asked for.",
+        408 => "The server timed out waiting for the client to finish sending the request.",
         410 => "The resource requested is no longer available and will not be available again.",
         418 => "The server is a teapot: it refuses to brew coffee.",
         422 => "The request was well-formed but could not be processed due to semantic errors.",
@@ -247,7 +256,7 @@ pub fn description(code: u16) -> &'static str {
             "The service is temporarily unavailable, usually because of maintenance or overload. \
              Please try again later."
         }
-        504 => "The server did not receive a timely response from an upstream server.",
+        504 => "An upstream server did not send a response in time.",
         _ => UNKNOWN_DESCRIPTION,
     }
 }

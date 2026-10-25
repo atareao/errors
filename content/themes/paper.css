@@ -1,9 +1,11 @@
 /* Hoja del tema `paper`.
  *
- * Es la hoja de las once páginas de error (400, 401, 403, 404, 405, 408, 429,
- * 500, 502, 503 y 504). El servidor la incrusta en el HTML al servir,
- * sustituyendo el `<link>` de la página por un bloque de estilo con estas
- * reglas, así que no puede referenciar recursos externos ni animarse.
+ * Es la hoja de la página de error: una sola página sirve cualquier código, y
+ * su código, su razón y su descripción los rellena el servidor al servir. El
+ * servidor la incrusta en el HTML al servir, sustituyendo el `<link>` de la
+ * página por un bloque de estilo con estas reglas, así que no puede referenciar
+ * recursos externos: nada de hojas importadas ni de ficheros remotos.
+ * Si animase, tendría que declarar `prefers-reduced-motion`.
  *
  * Serif y fondo crema: el aire de un documento impreso. Márgenes generosos y
  * una regla discreta. El marcado lleva la clase `c<código>` en el `body`, pero

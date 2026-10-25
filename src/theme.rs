@@ -1,7 +1,9 @@
 //! Temas de las páginas de error: nombre, hoja y bytes embebidos.
 //!
 //! Un **tema** es **una sola hoja de estilos**: añadir un tema es añadir un
-//! fichero, no duplicar las once páginas. El HTML que se sirve es autocontenido
+//! fichero, no duplicar la página. Hay **una página** —la del código por
+//! defecto, con `{{code}}`, `{{reason}}` y `{{description}}`, que se rellenan al
+//! servir— y **una hoja por tema**. El HTML que se sirve es autocontenido
 //! —[`crate::render`] sustituye el marcador `<link rel="stylesheet"
 //! href="/css/error.css" />` por un `<style>` con la hoja del tema elegido—, así
 //! que el navegador no pide ningún fichero para ver la página.
@@ -47,6 +49,37 @@
 //! servicio publica. Resolviendo las dos por la misma regla, discrepar es
 //! imposible; y la hoja se lee **al servir**, así que un operador que edite su
 //! hoja la ve cambiar sin reiniciar, como le pasa hoy con sus páginas.
+//!
+//! # Los dos contratos de una hoja de tema
+//!
+//! Una hoja **incorporada al binario** tiene que cumplir dos cosas, y son dos
+//! cosas distintas:
+//!
+//! 1. **No puede hacer que el navegador pida nada por la red.** Nada de
+//!    `@import` —en ninguna de sus formas, incluida `@import "otra.css";`, que no
+//!    lleva `url(`—, y nada de `url(...)` que no sea `url(#…)`: una referencia al
+//!    propio documento, como un filtro o un degradado SVG. Un `@font-face` con
+//!    `src: local(...)` **no** incumple —usa una fuente ya instalada, y solo
+//!    podría pedir algo por la red a través de las dos formas que ya están
+//!    prohibidas—.
+//! 2. **Si anima, tiene que poder apagarse.** `animation`, `transition` y
+//!    `@keyframes` son cómputo local: no piden nada. Animar es una decisión de
+//!    aspecto, no un defecto de autocontención. Pero una hoja que anime tiene que
+//!    declarar `prefers-reduced-motion`: una página de error que se mueve
+//!    mientras el usuario intenta leer qué ha pasado es peor página de error.
+//!
+//! Las dos guardas —`ninguna_hoja_puede_hacer_una_peticion` y
+//! `una_hoja_que_anima_respeta_reduced_motion`— miden **estos dos contratos y
+//! nada más**, y cubren las hojas **incorporadas**: la hoja del operador en
+//! `CONTENT_DIR` es suya, y el servicio **no** parsea CSS al servir —la hoja es
+//! adorno y un CSS roto no puede tumbar una página—. La comprobación vive en el
+//! módulo de pruebas porque es de **lo que el proyecto entrega**, y corre en
+//! `cargo test`, no en el servidor.
+//!
+//! En los dos casos la guarda mira las **reglas**, no la prosa: los comentarios
+//! `/* … */` de la hoja no cuentan —un comentario no pide nada ni anima—, así que
+//! la cabecera que documenta por escrito qué no puede hacer una hoja no puede
+//! convertirse ella misma en un incumplimiento.
 
 use crate::embedded;
 use std::io::ErrorKind;
@@ -76,9 +109,13 @@ pub struct Theme {
 /// `default` es la hoja que el proyecto ya trae (reglas intactas: quien no
 /// configure `THEME` no ve ningún cambio de aspecto) y comparte la constante
 /// [`embedded::DEFAULT_SHEET`] con el asset `/css/error.css`: un solo
-/// `include_bytes!`, cero copias de los mismos bytes. Los cinco restantes son
-/// deliberadamente **sobrios** —sin animaciones, sin imágenes, sin recursos
-/// externos—: son páginas de **error**, y su trabajo es decir qué ha pasado.
+/// `include_bytes!`, cero copias de los mismos bytes. Los cinco restantes
+/// comparten una **decisión de diseño**, no un contrato: son deliberadamente
+/// **sobrios** —sin adornos que compitan con el mensaje— porque son páginas de
+/// **error** y su trabajo es decir qué ha pasado. Lo que sí es contrato lo miden
+/// las guardas del módulo de pruebas: no poder provocar una petición, y poder
+/// apagar el movimiento. Una hoja que anime respetando `prefers-reduced-motion`
+/// cumple el contrato.
 ///
 /// Es un `static` y no una `const` **a propósito**: el campo `embedded` del tema
 /// `default` apunta al `static` de tipo array [`embedded::DEFAULT_SHEET_BYTES`],
@@ -194,9 +231,221 @@ impl Theme {
     }
 }
 
+/// Un incumplimiento de un contrato por una hoja de tema **incorporada**.
+///
+/// Existe para poder comprobar cada cláusula del contrato con un caso pequeño,
+/// en lugar de solo el conjunto sobre las seis hojas del binario: la
+/// comprobación deja de ser un bucle dentro de una prueba y pasa a ser una
+/// función pura sobre bytes.
+///
+/// Va bajo `#[cfg(test)]` **a propósito**: el servicio no valida CSS —ni al
+/// arrancar ni al servir—, así que este código existe solo para `cargo test`,
+/// que es donde se comprueba **lo que el proyecto entrega**. El binario no lo
+/// lleva.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Incumplimiento {
+    /// La hoja puede hacer que el navegador **pida** algo por la red. Lleva
+    /// consigo el token que lo provoca —`@import`, o `url(` cuando su destino
+    /// **no** es el propio documento—, para que el incumplimiento se pueda
+    /// nombrar en el mensaje.
+    Peticion(&'static str),
+    /// La hoja anima con ese token —`animation`, `transition` o `keyframes`— y
+    /// no declara `prefers-reduced-motion`. Lleva consigo el token que anima.
+    Movimiento(&'static str),
+}
+
+/// Los contratos que incumple una hoja de tema, con el token que los rompe.
+///
+/// Son dos, y son dos cosas distintas:
+///
+/// 1. **No poder hacer que el navegador pida nada por la red.** `@import` en
+///    cualquiera de sus formas —incluida `@import "otra.css";`, que no lleva
+///    `url(`—, y cualquier `url(...)` cuyo destino no sea **el propio
+///    documento**. `url(#…)` —un filtro o un degradado SVG— **no** cuenta: es
+///    una referencia interna y no hay ninguna petición que hacer.
+/// 2. **Si anima, poder apagarlo.** `animation`, `transition` y `@keyframes` son
+///    cómputo local: el navegador los ejecuta sin pedir nada a nadie, así que
+///    animar es una decisión de aspecto. Pero una hoja que anime tiene que
+///    declarar `prefers-reduced-motion`.
+///
+/// `@font-face` **no** está prohibido, y el motivo importa: solo puede pedir
+/// algo por la red a través de `url(...)` o `@import`, que ya están prohibidos, y
+/// un `src: local(...)` usa una fuente que el usuario **ya tiene instalada**.
+/// Prohibirlo era prohibir un token sospechoso en vez de un contrato.
+///
+/// La detección es **literal y sensible a mayúsculas**: las hojas son del
+/// proyecto y van en minúsculas.
+///
+/// SHALL mirar las **reglas**, no la prosa: los comentarios `/* … */` NO cuentan
+/// como una petición ni como una animación, porque un comentario no puede hacer
+/// que el navegador pida nada. Se quitan antes de escanear, con
+/// [`hoja_sin_comentarios`], y el motivo importa: las cabeceras de las hojas
+/// documentan por escrito qué no pueden hacer, así que leerlas como si fueran
+/// reglas convertiría la propia documentación de la hoja en un incumplimiento.
+/// El limpiador respeta además las **cadenas** —dentro de un `"…"` un `/*` es un
+/// literal, no un comentario—, así que un `content: "/*";` no puede llevarse por
+/// delante el resto de la hoja y esconder una petición de verdad.
+///
+/// Va bajo `#[cfg(test)]` **a propósito**: el servicio no valida CSS —ni al
+/// arrancar ni al servir—, así que este código existe solo para `cargo test`,
+/// que es donde se comprueba **lo que el proyecto entrega**. El binario no lo
+/// lleva.
+#[cfg(test)]
+pub fn incumplimientos(hoja: &[u8]) -> Vec<Incumplimiento> {
+    let mut fallos = Vec::new();
+    let hoja = hoja_sin_comentarios(hoja);
+
+    if let Some(token) = token_que_pide(&hoja) {
+        fallos.push(Incumplimiento::Peticion(token));
+    }
+
+    if let Some(token) = token_que_anima(&hoja)
+        && !puede_apagarse(&hoja)
+    {
+        fallos.push(Incumplimiento::Movimiento(token));
+    }
+
+    fallos
+}
+
+/// La hoja **sin sus comentarios** `/* … */`.
+///
+/// Un comentario no es una regla: no puede hacer que el navegador pida nada ni
+/// puede animar, así que no puede incumplir ninguno de los dos contratos. Sin
+/// esto, la propia documentación de una hoja —su cabecera diciendo qué no puede
+/// hacer— contaría como un incumplimiento y la guarda mediría algo distinto de
+/// lo que anuncia.
+///
+/// El limpiador es **textual**, pero conoce las **cadenas**: dentro de un `"…"` o
+/// un `'…'` un `/*` no abre nada —es CSS válido, un literal o una URL con barras
+/// de directorio—, así que las cadenas se copian tal cual, saltando sus escapes
+/// (`\"`). Sin eso, un `content: "/*";` se llevaría por delante el resto de la
+/// hoja y **escondería** un incumplimiento de verdad, que es peor que el defecto
+/// que el limpiador viene a arreglar.
+///
+/// Un `/*` que **no** cierra se lleva el resto de la hoja: nadie puede recuperar
+/// lo que está dentro de un comentario sin cerrar.
+#[cfg(test)]
+fn hoja_sin_comentarios(hoja: &[u8]) -> Vec<u8> {
+    let mut salida = Vec::with_capacity(hoja.len());
+    let mut i = 0;
+
+    while i < hoja.len() {
+        match hoja[i] {
+            b'/' if hoja.get(i + 1) == Some(&b'*') => {
+                match crate::render::busca(&hoja[i + 2..], b"*/") {
+                    Some(cierre) => i += 2 + cierre + 2,
+                    None => return salida,
+                }
+            }
+            comilla @ (b'"' | b'\'') => {
+                salida.push(comilla);
+                i += 1;
+
+                while i < hoja.len() {
+                    let byte = hoja[i];
+                    salida.push(byte);
+                    i += 1;
+
+                    if byte == b'\\' {
+                        if let Some(escapado) = hoja.get(i) {
+                            salida.push(*escapado);
+                            i += 1;
+                        }
+                    } else if byte == comilla {
+                        break;
+                    }
+                }
+            }
+            byte => {
+                salida.push(byte);
+                i += 1;
+            }
+        }
+    }
+
+    salida
+}
+
+/// El token que puede provocar una petición, si lo hay: `@import` manda sobre
+/// `url(`, porque una hoja que importa otra puede no llevar ningún `url(`.
+#[cfg(test)]
+fn token_que_pide(hoja: &[u8]) -> Option<&'static str> {
+    if contiene(hoja, "@import") {
+        return Some("@import");
+    }
+
+    if tiene_url_externa(hoja) {
+        return Some("url(");
+    }
+
+    None
+}
+
+/// El primer token que anima, si lo hay.
+#[cfg(test)]
+fn token_que_anima(hoja: &[u8]) -> Option<&'static str> {
+    ["animation", "transition", "keyframes"]
+        .into_iter()
+        .find(|token| contiene(hoja, token))
+}
+
+/// ¿La hoja declara que el movimiento se puede apagar?
+#[cfg(test)]
+fn puede_apagarse(hoja: &[u8]) -> bool {
+    contiene(hoja, "prefers-reduced-motion")
+}
+
+/// ¿La hoja trae algún `url(...)` cuyo destino **no** sea el propio documento?
+///
+/// `url(#gradiente)` apunta a un elemento del propio documento —un filtro o un
+/// degradado SVG—, así que no hay petición que hacer y **no** cuenta. Cualquier
+/// otro destino sí: una ruta relativa (`url(foto.png)`), una absoluta
+/// (`url(https://…)`) o una entrecomillada.
+///
+/// Un `url()` vacío o un `url(` sin cerrar también cuentan como petición: son
+/// hojas rotas, y rechazar de más es la dirección segura para un contrato que
+/// existe para que la página no dependa de la red.
+///
+/// El token es `url(` **sin** espacio: la sintaxis de CSS no admite espacio entre
+/// el nombre de la función y el paréntesis, así que `url (x)` no es un `url()`.
+#[cfg(test)]
+fn tiene_url_externa(hoja: &[u8]) -> bool {
+    const AGUJA: &[u8] = b"url(";
+    let mut desde = 0;
+
+    while let Some(pos) = crate::render::busca(hoja.get(desde..).unwrap_or_default(), AGUJA) {
+        let inicio = desde + pos + AGUJA.len();
+        let destino = hoja
+            .get(inicio..)
+            .unwrap_or_default()
+            .iter()
+            .find(|byte| !byte.is_ascii_whitespace());
+
+        if destino != Some(&b'#') {
+            return true;
+        }
+
+        desde = inicio;
+    }
+
+    false
+}
+
+/// ¿`pajar` contiene `aguja`? Decodifica con pérdida y compara como texto: para
+/// agujas ASCII —las únicas que se buscan aquí— es lo mismo que comparar bytes.
+#[cfg(test)]
+fn contiene(pajar: &[u8], aguja: &str) -> bool {
+    String::from_utf8_lossy(pajar).contains(aguja)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_THEME_NAME, THEME_NAMES, THEMES, default_theme, resolve, theme_by_name};
+    use super::{
+        DEFAULT_THEME_NAME, Incumplimiento, THEME_NAMES, THEMES, default_theme, incumplimientos,
+        resolve, theme_by_name,
+    };
     use crate::embedded;
     use std::path::PathBuf;
 
@@ -391,8 +640,8 @@ mod tests {
     #[test]
     fn cada_hoja_cubre_el_marcado() {
         // Sin esto, un tema que se olvide de un elemento deja una página a medio
-        // vestir y nadie se entera: las cinco etiquetas son las que llevan las
-        // once páginas de error.
+        // vestir y nadie se entera: las cinco etiquetas son las que lleva la
+        // única página de error.
         let mut fallos = Vec::new();
 
         for theme in THEMES.iter() {
@@ -417,28 +666,26 @@ mod tests {
     }
 
     #[test]
-    fn ninguna_hoja_referencia_recursos_externos() {
-        // Una página que necesita la red para verse es el mismo defecto que este
-        // change corrige, así que ninguna hoja puede traer un `@import`, un
-        // `url(…)`, una fuente descargada ni una animación.
-        const PROHIBIDOS: [&str; 6] = [
-            "@import",
-            "url(",
-            "@font-face",
-            "animation",
-            "transition",
-            "keyframes",
-        ];
-
+    fn ninguna_hoja_puede_hacer_una_peticion() {
+        // El primer contrato: una hoja **incorporada** no puede hacer que el
+        // navegador **pida** algo por la red. El motivo es el del requisito
+        // «El HTML servido es autocontenido»: la página se sirve en el host de la
+        // aplicación, donde este servicio no sirve assets, así que ese pedido no
+        // lo puede resolver nadie. `@import` carga otra hoja —y en su forma
+        // `@import "otra.css";` ni siquiera lleva `url(`—, y un `url(...)` que no
+        // sea una referencia al **propio documento** pide un fichero. `url(#…)`
+        // —un filtro o un degradado SVG— y un `@font-face` con `src: local(...)`
+        // **no** cuentan: apuntan al propio documento o a una fuente ya
+        // instalada, así que no hay ninguna petición que hacer. Animar **no**
+        // pertenece a este contrato: lo mide la guarda de al lado.
         let mut fallos = Vec::new();
 
         for theme in THEMES.iter() {
-            let hoja = String::from_utf8_lossy(theme.embedded);
-
-            for prohibido in PROHIBIDOS {
-                if hoja.contains(prohibido) {
+            for incumplimiento in incumplimientos(theme.embedded) {
+                if let Incumplimiento::Peticion(token) = incumplimiento {
                     fallos.push(format!(
-                        "la hoja del tema `{}` contiene `{prohibido}`",
+                        "la hoja del tema `{}` contiene `{token}`: el navegador tendría que pedir \
+                         algo por la red",
                         theme.name
                     ));
                 }
@@ -447,9 +694,238 @@ mod tests {
 
         assert!(
             fallos.is_empty(),
-            "ninguna hoja puede referenciar recursos externos ({} incumplimiento(s)):\n- {}",
+            "ninguna hoja puede hacer que el navegador pida algo por la red ({} \
+             incumplimiento(s)):\n- {}",
             fallos.len(),
             fallos.join("\n- ")
+        );
+    }
+
+    /// Una hoja que solo se refiere al **propio documento**: `url(#gradiente)`
+    /// es un filtro o degradado SVG y `src: local("Arial")` usa una fuente que
+    /// el usuario ya tiene instalada. No hay ninguna petición que hacer.
+    const AUTOCONTENIDA: &str = r#"
+.caja { fill: url(#gradiente); }
+@font-face { font-family: Arial; src: local("Arial"); }
+"#;
+
+    /// Una hoja que anima y **sabe apagarse**.
+    const ANIMADA_CON_FRENO: &str = r#"
+@keyframes parpadeo { from { opacity: 1 } to { opacity: 0 } }
+body { animation: parpadeo 2s infinite; }
+@media (prefers-reduced-motion: reduce) { body { animation: none; } }
+"#;
+
+    /// Una hoja que anima y **no** sabe apagarse.
+    const ANIMADA_SIN_FRENO: &str = r#"
+body { transition: opacity 0.2s; }
+"#;
+
+    /// Una hoja quieta: no pide nada y no anima.
+    const QUIETA: &str = r#"
+body { color: #222; }
+"#;
+
+    /// Las tres formas de pedir un fichero que el contrato prohíbe, con el token
+    /// que cada una tiene que delatar: una ruta relativa y una absoluta delatan
+    /// `url(`, y un `@import` —que no lleva `url(`— delata `@import`.
+    const PIDEN_FICHERO: [(&str, &str); 3] = [
+        (r#"body { background: url(foto.png); }"#, "url("),
+        (
+            r#"body { background: url(https://ejemplo/x.png); }"#,
+            "url(",
+        ),
+        (r#"@import "otra.css";"#, "@import"),
+    ];
+
+    /// El mismo contrato, pero **en prosa**: la hoja lo dice en su cabecera y no
+    /// lo hace en ninguna regla. Un comentario no pide nada y no anima.
+    const COMENTADA: &str = r#"
+/* Esta hoja no usa `animation` ni `@import`, y no referencia `url(` remotos. */
+body { color: #222; }
+"#;
+
+    /// La prosa **y** la regla: el `url(` del comentario no puede tapar la
+    /// petición de verdad.
+    const COMENTADA_CON_PETICION: &str = r#"
+/* Nada de `url(` remotos por aquí. */
+body { background: url(foto.png); }
+"#;
+
+    /// Un comentario que abre y no cierra: lo que queda detrás es comentario, así
+    /// que no hay ninguna regla que pueda incumplir nada.
+    const COMENTARIO_ABIERTO: &str = r#"
+/* sin cerrar: `animation` y `@import` aquí dentro ya no son reglas
+body { color: #222; }
+"#;
+
+    /// Varias referencias, todas internas, con espacios y con un fragmento vacío
+    /// de por medio: el bucle tiene que recorrerlas todas sin confundirse.
+    const AUTOCONTENIDA_MULTIPLE: &str = r#"
+.a { fill: url(#uno); }
+.b { fill: url(  #dos  ); }
+.c { fill: url(#); }
+"#;
+
+    /// Dos referencias en la **misma** declaración: la primera interna y la
+    /// segunda externa. La segunda no puede pasar desapercibida.
+    const INTERNA_Y_EXTERNA: &str = r#"
+.a { background: image-set(url(#uno) 1x, url(foto.png) 2x); }
+"#;
+
+    /// Una cadena que **contiene** `/*`: es CSS válido —un literal, o una URL con
+    /// barras de directorio—, no abre ningún comentario, y por tanto no puede
+    /// tapar la petición que venga detrás.
+    const CADENA_CON_BARRAS: &str = r#"
+a::before { content: "/*"; }
+body { background: url(foto.png); }
+"#;
+
+    #[test]
+    fn una_referencia_al_propio_documento_no_es_una_peticion() {
+        assert!(
+            incumplimientos(AUTOCONTENIDA.as_bytes()).is_empty(),
+            "`url(#…)` y `src: local(…)` no son peticiones: no hay nada que el navegador tenga que \
+             pedir, así que la hoja tiene que cumplir el contrato. Hoja: {AUTOCONTENIDA:?}"
+        );
+    }
+
+    #[test]
+    fn una_hoja_que_pide_un_fichero_incumple() {
+        for (hoja, token) in PIDEN_FICHERO {
+            assert!(
+                incumplimientos(hoja.as_bytes()).contains(&Incumplimiento::Peticion(token)),
+                "esta hoja pide un fichero con `{token}` y tiene que incumplirlo **nombrando ese \
+                 token**: {hoja:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn una_hoja_que_anima_solo_cumple_si_se_puede_apagar() {
+        // El contrato de movimiento, cláusula a cláusula, con casos pequeños:
+        // una hoja que anima y no se puede apagar incumple; una que anima y
+        // declara la media query cumple; y una quieta cumple sin declarar nada.
+        assert!(
+            incumplimientos(ANIMADA_SIN_FRENO.as_bytes())
+                .iter()
+                .any(|i| matches!(i, Incumplimiento::Movimiento(_))),
+            "una hoja que anima y no declara `prefers-reduced-motion` tiene que incumplir: \
+             {ANIMADA_SIN_FRENO:?}"
+        );
+        assert!(
+            incumplimientos(ANIMADA_CON_FRENO.as_bytes()).is_empty(),
+            "una hoja que anima **y** declara `prefers-reduced-motion` tiene que cumplir: \
+             {ANIMADA_CON_FRENO:?}"
+        );
+        assert!(
+            incumplimientos(QUIETA.as_bytes()).is_empty(),
+            "una hoja sin animación tiene que cumplir sin declarar nada: {QUIETA:?}"
+        );
+    }
+
+    #[test]
+    fn una_hoja_que_anima_respeta_reduced_motion() {
+        // El segundo contrato, sobre las hojas **incorporadas** al binario.
+        // Animar **no** es un defecto de autocontención: el navegador ejecuta la
+        // animación sin pedirle nada a nadie, es cómputo local, y por eso es una
+        // decisión de aspecto y no se prohíbe. Pero hay gente a la que el
+        // movimiento le produce mareo, y una página de error que se mueve
+        // mientras el usuario intenta leer qué ha pasado es peor página de error.
+        // La regla no prohíbe el adorno: prohíbe el adorno que no se puede
+        // apagar, así que una hoja que traiga `animation`, `transition` o
+        // `@keyframes` tiene que traer también `prefers-reduced-motion`. Hoy
+        // ninguna de las seis anima, así que cumplen por vacío; el día que una
+        // anime, esta guarda es la que lo exige.
+        let mut fallos = Vec::new();
+
+        for theme in THEMES.iter() {
+            for incumplimiento in incumplimientos(theme.embedded) {
+                if let Incumplimiento::Movimiento(token) = incumplimiento {
+                    fallos.push(format!(
+                        "la hoja del tema `{}` anima con `{token}` y no declara \
+                         `prefers-reduced-motion`",
+                        theme.name
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            fallos.is_empty(),
+            "una hoja que anima tiene que poder apagarse ({} incumplimiento(s)):\n- {}",
+            fallos.len(),
+            fallos.join("\n- ")
+        );
+    }
+
+    #[test]
+    fn una_hoja_quieta_cumple_los_dos_contratos() {
+        assert!(
+            incumplimientos(QUIETA.as_bytes()).is_empty(),
+            "una hoja que no pide nada y no anima tiene que cumplir: {QUIETA:?}"
+        );
+    }
+
+    #[test]
+    fn un_comentario_no_es_una_peticion_ni_una_animacion() {
+        assert!(
+            incumplimientos(COMENTADA.as_bytes()).is_empty(),
+            "un `url(`, un `@import` o un `animation` dentro de un comentario no son el contrato: \
+             un comentario no puede hacer que el navegador pida nada ni puede animar. \
+             Hoja: {COMENTADA:?}"
+        );
+        assert!(
+            incumplimientos(COMENTADA_CON_PETICION.as_bytes())
+                .iter()
+                .any(|i| matches!(i, Incumplimiento::Peticion(_))),
+            "limpiar los comentarios no puede tapar una petición de verdad: el comentario menciona \
+             `url(` y la regla trae un `url(foto.png)`. Hoja: {COMENTADA_CON_PETICION:?}"
+        );
+    }
+
+    #[test]
+    fn un_comentario_sin_cerrar_se_ignora() {
+        assert!(
+            incumplimientos(COMENTARIO_ABIERTO.as_bytes()).is_empty(),
+            "un comentario que abre y no cierra llega hasta el final de la hoja: lo que queda \
+             detrás es prosa, no reglas. Hoja: {COMENTARIO_ABIERTO:?}"
+        );
+    }
+
+    #[test]
+    fn el_contrato_de_red_mira_todas_las_referencias() {
+        assert!(
+            incumplimientos(AUTOCONTENIDA_MULTIPLE.as_bytes()).is_empty(),
+            "varias referencias internas —una con espacios de por medio y otra con el fragmento \
+             vacío— siguen sin ser peticiones: {AUTOCONTENIDA_MULTIPLE:?}"
+        );
+        assert!(
+            incumplimientos(INTERNA_Y_EXTERNA.as_bytes())
+                .contains(&Incumplimiento::Peticion("url(")),
+            "una interna **y** una externa en la misma declaración: la externa tiene que \
+             detectarse igual: {INTERNA_Y_EXTERNA:?}"
+        );
+    }
+
+    #[test]
+    fn una_cadena_con_barras_no_abre_un_comentario() {
+        assert!(
+            incumplimientos(CADENA_CON_BARRAS.as_bytes())
+                .contains(&Incumplimiento::Peticion("url(")),
+            "un `/*` dentro de una cadena es CSS válido, no un comentario: no puede tapar el \
+             `url(foto.png)` que viene detrás. Hoja: {CADENA_CON_BARRAS:?}"
+        );
+        assert!(
+            incumplimientos(br#"a { background: url("a/*b.png"); }"#)
+                .contains(&Incumplimiento::Peticion("url(")),
+            "una URL con `/*` dentro sigue siendo una petición externa"
+        );
+        assert!(
+            incumplimientos(br#"/* El operador dice: "no uses url( remotos". */ body { background: url(foto.png); }"#)
+                .contains(&Incumplimiento::Peticion("url(")),
+            "una comilla dentro de un comentario no puede desactivar el limpiador: el comentario se \
+             va entero y la petición de detrás tiene que seguir viéndose"
         );
     }
 
