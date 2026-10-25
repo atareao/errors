@@ -66,3 +66,23 @@ jobs:
       # sin él se quedan en el log y el fichero deriva a permitir de más.
       - name: Avisos, licencias, duplicaciones y fuentes
         run: cargo deny check -D warnings
+
+  # Puerta del empaquetado. Faltaba, y su ausencia salió cara: hasta hoy la única
+  # forma de construir la imagen era el workflow de release, que se dispara al
+  # etiquetar, así que un `Dockerfile` que dejara de compilar solo se descubría
+  # publicando —pasó con la etiqueta `v0.4.0`: `exit code 101` y ningún artefacto—.
+  # Va aparte de las tres puertas porque no necesita Rust ni el árbol de
+  # dependencias de Cargo: solo el docker del runner. El `name` del job es lo que
+  # se marca como «check» requerido en la protección de rama.
+  imagen:
+    name: imagen
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Sin caché a propósito: lo que se comprueba es que la imagen se construye
+      # **desde el árbol**, en frío, como en un host cualquiera. Una caché de
+      # capas taparía justo el fallo que esta puerta viene a cazar —un `COPY` que
+      # falta y que una capa ya construida esquiva—.
+      - name: Construir la imagen
+        run: docker build --tag errserve:ci .
