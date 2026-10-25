@@ -59,7 +59,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::uri::{PathAndQuery, Uri};
-use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::routing::get;
@@ -152,9 +152,13 @@ fn build_router(config: &Config) -> Router {
         // hereda su `X-Robots-Tag`).
         .route("/metrics", get(metrics))
         // Los assets se sirven desde la **única** ruta de estáticos, la misma
-        // que usa el render del HTML (`CONTENT_DIR`).
+        // que usa el render del HTML (`CONTENT_DIR`). El respaldo del
+        // `ServeDir` sirve la copia **embebida** cuando no hay fichero: así un
+        // binario instalado sin ficheros de datos sirve su hoja igual (D2).
         .fallback_service(
-            ServeDir::new(&config.content_dir).append_index_html_on_directories(false),
+            ServeDir::new(&config.content_dir)
+                .append_index_html_on_directories(false)
+                .fallback(embedded_assets()),
         )
         // El middleware se añade después de las rutas: axum solo envuelve lo
         // que ya existe, y el *fallback* es una de esas cosas.
@@ -169,6 +173,81 @@ fn build_router(config: &Config) -> Router {
         // encontrarse un cuerpo ya comprimido ni escribir un `Content-Length`
         // que ya no corresponde a lo que se envía.
         .layer(CompressionLayer::new())
+}
+
+/// Servicio de respaldo de `ServeDir`: sirve los assets **embebidos** cuando no
+/// hay ningún fichero en `CONTENT_DIR`.
+///
+/// Es el segundo escalón de D2. `ServeDir` sigue intentando el disco primero
+/// —así el fichero de un operador gana cuando se puede leer (D1)— y solo cuando
+/// no encuentra el fichero cede el paso aquí. El `fallback` **no** altera el
+/// estado que devolvemos, así que un path que no esté en la tabla tiene que
+/// responder `404` —el middleware lo sustituye por la página de error— y no un
+/// `200` de más: lo fijan las pruebas 1.9 y 1.9c.
+///
+/// El camino corre en el hilo *async* —a diferencia del render, que va en
+/// `spawn_blocking` por la auditoría I-1—, y por eso aquí **no** hay E/S de
+/// disco: los bytes son la tabla en memoria de [`embedded`]. La forma es un
+/// `Router` de axum porque el `Service` que `ServeDir::fallback` espera es
+/// `tower::Service`, que este crate solo tiene como dependencia de desarrollo y
+/// no puede nombrar en producción; el `Router` **es** ese `Service` de verdad
+/// —`Clone + Send`, con un `poll_ready` que devuelve `Ready` sin bloquear— y no
+/// un cierre suelto.
+fn embedded_assets() -> Router {
+    Router::new().fallback(embedded_asset)
+}
+
+/// Respaldo de [`embedded_assets`]: el asset embebido del path, o `404`.
+///
+/// El path ya viene **normalizado** —el middleware [`error_pages`] reescribió la
+/// URI antes de ceder el paso, y `fold_components` pliega la barra final—, así
+/// que no hay una segunda forma de llegar al asset (tarea 3.3). La igualdad es
+/// **exacta**, sin prefijos ni subcadenas: lo que la discrimina es un path que
+/// **extiende** al del asset (`/css/error.css/extra`), que no tiene segmentos
+/// vacíos que plegar y llega entero al respaldo; una consulta con `starts_with`
+/// lo serviría con `200`.
+async fn embedded_asset(request: Request) -> Response {
+    let Some((bytes, content_type)) = embedded::asset(request.uri().path()) else {
+        return not_found_response();
+    };
+
+    let is_head = request.method() == Method::HEAD;
+
+    // A `HEAD` se le responde como al `GET` —estado y `Content-Type`— pero sin
+    // cuerpo; el `Content-Length` del asset se deja, que es lo que haría el
+    // `GET`.
+    let mut response = Response::new(if is_head {
+        Body::empty()
+    } else {
+        Body::from(bytes)
+    });
+
+    insert_header(
+        response.headers_mut(),
+        header::CONTENT_TYPE.as_str(),
+        content_type,
+    );
+
+    if is_head {
+        insert_header(
+            response.headers_mut(),
+            header::CONTENT_LENGTH.as_str(),
+            &bytes.len().to_string(),
+        );
+    }
+
+    response
+}
+
+/// `404` sin cuerpo: lo que un path fuera de la tabla de assets responde para
+/// que el middleware lo sustituya por la página de error.
+///
+/// Con `fallback` nadie corrige el estado de esta respuesta, así que devolver
+/// aquí un `200` de más saldría tal cual (D2).
+fn not_found_response() -> Response {
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = StatusCode::NOT_FOUND;
+    response
 }
 
 /// Arranque real: `Config::from_env()?`, `tracing`, `axum::serve` en
@@ -539,8 +618,15 @@ async fn error_response(state: &AppState, path: &NormalizedPath, hints: &Hints) 
         Ok(Err(err)) => {
             // Falta el HTML del código y el del código por defecto (o no se
             // pudo leer). El estado sigue siendo el código resuelto y nunca
-            // `500`: se responde el cuerpo de texto (auditoría I-2).
-            tracing::warn!(code, error = %err, "sin HTML de la página de error: se responde texto");
+            // `500`: se responde el cuerpo de texto (auditoría I-2). El mensaje
+            // no habla de «existe o no» porque cubre las dos causas, y la
+            // precisa —`MissingHtml` habla de las dos capas, `Io` de la lectura—
+            // viaja en el campo `error`.
+            tracing::warn!(
+                code,
+                error = %err,
+                "no se pudo obtener el HTML de la página de error: se responde texto"
+            );
             page_response(render_text_fallback(code, config.retry_after))
         }
         Err(err) => {
@@ -2207,13 +2293,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sin_directorio_la_hoja_con_barra_final_es_pagina_de_error() {
-        // tasks.md 1.9c (guarda): `ServeDir` trata `/css/error.css/` como
-        // `InvalidFilename` y entra al respaldo, así que la tabla —que compara
-        // el path de **forma exacta**— no puede casarlo: da la página de error,
-        // no un `200 text/css`.
+    async fn sin_directorio_un_path_que_extiende_al_asset_no_es_el_asset() {
+        // tasks.md 1.9c (guarda): la tabla de assets compara el path **de forma
+        // exacta**, no con prefijos ni subcadenas. El path que lo discrimina es
+        // uno que **extiende** al del asset, `/css/error.css/extra`: no tiene
+        // ningún segmento vacío que plegar (`src/path.rs::fold_components`,
+        // líneas 106-130), así que llega entero al respaldo de `ServeDir` y una
+        // consulta con `starts_with` o con `contains` devolvería la hoja con
+        // `200` y esta prueba se caería.
+        //
+        // Y no la barra final: `fold_components` descarta los segmentos vacíos
+        // (línea 111, `"" | "." => {}`) y reconstruye el path prefixando cada
+        // segmento con `/`, así que `/css/error.css/` es **`/css/error.css`**
+        // antes de llegar a `ServeDir` —`error_pages` reescribe la URI con esa
+        // cadena—. Una petición con barra final es indistinguible de la misma sin
+        // ella; no hay información que las separe, y por eso la prueba de abajo
+        // fija que las dos dan la misma respuesta.
         let response = build_router(&sin_contenido_config())
-            .oneshot(get("/css/error.css/"))
+            .oneshot(get("/css/error.css/extra"))
             .await
             .unwrap();
 
@@ -2222,6 +2319,57 @@ mod tests {
         assert_eq!(
             header_value(&response, "X-Robots-Tag").as_deref(),
             Some("noindex, nofollow, nosnippet, noarchive")
+        );
+        assert!(
+            !content_type(&response).starts_with("text/css"),
+            "un path que solo extiende al asset no puede servirse como la hoja: {}",
+            content_type(&response)
+        );
+    }
+
+    #[tokio::test]
+    async fn sin_directorio_la_barra_final_da_la_misma_respuesta_que_el_path_limpio() {
+        // `fold_components` pliega la barra final antes de que el path llegue a
+        // `ServeDir` (`src/path.rs`, línea 111: los segmentos vacíos se
+        // descartan), así que `/css/error.css/` y `/css/error.css` son la **misma**
+        // petición para el servidor de ficheros. La capa del disco responde a las
+        // dos igual —lo mismo que aquí: sin directorio de contenido, las dos caen
+        // al respaldo embebido—, así que un `200` con barra final no es una
+        // incoherencia: esta prueba compara las dos respuestas de verdad y fija
+        // que las dos capas coinciden, para que nadie «arregle» mañana una
+        // asimetría que no existe.
+        let router = build_router(&sin_contenido_config());
+
+        let con_barra = router
+            .clone()
+            .oneshot(get("/css/error.css/"))
+            .await
+            .unwrap();
+        let limpio = router.oneshot(get("/css/error.css")).await.unwrap();
+
+        assert_eq!(con_barra.status(), StatusCode::OK);
+        assert_eq!(limpio.status(), StatusCode::OK);
+        assert!(
+            content_type(&con_barra).starts_with("text/css"),
+            "Content-Type inesperado con barra final: {}",
+            content_type(&con_barra)
+        );
+        assert_eq!(
+            content_type(&con_barra),
+            content_type(&limpio),
+            "las dos formas del path tienen que dar el mismo `Content-Type`"
+        );
+
+        let cuerpo_con_barra = body_bytes(con_barra).await;
+        let cuerpo_limpio = body_bytes(limpio).await;
+        assert_eq!(
+            cuerpo_con_barra, cuerpo_limpio,
+            "las dos formas del path tienen que dar el mismo cuerpo"
+        );
+        assert_eq!(
+            cuerpo_con_barra,
+            EMBEDDED_CSS.as_bytes(),
+            "el cuerpo tiene que ser la hoja embebida"
         );
     }
 

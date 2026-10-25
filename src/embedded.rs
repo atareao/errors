@@ -22,8 +22,10 @@
 //!
 //! La fase GREEN implementa esa API tal cual, sin cambiar sus firmas. La
 //! consulta del asset compara el path **de forma exacta** —sin prefijos, sin
-//! normalizar barras finales—, porque el respaldo de `ServeDir` también recibe
-//! un directorio (`InvalidFilename`) y un `200` de más ya no lo corrige nadie.
+//! normalizar barras finales—, porque el respaldo de `ServeDir` recibe **todo
+//! lo que no está en el disco** —`serve_dir/future.rs`, línea 108, manda al
+//! respaldo lo mismo un `FileNotFound` que un `InvalidFilename`— y un `200` de
+//! más ya no lo corrige nadie: con `fallback` nadie fuerza el estado.
 //!
 //! La prueba de paridad (tasks.md 1.15, decisión D5) vive **aquí**, en los
 //! `#[cfg(test)]` del módulo que guarda la tabla, y **no** en `tests/`: el crate
@@ -31,6 +33,89 @@
 //! del binario —para verlas habría que añadir un `lib` que cambiaría la forma
 //! del crate para todos—, y leer `content/` por `CARGO_MANIFEST_DIR` es lo que ya
 //! hace `tests/content_pages.rs`.
+
+/// Las once páginas embebidas, emparejadas con su código.
+///
+/// Es la **única** fuente de verdad de qué códigos tienen página: `PAGE_CODES`
+/// se deriva de esta tabla y `page` la recorre, así que las dos no pueden
+/// separarse. `include_str!` exige que el fichero exista al compilar (D6), de
+/// modo que borrar o renombrar `content/<código>.html` deja de degradarse en
+/// silencio al respaldo de texto y pasa a ser un error de compilación; el
+/// reverso —una página nueva del directorio que nadie embebe— no lo ve el
+/// compilador y lo vigila la prueba de paridad (D5).
+const PAGES: [(u16, &str); 11] = [
+    (400, include_str!("../content/400.html")),
+    (401, include_str!("../content/401.html")),
+    (403, include_str!("../content/403.html")),
+    (404, include_str!("../content/404.html")),
+    (405, include_str!("../content/405.html")),
+    (408, include_str!("../content/408.html")),
+    (429, include_str!("../content/429.html")),
+    (500, include_str!("../content/500.html")),
+    (502, include_str!("../content/502.html")),
+    (503, include_str!("../content/503.html")),
+    (504, include_str!("../content/504.html")),
+];
+
+/// Los once códigos que tienen página embebida, derivados de [`PAGES`] en
+/// contexto `const`: la tabla y la lista no pueden discrepar porque no son dos
+/// listas, sino una sola.
+pub const PAGE_CODES: [u16; 11] = [
+    PAGES[0].0,
+    PAGES[1].0,
+    PAGES[2].0,
+    PAGES[3].0,
+    PAGES[4].0,
+    PAGES[5].0,
+    PAGES[6].0,
+    PAGES[7].0,
+    PAGES[8].0,
+    PAGES[9].0,
+    PAGES[10].0,
+];
+
+/// Página HTML embebida de `code`, si la hay.
+///
+/// Es la **segunda** capa de la cascada de [`crate::render`] (D1): se consulta
+/// solo cuando el directorio del operador no tenía ni el fichero del código ni
+/// el del código por defecto.
+///
+/// La búsqueda va sobre [`PAGE_CODES`] y la posición resuelve en [`PAGES`]: la
+/// lista se construye indexando la tabla, así que van en el mismo orden y el
+/// índice no puede desalinearse. Además es lo que hace que `PAGE_CODES` tenga un
+/// consumidor de verdad y no sea una constante muerta.
+pub fn page(code: u16) -> Option<&'static str> {
+    PAGE_CODES
+        .iter()
+        .position(|listed| *listed == code)
+        .and_then(|index| PAGES.get(index))
+        .map(|(_, html)| *html)
+}
+
+/// Assets embebidos, por su path **exacto**, con su `Content-Type`.
+///
+/// El path se compara tal cual —sin prefijos, sin normalizar barras finales—
+/// porque el respaldo de `ServeDir` recibe **todo lo que no está en el disco**,
+/// no solo un `FileNotFound`: `serve_dir/future.rs`, línea 108, hace caer al
+/// respaldo lo mismo `FileNotFound` que `InvalidFilename` —que no es «un
+/// directorio» sino el byte NUL, `serve_dir/open_file.rs`, líneas 117-118 y
+/// 153-154, y un directorio sale como `FileNotFound`, `open_file.rs`, líneas
+/// 290-291, con `append_index_html_on_directories(false)`— y, como el `fallback`
+/// no fuerza el estado de la respuesta, un `200` de más
+/// no lo corrige nadie (D2).
+const ASSETS: [(&str, &[u8], &str); 1] = [(
+    "/css/error.css",
+    include_bytes!("../content/css/error.css"),
+    "text/css",
+)];
+
+/// Asset embebido por path **exacto** (`/css/error.css`), con su `Content-Type`.
+pub fn asset(path: &str) -> Option<(&'static [u8], &'static str)> {
+    ASSETS
+        .iter()
+        .find(|(candidate, _, _)| *candidate == path)
+        .map(|(_, bytes, content_type)| (*bytes, *content_type))
+}
 
 #[cfg(test)]
 mod tests {

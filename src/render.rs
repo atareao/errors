@@ -6,7 +6,8 @@
 //! ```ignore
 //! #[derive(Debug)]
 //! pub enum RenderError {
-//!     /// El fichero HTML ni el del código pedido ni el del código por defecto.
+//!     /// No hay página HTML del código pedido ni del código por defecto en
+//!     /// ninguna de las dos capas: `CONTENT_DIR` y la copia embebida.
 //!     MissingHtml { code: u16, default_code: u16 },
 //!     Io(std::io::Error),
 //! }
@@ -27,8 +28,10 @@
 //! }
 //!
 //! /// Cuerpo por formato. HTML se lee de `content_dir/<code>.html` con caída a
-//! /// `content_dir/<default_code>.html`; JSON, XML y texto se generan a partir
-//! /// de `code`, `canonical_reason(code)` y `description(code)`.
+//! /// `content_dir/<default_code>.html`; agotadas esas dos, la misma cascada
+//! /// sobre la copia **embebida** —la del código y la del defecto—, y solo
+//! /// entonces `MissingHtml`. JSON, XML y texto se generan a partir de `code`,
+//! /// `canonical_reason(code)` y `description(code)`.
 //! pub fn render_body(
 //!     code: u16,
 //!     default_code: u16,
@@ -62,6 +65,7 @@
 //!   códigos que lo llevan (`429` y `503`).
 
 use crate::config::Config;
+use crate::embedded;
 use crate::resolve::{self, Format};
 use axum::http::StatusCode;
 use serde::Serialize;
@@ -79,7 +83,9 @@ const RETRY_AFTER_NAME: &str = "Retry-After";
 /// Fallo al construir el cuerpo de una página de error.
 #[derive(Debug)]
 pub enum RenderError {
-    /// El fichero HTML ni el del código pedido ni el del código por defecto.
+    /// No hay página HTML del código pedido ni del código por defecto **en
+    /// ninguna de las dos capas**: ni en `CONTENT_DIR` ni entre las páginas
+    /// embebidas.
     MissingHtml { code: u16, default_code: u16 },
     /// Error de E/S al leer el HTML, o al serializar el cuerpo generado.
     Io(std::io::Error),
@@ -91,7 +97,7 @@ impl fmt::Display for RenderError {
             RenderError::MissingHtml { code, default_code } => write!(
                 f,
                 "no hay página HTML para el error: ni `{code}.html` ni `{default_code}.html` \
-                 existen en el directorio de contenido"
+                 están ni en `CONTENT_DIR` ni entre las páginas embebidas"
             ),
             RenderError::Io(err) => {
                 write!(
@@ -132,9 +138,10 @@ pub struct RenderedPage {
 ///
 /// # Errors
 ///
-/// [`RenderError::MissingHtml`] si el fichero del código pedido y el del código
-/// por defecto faltan (solo en [`Format::Html`]), y [`RenderError::Io`] si la
-/// lectura o la serialización fallan.
+/// [`RenderError::MissingHtml`] si no hay página del código pedido ni del código
+/// por defecto en ninguna de las dos capas —`CONTENT_DIR` y la copia embebida—
+/// (solo en [`Format::Html`]), y [`RenderError::Io`] si la lectura o la
+/// serialización fallan.
 pub fn render_body(
     code: u16,
     default_code: u16,
@@ -227,8 +234,16 @@ fn content_type_for(format: Format) -> &'static str {
     }
 }
 
-/// Cuerpo HTML: el fichero del código pedido y, si no existe, el del código por
-/// defecto.
+/// Cuerpo HTML: la capa del operador **entera** y, solo si no da nada, la capa
+/// embebida (D1).
+///
+/// El orden es el de siempre —el fichero del código pedido y, si no existe, el
+/// del código por defecto— sobre el disco y, **después**, la misma cascada sobre
+/// la tabla embebida. Las dos capas no se intercalan por código: lo que hay en
+/// `CONTENT_DIR` es lo que se sirve, y lo que no está, se respalda. Una página
+/// que existe y no se puede leer sale como [`RenderError::Io`] y **no** cae a la
+/// copia embebida (Opción A de `design.md`): es un error de configuración que el
+/// registro delata, y la copia embebida lo taparía en silencio.
 fn html_body(code: u16, default_code: u16, content_dir: &Path) -> Result<Vec<u8>, RenderError> {
     if let Some(body) = read_html(content_dir, code).map_err(RenderError::Io)? {
         return Ok(body);
@@ -238,6 +253,19 @@ fn html_body(code: u16, default_code: u16, content_dir: &Path) -> Result<Vec<u8>
         && let Some(body) = read_html(content_dir, default_code).map_err(RenderError::Io)?
     {
         return Ok(body);
+    }
+
+    // Agotado el disco, la misma cascada sobre la tabla embebida. Un fichero
+    // embebido no puede fallar al leerse: los bytes ya están en el binario, así
+    // que esta capa no aporta una variante nueva a `RenderError`.
+    if let Some(body) = embedded::page(code) {
+        return Ok(body.as_bytes().to_vec());
+    }
+
+    if code != default_code
+        && let Some(body) = embedded::page(default_code)
+    {
+        return Ok(body.as_bytes().to_vec());
     }
 
     Err(RenderError::MissingHtml { code, default_code })

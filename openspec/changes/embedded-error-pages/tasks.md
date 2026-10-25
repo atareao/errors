@@ -50,9 +50,14 @@
       —estado `200` y `Content-Type` `text/css`— pero **sin cuerpo**. `ServeDir` copia método, URI y
       cabeceras en la petición del respaldo y `HEAD` está entre los métodos admitidos, así que este
       camino pasa por la tabla; hoy ninguna prueba lo cubre (todas montan `GET` con `Body::empty()`).
-- [ ] 1.9c `src/main.rs`: sin directorio de contenido, `GET /css/error.css/` da la página de error y
-      **no** un `200 text/css`: `ServeDir` lo trata como `InvalidFilename` y entra al respaldo, así que
-      la tabla no puede casarlo —la comparación es exacta, sin prefijos ni barras finales—.
+- [ ] 1.9c `src/main.rs`: sin directorio de contenido, la tabla de assets compara el path **de forma
+      exacta**. Lo fijan dos pruebas: `GET /css/error.css/extra` da la página de error y **no** un `200
+      text/css` —el path extiende al del asset y no tiene segmentos vacíos que plegar, así que llega
+      entero al respaldo, y una consulta con `starts_with` o `contains` devolvería la hoja—, y `GET
+      /css/error.css/` da **la misma** respuesta que `GET /css/error.css`, porque `fold_components`
+      (`src/path.rs`, línea 111) pliega la barra final **antes** de que el path llegue a `ServeDir` y la
+      capa del disco hace exactamente lo mismo. La barra final no discrimina la comparación: no llega a
+      la tabla.
 - [ ] 1.10 `src/main.rs`: sin directorio de contenido, la página embebida del `404` referencia
       `css/error.css` y esa ruta resuelve como `200 text/css`, no como página de error.
 - [ ] 1.11 Fixture nuevo `tests/fixtures/content/css/error.css` —una hoja propia, distinguible de
@@ -128,9 +133,13 @@
       para los dos casos sin mentir en ninguno —una página que existe y no se puede leer también acaba
       ahí, y esa causa no se arregla mirando el directorio—.
 - [ ] 3.6 La consulta del asset embebido compara el path **de forma exacta**: sin prefijos, sin
-      normalizar barras finales y sin tolerar un directorio, porque el respaldo recibe también
-      `InvalidFilename` (un directorio, un path terminado en `/`) y un `200` de más ya no lo corrige
-      nadie. Lo fijan las pruebas 1.9c y 1.9.
+      normalizar barras finales y sin tolerar un directorio. No porque el respaldo reciba una barra
+      final ni un directorio por `InvalidFilename` —esa variante sale solo de bytes NUL
+      (`serve_dir/open_file.rs`, líneas 117-118 y 153-154, «Only applies to NULL bytes») y un
+      directorio con `append_index_html_on_directories(false)` da `FileNotFound` (líneas 290-291)—, sino
+      porque el respaldo lo recibe **todo lo que no está** en el disco (`future.rs`, línea 108:
+      `FileNotFound` e `InvalidFilename` van a la misma rama) y un `200` de más ya no lo corrige nadie.
+      Lo fijan las pruebas 1.9c y 1.9.
 
 ## 4. Documentación
 

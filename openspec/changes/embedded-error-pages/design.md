@@ -82,7 +82,9 @@ altered**»). La consulta se hace sobre el path **ya normalizado**, porque el mi
 URI antes de ceder el paso, así que no hay una segunda forma de llegar al asset.
 
 El respaldo se consulta «el fichero no está» y nada más, y eso también está medido en la misma
-versión: entra con `FileNotFound`/`InvalidFilename` (`serve_dir/future.rs`, líneas 108-114) y con
+versión: entra con `FileNotFound`/`InvalidFilename` (`serve_dir/future.rs`, líneas 108-114 —las dos
+variantes van a la misma rama, y `InvalidFilename` sale solo de bytes NUL: `open_file.rs`, líneas
+117-118 y 153-154—) y con
 `NotFound`, `PermissionDenied` y `ENOTDIR` (líneas 132-153); **cualquier otro error de E/S** sale como
 `Err` y `ServeDir` lo convierte en su `500` de siempre (`mod.rs`, líneas 410-424), que el middleware
 sigue sustituyendo por la página, así que la garantía «un segmento de path imposible da la página, no
@@ -185,11 +187,15 @@ por eso la prueba de paridad recorre el directorio en los dos sentidos (D5).
   listo sin bloquear, y **no puede hacer E/S de disco** —este camino corre en el hilo *async*, a
   diferencia del render, que va en `spawn_blocking` por la auditoría I-1; los bytes embebidos son una
   tabla en memoria, así que no hace falta—.
-- [`InvalidFilename` también entra al respaldo] → es lo que `ServeDir` produce para un directorio con
-  `append_index_html_on_directories(false)` y para cualquier path sin nombre de fichero utilizable
-  (p. ej. terminado en `/`), y nada de eso puede casar con la tabla: la consulta del asset embebido
-  tiene que comparar el path **de forma exacta** —sin prefijos, sin normalizar barras finales—, de modo
-  que `/css/error.css/` dé la página de error y no un `200 text/css`.
+- [`InvalidFilename` también entra al respaldo] → pero **no** es un directorio ni un path terminado en
+  `/`: esa variante sale solo de bytes NUL (`serve_dir/open_file.rs`, líneas 117-118 y 153-154, «Only
+  applies to NULL bytes»), y un directorio con `append_index_html_on_directories(false)` da
+  `FileNotFound` (`open_file.rs`, líneas 290-291). En todo caso, el respaldo recibe **todo** lo que no
+  está en el disco —`FileNotFound` e `InvalidFilename` van a la misma rama (`future.rs`, línea 108)—, y
+  nada de eso puede casar con la tabla: la consulta del asset embebido tiene que comparar el path **de
+  forma exacta** —sin prefijos, sin subcadenas—, de modo que `/css/error.css/extra` dé la página de
+  error y no un `200 text/css`, y `/css/error.css/` dé la misma respuesta que `/css/error.css` (la barra
+  final se pliega en `src/path.rs::fold_components`, línea 111, antes de que el path llegue a `ServeDir`).
 - [Un fichero del directorio que existe y no se puede leer] → las dos vías degradan distinto ante la
   misma causa, y así se ha decidido: la Opción A, al final de este documento, con su análisis y su
   coste. Lo que sí se hace aquí es no prometer de más: los requisitos dicen «un fichero que se pueda
@@ -202,7 +208,8 @@ por eso la prueba de paridad recorre el directorio en los dos sentidos (D5).
   antes de consultar nada. Las pruebas actuales de assets (`200` del CSS del disco, `304` condicional)
   siguen verdes.
 - [`fallback` no fuerza el estado, y con `not_found_service` sí lo forzaba] → el respaldo se consulta
-  también con un directorio (`InvalidFilename`) y con cualquier path inexistente, así que el servicio
+  con cualquier path inexistente —y también con un directorio, que da `FileNotFound`, no
+  `InvalidFilename` (`open_file.rs`, líneas 290-291)—, así que el servicio
   embebido **tiene que responder `404` a todo lo que no sea un asset de su tabla**. Con
   `not_found_service` ese `404` estaba garantizado por la API, hiciera lo que hiciera el respaldo; con
   `fallback` pasa a ser responsabilidad nuestra y un `200` de más saldría tal cual, sin convertirse en
