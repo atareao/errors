@@ -56,10 +56,12 @@ Un asset **existente** sigue ganando, que es la otra mitad de la regla: `GET /cs
 
 ## Integración con Traefik
 
-Hay un **ejemplo ejecutable** en [`examples/traefik/`](examples/traefik/) —Traefik v3 + este servicio
-+ un backend que devuelve 4xx/5xx— con un `check.sh` que comprueba los cuatro casos, y un
-[`compose.yml`](compose.yml) en la raíz listo para producción (solo el servicio, con los labels de
-Traefik para descomentar). El ejemplo explica además el matiz de quién decide el código HTTP.
+Hay un **ejemplo ejecutable** en
+[`examples/traefik/`](https://github.com/atareao/errserve/tree/main/examples/traefik/) —Traefik v3 +
+este servicio + un backend que devuelve 4xx/5xx— con un `check.sh` que comprueba los cuatro casos, y
+un [`compose.yml`](https://github.com/atareao/errserve/blob/main/compose.yml) en la raíz listo para
+producción (solo el servicio, con los labels de Traefik para descomentar). El ejemplo explica además
+el matiz de quién decide el código HTTP.
 
 Los dos usan la **imagen publicada** (`ghcr.io/atareao/errserve`), así que se levantan sin construir
 nada; `ERRSERVE_IMAGE` apunta a otra etiqueta o a una imagen local si hace falta.
@@ -206,8 +208,9 @@ La imagen publicada está en **GHCR**, no en Docker Hub:
 docker pull ghcr.io/atareao/errserve:latest     # o una versión fija: :0.3.0
 ```
 
-El [`compose.yml`](compose.yml) de la raíz y el ejemplo de [`examples/traefik/`](examples/traefik/)
-la usan por defecto (`ERRSERVE_IMAGE` cambia la referencia), así que **no hay que construir nada** para
+El [`compose.yml`](https://github.com/atareao/errserve/blob/main/compose.yml) de la raíz y el
+ejemplo de [`examples/traefik/`](https://github.com/atareao/errserve/tree/main/examples/traefik/) la
+usan por defecto (`ERRSERVE_IMAGE` cambia la referencia), así que **no hay que construir nada** para
 probarlos. Si el `pull` responde `denied` sin credenciales, el paquete sigue privado: ver
 [Publicación](#publicación).
 
@@ -251,12 +254,13 @@ Se publica **con una etiqueta**:
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-Eso dispara [`.github/workflows/release.yml`](.github/workflows/release.yml), que construye la
-imagen, la **prueba con docker de verdad** —que `/404` devuelva 404, el `HEALTHCHECK` del
-`Dockerfile` y el `USER 10001:10001`; en la máquina de desarrollo no hay docker, solo podman, que
-además descarta el healthcheck al construir en formato OCI—, la empuja a GHCR con su versión y
-`latest` y crea el Release con las notas generadas. Un `workflow_dispatch` republica una etiqueta ya
-existente, pero exige indicarla en el input `tag`: en un dispatch no hay etiqueta y
+Eso dispara
+[`.github/workflows/release.yml`](https://github.com/atareao/errserve/blob/main/.github/workflows/release.yml),
+que construye la imagen, la **prueba con docker de verdad** —que `/404` devuelva 404, el
+`HEALTHCHECK` del `Dockerfile` y el `USER 10001:10001`; en la máquina de desarrollo no hay docker,
+solo podman, que además descarta el healthcheck al construir en formato OCI—, la empuja a GHCR con
+su versión y `latest` y crea el Release con las notas generadas. Un `workflow_dispatch` republica
+una etiqueta ya existente, pero exige indicarla en el input `tag`: en un dispatch no hay etiqueta y
 `github.ref_name` es la rama.
 
 `main` y `development` están **protegidas**: todo entra por **PR** y ningún PR se fusiona hasta que
