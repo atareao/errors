@@ -156,6 +156,11 @@ con el **sha1 del commit desde el que se empaquetó**, así que «de qué árbol
 limpio registra exactamente su `HEAD`. Ese registro es justo lo que el paso de idempotencia de D8
 usa para comparar el árbol publicado con el árbol actual.
 
+Y el `ref` de los dos `checkout` va **cualificado a `refs/tags/…`** precisamente por esto: un `ref`
+sin cualificar se resuelve prefiriendo una **rama** del mismo nombre a la etiqueta, así que si
+coexistieran una rama `vX.Y.Z` y su etiqueta, los dos jobs resolverían lo mismo —la rama— y la
+afirmación `HEAD == commit` compararía la rama consigo misma: pasaría sin cazar nada.
+
 ### D8 — Por qué el aviso de la idempotencia NO es un fallo
 
 En la rama del `200` —esa versión ya está en crates.io— el paso descarga el `.crate` publicado, lee
@@ -228,7 +233,11 @@ dice— sin fingir que es un error.
   (`cancel-in-progress: false`), que solo mantiene **una** ejecución pendiente: un push de etiqueta
   que llegue mientras hay una en curso y otra esperando deja la esperando **cancelada y en gris**
   —sin imagen, sin crate y **sin rojo**—, un release a medias que nada señala. Se asume hoy y **no**
-  se arregla aquí.
+  se arregla aquí. La alternativa obvia —un grupo **por etiqueta** (`release-${{ github.ref_name }}`),
+  que serializa sin descartar— **no** arregla el problema de fondo: con grupos por etiqueta, dos
+  releases de etiquetas distintas correrían **a la vez**, y los dos mueven la misma `latest`, que
+  es mutable; eso cambiaría un release perdido en silencio por dos publicaciones pisándose, que es
+  peor. Por eso la pregunta sigue abierta y no se resuelve con una línea.
 - **¿Y la asimetría entre el crate y la imagen?** El crate sale del árbol de la **etiqueta** (D7);
   la imagen, no: el job `imagen` sigue construyéndose desde la **rama**, como el workflow hace a
   propósito («construye la imagen desde la rama, no desde el árbol de la etiqueta; para una etiqueta

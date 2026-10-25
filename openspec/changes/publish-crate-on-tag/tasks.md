@@ -42,37 +42,61 @@
 - [x] 2.2 `ci.yml`: un paso nuevo en el job `puertas` —con el toolchain y la caché que ya tiene— que
       corre `cargo publish --dry-run --locked`. No necesita un check requerido nuevo: va dentro de
       `puertas`, que ya lo es.
-- [ ] 2.3 El `dry-run` en **verde** en el CI del PR, con el árbol actual: el paquete que lleva
+- [x] 2.3 El `dry-run` en **verde** en el CI del PR, con el árbol actual: el paquete que lleva
       `content/` dentro es publicable.
+      Medido: PR #37, job `fmt, clippy y tests` **en verde** en 32 s, con el paso nuevo
+      `Paquete publicable` en `success` (los otros dos checks, `cargo-deny` 8 s e `imagen` 1m28s,
+      también en verde).
 
 Los cinco arreglos que salieron de la auditoría de seguridad (la primera dio **NO APTO**):
 
-- [ ] 2.4 Un job `version`, **el primero**, del que dependen `imagen` y `crate`: resuelve la
+- [x] 2.4 Un job `version`, **el primero**, del que dependen `imagen` y `crate`: resuelve la
       etiqueta, la versión y la imagen **una sola vez** y comprueba la versión contra `Cargo.toml`
       **antes** de que se publique nada. Razón: la resolución estaba **duplicada** y la comprobación
       vivía en el **último** job, así que un desajuste publicaba imagen y Release —la imagen salía
-      etiquetada `0.4.1` desde el árbol de `0.4.0`— antes de fallar.
-- [ ] 2.5 Ningún valor del evento interpolado en un `run:`: la etiqueta y la versión entran por
+      etiquetada `0.4.1` desde el árbol de `0.4.0`— antes de fallar. Hecho: `release.yml` tiene tres
+      jobs, `version` → `imagen` → `crate`; `imagen` con `needs: version` y `crate` con
+      `needs: [version, imagen]`; la comprobación de la versión es el segundo paso del job
+      `version`, antes de publicar nada.
+- [x] 2.5 Ningún valor del evento interpolado en un `run:`: la etiqueta y la versión entran por
       `env:` y la forma se valida con un *whitelist*
       (`^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z][0-9A-Za-z.-]*)?$`). Razón: `${{ }}` se sustituye
       **antes** de que bash parsee el script, así que el filtro llegaba tarde y `[-+].*` admitía un
-      `v0.4.0-$(comando)` que correría junto al paso que publica.
-- [ ] 2.6 El `checkout` del job `crate` fija el `ref` de la etiqueta, y un paso **afirma** que el
+      `v0.4.0-$(comando)` que correría junto al paso que publica. Hecho y medido: escaneo con
+      `python3` de los **14** bloques `run:` de `release.yml` (y los 7 de `ci.yml`): **cero** llevan
+      `${{` dentro; los valores entran por `env:` (`INPUT_TAG`, `needs.version.outputs.*`,
+      `secrets.*`, `github.actor`) y `github.repository` se lee de `$GITHUB_REPOSITORY`. El patrón
+      del fichero, probado contra 27 cadenas, rechaza `v0.4.0-$(id)`, `v0.4.0;id`, `v0.4.0|id`,
+      `v0.4.0 ` (espacio) y `v0.4.0-`, y acepta `v0.4.0-rc.1` y `v1.2.3+build.1`.
+- [x] 2.6 El `checkout` del job `crate` fija el `ref` de la etiqueta, y un paso **afirma** que el
       commit que se va a publicar es el que comprobó `version`. Razón: sin `ref`, un
       `workflow_dispatch` publicaba en crates.io —de forma irreversible— el árbol de la rama bajo la
       versión de una etiqueta que apunta a otro commit; `.cargo_vcs_info.json`, dentro del `.crate`,
       deja el árbol comprobable a posteriori.
-- [ ] 2.7 Privilegio mínimo y robustez en el job `crate`: `permissions: { contents: read }`,
+      Hecho: `ref: refs/tags/${{ needs.version.outputs.tag }}` con
+      `persist-credentials: false`, y un paso que afirma que `HEAD` es el commit que
+      comprobó el job `version`. Medido: un `.crate` empaquetado desde este árbol limpio
+      registra exactamente su `HEAD` en `.cargo_vcs_info.json`.
+- [x] 2.7 Privilegio mínimo y robustez en el job `crate`: `permissions: { contents: read }`,
       `persist-credentials: false` en el checkout, fuera el `Swatinem/rust-cache@v2` (acción de
       tercero con tag mutable), `timeout-minutes: 15`, y la consulta a crates.io con `curl -sS
       --max-time … --retry …` y mensaje propio si `curl` falla. Razón: el job maneja el token de
-      publicación, y un `curl -s` sin `-S` abortaba por `set -e` **sin un solo mensaje**.
-- [ ] 2.8 La rama del `200` de la idempotencia descarga el `.crate` publicado, lee su
+      publicación, y un `curl -s` sin `-S` abortaba por `set -e` **sin un solo mensaje**. Hecho:
+      `permissions: { contents: read }` en los jobs `version` y `crate`,
+      `persist-credentials: false`, `Swatinem/rust-cache` fuera del job `crate`,
+      `timeout-minutes: 15` (y 10 en `version`), y la consulta a crates.io con
+      `curl -sS --max-time 20 --retry 2 --retry-connrefused` y un `::error::` propio si el
+      transporte falla.
+- [x] 2.8 La rama del `200` de la idempotencia descarga el `.crate` publicado, lee su
       `.cargo_vcs_info.json` y compara el sha1 con el commit del árbol: si no coincide,
       `::warning::` y línea en el resumen, **no** error. Razón: la publicación ya está hecha y es
       irreversible —no hay nada que reparar, y un rojo bloquearía republicar la imagen y reutilizar
       el Release—, y la `0.3.0` publicada **a mano** registra `bdb76fa…`, que no es el commit de su
-      etiqueta `d0032a2…`.
+      etiqueta `d0032a2…`. Hecho: descarga el `.crate` publicado, lee `.cargo_vcs_info.json` y
+      compara el sha1 con el commit del árbol; si no coincide, `::warning::` y línea en el resumen,
+      **sin fallar**. Medido: el `.crate` publicado de la `0.3.0` registra `bdb76fa…` y su etiqueta
+      `v0.3.0` es `d0032a2…` — no coinciden, porque se publicó a mano: por eso no puede ser una
+      puerta dura.
 
 ## 3. Verificación
 
@@ -82,9 +106,20 @@ Los cinco arreglos que salieron de la auditoría de seguridad (la primera dio **
 - [ ] 3.2 La idempotencia, medida: re-ejecutar el mismo `workflow_dispatch` sobre `v0.4.0` termina
       **en verde**, con el paso de publicación detectando que la versión ya está y continuando sin
       error.
-- [ ] 3.3 Reauditar el job `crate` —y el `version`— con veredicto **APTO**: inyección de comandos
+- [x] 3.3 Reauditar el job `crate` —y el `version`— con veredicto **APTO**: inyección de comandos
       (ningún valor del evento en un `run:`), privilegio mínimo del job e idempotencia. La auditoría
       anterior dio **NO APTO**; esta casilla cierra que los cinco arreglos lo pasan.
+      Medido: veredicto **APTO CON RESERVAS**. Los cinco hallazgos de la primera vuelta
+      (inyección, comprobación tardía, árbol de la rama, privilegio sobrante, idempotencia)
+      cerrados; la reserva A-1 —un `ref` sin cualificar prefiere una **rama** del mismo nombre a
+      la etiqueta— se aplicó en este mismo change con la forma que recomendó el propio auditor:
+      `refs/tags/…` en los dos `checkout`. Quedan como deuda declarada, en `design.md`: el
+      *environment* con revisores, la cola del `concurrency` y la asimetría etiqueta/rama de la
+      imagen.
+- [ ] 3.4 Deuda declarada por la auditoría, fuera de este change: el secreto en un *environment* con
+      revisores obligatorios, la cola por defecto del `concurrency`, y la asimetría de que el crate
+      salga del árbol de la etiqueta y la imagen de la rama. Las tres están en `design.md`; ninguna
+      produce un rojo falso ni un crate que no corresponda a su etiqueta.
 
 ## 4. La verificación que cierra el motivo del change
 
