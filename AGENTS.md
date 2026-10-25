@@ -12,18 +12,19 @@ Implementado, verificado y versionado. Cinco changes están **archivados** en
 requisitos viven fusionados en los cuatro specs de `openspec/specs/`: `error-page`, `http-server`,
 `observability` y `response-extras`.
 
-- `src/main.rs` — arranque, router, middleware de páginas de error, la lista `SERVICE_ENDPOINTS` que acota ese middleware, y los tests de router.
+- `src/main.rs` — arranque, router, middleware de páginas de error, la lista `SERVICE_ENDPOINTS` que acota ese middleware, el *fallback* de assets embebidos del servidor de ficheros, y los tests de router.
 - `src/config.rs` — configuración desde el entorno (`Config`, `ConfigError`, `from_env_iter`).
 - `src/path.rs` — normalización del path (percent-decode + plegado de `.`/`..`).
 - `src/resolve.rs` — cascadas de código y formato, rango `400..=599`, tabla de razones.
-- `src/render.rs` — cuerpo por formato y cabeceras.
+- `src/render.rs` — cuerpo por formato y cabeceras; la cascada del HTML tiene **dos capas** (`CONTENT_DIR` entera y, después, la copia embebida, D1).
+- `src/embedded.rs` — la tabla embebida: las once páginas (`PAGES`, con `PAGE_CODES` y `page(code)` derivados), la hoja `css/error.css` y `asset(path)`, la consulta de assets por path exacto. `PAGES` es la única fuente de verdad de qué códigos tienen página, y aquí vive la prueba de paridad (D5).
 - `src/metrics.rs` — contador de páginas servidas por código **y por origen del código**, y su serialización en texto Prometheus.
-- `content/` — **once** páginas HTML (`400`, `401`, `403`, `404`, `405`, `408`, `429`, `500`, `502`, `503`, `504`), todas con la clase `c<código>` en el `body`, y la hoja única `content/css/error.css`.
+- `content/` — **once** páginas HTML (`400`, `401`, `403`, `404`, `405`, `408`, `429`, `500`, `502`, `503`, `504`), todas con la clase `c<código>` en el `body`, y la hoja única `content/css/error.css`; esas mismas once páginas y esa misma hoja son las que van **embebidas** en el binario.
 - `Dockerfile`, `.dockerignore`, `.justfile`, `compose.yml` — empaquetado (imagen ~13 MB, no-root uid 10001); el `compose.yml` va endurecido: `read_only: true`, `cap_drop: [ALL]`, `no-new-privileges:true` e `init: true`.
 - `README.md` — el contrato con Traefik y los ejemplos.
 
-Puertas en verde: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` y **124 tests**
-(121 unitarios + 3 de integración sobre el contenido de `content/`).
+Puertas en verde: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` y **143 tests**
+(140 unitarios + 3 de integración sobre el contenido de `content/`).
 Verificado además contra el servidor real y contra la imagen.
 
 ## Qué es
@@ -77,6 +78,18 @@ devuelve y la **negociación de formato** (HTML / JSON / XML / texto plano).
    un `GET` de un asset con `If-Modified-Since` responde `304 Not Modified`, sin cuerpo y sin
    `X-Robots-Tag`, que es justo la respuesta que el cliente pidió. `append_index_html_on_directories(false)`
    suprime la redirección de directorio, **no** los `3xx`. No «endurezcas» esto leyendo lo contrario.
+7. **El binario sirve las páginas y su hoja sin ficheros de datos.** Las once páginas y
+   `css/error.css` van **dentro** del ejecutable (`include_str!`/`include_bytes!`), así que un
+   `cargo install errserve` —un binario y ningún fichero de datos, con `CONTENT_DIR` por defecto
+   apuntando a un `content` que no existe— sirve las páginas de verdad, no el respaldo de texto.
+   `CONTENT_DIR` es solo el *override*: la **capa del operador se agota entera** —el fichero del
+   código pedido y, si falta, el del código por defecto— antes de entrar en la copia embebida
+   (D1), que repite esa misma cascada. Y lo que gana es **un fichero que se pueda leer**, no
+   «siempre»: una página que existe y no se puede abrir responde el respaldo de texto con el
+   código resuelto —el `warn` la delata—, en vez de que la copia embebida tape en silencio un
+   directorio del operador roto (Opción A de `design.md`). Las dos copias **no pueden divergir**:
+   una prueba de paridad compara sus bytes en los **dos sentidos** (D5). Nada de esto toca la
+   garantía 1: el estado sigue siendo el código resuelto, nunca `200`.
 
 ## Configuración (solo entorno)
 
@@ -84,7 +97,7 @@ devuelve y la **negociación de formato** (HTML / JSON / XML / texto plano).
 |---|---|---|
 | `PORT` | `8080` | Puerto de escucha (bind `0.0.0.0`). |
 | `LOG_LEVEL` | `info` | Filtro de registro. |
-| `CONTENT_DIR` | `content` | Páginas HTML y assets. |
+| `CONTENT_DIR` | `content` | *Override* de las páginas HTML y los assets **embebidos** en el binario. |
 | `DEFAULT_ERROR_PAGE` | `404` | Código por defecto; fuera de `400..=599` es error de arranque. |
 | `LOG_FORMAT` | `text` | `text` o `json`; cualquier otro valor, o vacía, es error de arranque. |
 | `RETRY_AFTER` | `120` | Segundos de la cabecera `Retry-After` (solo `429` y `503`); no numérica, o vacía, es error de arranque. |
@@ -163,7 +176,7 @@ resolución del código. El puerto por defecto del servicio es **8080**, el mism
 
 ```sh
 cargo run                                   # servidor
-cargo test                                  # 124 tests
+cargo test                                  # 143 tests
 cargo test <substring>                      # un test por nombre
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
@@ -250,6 +263,31 @@ Se mantiene con [`git-cliff`](https://git-cliff.org) (`cliff.toml`) y la receta 
   `LOG_LEVEL="tower_http=debug,info"`; y para no traer de regalo el `on_failure` que marca todo `5xx`
   como fallo, `LOG_LEVEL="tower_http::trace::on_failure=off,tower_http=debug,info"`. Medido: dos
   líneas por petición —entrada y salida—, sin el falso «response failed» de cada `503`.
+- **`include_str!` exige que el fichero exista al compilar, y `content/` viaja dentro del `.crate`.**
+  Borrar o renombrar un `content/<código>.html` ya no degrada en silencio al respaldo de texto: es un
+  **error de compilación** (D6). Y como el embedding se resuelve al compilar, `content/` tiene que
+  seguir entrando en el paquete —comprobable con `cargo package --list --offline`, que lista las once
+  páginas y `content/css/error.css`—: sin ese hecho el binario compila aquí y falla en la máquina de
+  quien instala (D3).
+- **La prueba de paridad de las dos copias vive en el `#[cfg(test)]` de `src/embedded.rs`, y no en
+  `tests/`.** El crate no tiene *lib target*, así que una prueba de integración no ve las constantes
+  del binario; para verlas desde `tests/` habría que añadir un `lib` y cambiar la forma del crate
+  entera (D5).
+- **El respaldo de assets embebidos usa `ServeDir::fallback`, nunca `not_found_service`.**
+  `not_found_service` es literalmente `fallback(SetStatus::new(f, NOT_FOUND))`, y `SetStatus` escribe
+  el estado «regardless of what the inner service returns»: el `200 text/css` de la hoja saldría como
+  un `404` **con cuerpo de CSS** y el middleware lo sustituiría por la página. Con `fallback` nadie
+  corrige el estado del respaldo, así que **todo** path fuera de la tabla de assets tiene que
+  responder `404` a mano (D2).
+- **Ese respaldo corre en el hilo *async*** —a diferencia del render, que va en `spawn_blocking` por
+  la auditoría I-1—, así que **no puede hacer E/S de disco**: los bytes son una tabla en memoria. Es
+  también la razón de que sea un `Router` de axum y no un `struct` con `impl Service`:
+  `tower::Service` solo es dependencia de desarrollo y no se puede nombrar en producción.
+- **La imagen sigue copiando `content/` a propósito.** Con las páginas embebidas esa copia es
+  redundante, pero **no** inocua: como la capa del disco gana (D1), la imagen sigue sirviendo esos
+  ficheros y no las copias del binario. Quitarla es un `COPY` menos, pero obliga a reverificar la
+  imagen entera (incluido el `HEALTHCHECK` y los chequeos con Docker real del workflow de release) y
+  no cambia el comportamiento; se deja como está —es la pregunta abierta de `design.md`—.
 
 ## Referencia de implementación (qué no repetir)
 
