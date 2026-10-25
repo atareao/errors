@@ -41,6 +41,18 @@ RUN mkdir -p src \
     && rm -rf src
 
 # --- Crate real --------------------------------------------------------------
+# `content/` es una **entrada de la compilación**, no un adorno del runtime: las
+# macros `include_str!`/`include_bytes!` de `src/embedded.rs` leen esos ficheros
+# **al compilar** y resuelven la ruta relativa al propio fuente
+# (`src/../content/…`). Sin ellos aquí, `cargo build` del crate real muere con
+# doce «couldn't read …: No such file or directory» (las once páginas y
+# `content/css/error.css`) antes de que el stage de runtime exista. Va antes de
+# `src/` porque cambia menos: mientras las páginas no cambien, esta capa y la de
+# dependencias se reutilizan. El `COPY content` del stage de runtime sigue
+# siendo necesario y **no se toca**: `CONTENT_DIR` es la única ruta de estáticos,
+# y como la capa del disco gana a la copia embebida, la imagen sigue sirviendo
+# los ficheros del operador.
+COPY content ./content
 COPY src ./src
 # `COPY` puede preservar el mtime del origen; tocar la raíz del crate asegura
 # que `cargo` invalida la huella del crate de relleno y recompila el real.
