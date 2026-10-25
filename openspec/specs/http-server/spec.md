@@ -116,7 +116,7 @@ Un asset embebido NO SHALL ser una página de error: una página HTML de error s
 ### Requirement: La imagen se construye desde el árbol y trae las páginas dentro
 
 La imagen SHALL construirse con `docker build` desde el árbol del repositorio, sin depender de nada
-que no esté versionado. El stage de **compilación** SHALL disponer de `content/` —las once páginas y
+que no esté versionado. El stage de **compilación** SHALL disponer de `content/` —la página y
 `css/error.css`—, porque el binario las embebe al compilar y `cargo` NO SHALL poder compilar el crate
 sin ellas. Que falten NO SHALL descubrirse por primera vez al publicar una etiqueta: el CI SHALL
 construir la imagen en cada propuesta de cambio.
@@ -129,8 +129,8 @@ construir la imagen en cada propuesta de cambio.
 #### Scenario: el stage de compilación dispone de las páginas
 - **GIVEN** el stage `builder` de la imagen
 - **WHEN** compila el crate
-- **THEN** `content/` SHALL estar disponible en el contexto de compilación, con las once páginas y la hoja `css/error.css`
-- **AND** el binario SHALL quedar con las páginas embebidas
+- **THEN** `content/` SHALL estar disponible en el contexto de compilación, con la página y la hoja `css/error.css`
+- **AND** el binario SHALL quedar con la página embebida
 
 #### Scenario: la imagen sirve las páginas sin ficheros externos
 - **GIVEN** la imagen arrancada sin montar ningún volumen
