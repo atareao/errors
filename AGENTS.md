@@ -204,20 +204,25 @@ Se mantiene con [`git-cliff`](https://git-cliff.org) (`cliff.toml`) y la receta 
 
 ## Entrega
 
-- `main` y `development` están **protegidas**: PR obligatorio, los checks `fmt, clippy y tests` y
-  `cargo-deny` en verde y `strict` (la rama ha de estar al día). `enforce_admins` está activo, así
-  que **tampoco el dueño empuja directo**. El flujo es: rama `feature/...` desde `development` → PR a
-  `development` → PR de `development` a `main`.
-- El CI (`.github/workflows/ci.yml`) tiene **dos jobs**: `fmt, clippy y tests` (las tres puertas) y
-  `cargo-deny` (la puerta de dependencias, con `deny.toml`). **Los dos están marcados como requeridos
-  en `main` y en `development`**, así que el rojo de cualquiera de ellos bloquea el merge (medido con
-  la API: los `contexts` de las dos ramas son `["fmt, clippy y tests", "cargo-deny"]`). Para volver a
-  medirlo:
+- `main` y `development` están **protegidas**: PR obligatorio, los checks `fmt, clippy y tests`,
+  `cargo-deny` e `imagen` en verde y `strict` (la rama ha de estar al día). `enforce_admins` está
+  activo, así que **tampoco el dueño empuja directo**. El flujo es: rama `feature/...` desde
+  `development` → PR a `development` → PR de `development` a `main`.
+- El CI (`.github/workflows/ci.yml`) tiene **tres jobs**: `fmt, clippy y tests` (las tres puertas),
+  `cargo-deny` (la puerta de dependencias, con `deny.toml`) e `imagen`, que **construye la imagen**
+  —la puerta del empaquetado, y la que faltaba: hasta el change `fix-image-build` la imagen solo se
+  construía en `release.yml`, al etiquetar, así que un `Dockerfile` que dejara de compilar se
+  descubría publicando—. **Los tres están marcados como requeridos en `main` y en `development`**, así
+  que el rojo de cualquiera de ellos bloquea el merge (medido con la API: los `contexts` de las dos
+  ramas son `["fmt, clippy y tests", "cargo-deny", "imagen"]`). Para volver a medirlo:
   `gh api repos/atareao/errserve/branches/main/protection --jq '.required_status_checks.contexts'`.
 - La imagen y el Release se publican empujando una **etiqueta** `v*`: el workflow `release.yml`
   construye, **prueba la imagen con docker real** (el runner sí lo tiene; aquí solo hay podman, que
   además descarta el `HEALTHCHECK` al construir en formato OCI), publica en GHCR y crea el Release.
   La etiqueta `latest` solo se mueve en versiones estables.
+  Ojo: el `release.yml` construye la imagen **desde la rama**, no desde el árbol de la etiqueta; para
+  una etiqueta ya publicada eso es lo que se quiere (republicar), pero una etiqueta que **nunca publicó**
+  nada se puede mover al commit correcto en vez de reconstruirla desde la rama.
 - La visibilidad del paquete en GHCR **no se puede cambiar por API** (verificado: `PATCH /user/packages/...`
   da 404; no existe ni en el OpenAPI ni en GraphQL): solo a mano en los ajustes del paquete. La primera
   medición fue del paquete **viejo**, `ghcr.io/atareao/errors`, publicado antes del renombrado:
@@ -270,6 +275,10 @@ Se mantiene con [`git-cliff`](https://git-cliff.org) (`cliff.toml`) y la receta 
   seguir entrando en el paquete —comprobable con `cargo package --list --offline`, que lista las once
   páginas y `content/css/error.css`—: sin ese hecho el binario compila aquí y falla en la máquina de
   quien instala (D3).
+  Y por eso el **stage de compilación de la imagen** también los necesita: no basta con que `content/`
+  esté en el árbol, tiene que estar **en el `builder`**. Un `Dockerfile` que solo copie `content/` al
+  stage de runtime **no compila** —medido: `exit code 101` y doce `couldn't read` al etiquetar la
+  `0.4.0`—: es justo lo que caza el job `imagen` del CI en cada propuesta de cambio.
 - **La prueba de paridad de las dos copias vive en el `#[cfg(test)]` de `src/embedded.rs`, y no en
   `tests/`.** El crate no tiene *lib target*, así que una prueba de integración no ve las constantes
   del binario; para verlas desde `tests/` habría que añadir un `lib` y cambiar la forma del crate
@@ -284,11 +293,13 @@ Se mantiene con [`git-cliff`](https://git-cliff.org) (`cliff.toml`) y la receta 
   la auditoría I-1—, así que **no puede hacer E/S de disco**: los bytes son una tabla en memoria. Es
   también la razón de que sea un `Router` de axum y no un `struct` con `impl Service`:
   `tower::Service` solo es dependencia de desarrollo y no se puede nombrar en producción.
-- **La imagen sigue copiando `content/` a propósito.** Con las páginas embebidas esa copia es
-  redundante, pero **no** inocua: como la capa del disco gana (D1), la imagen sigue sirviendo esos
-  ficheros y no las copias del binario. Quitarla es un `COPY` menos, pero obliga a reverificar la
-  imagen entera (incluido el `HEALTHCHECK` y los chequeos con Docker real del workflow de release) y
-  no cambia el comportamiento; se deja como está —es la pregunta abierta de `design.md`—.
+- **El `Dockerfile` copia `content/` dos veces, y la primera no es un «por si acaso»: es una entrada de
+  la compilación.** El stage `builder` necesita las páginas y la hoja **para compilar** —las macros
+  resuelven la ruta en tiempo de compilación—, así que su `COPY content ./content` es **obligatorio**:
+  sin él, el `cargo build` del crate real muere y no hay imagen. La segunda copia, la del stage
+  `runtime`, es la decisión que sigue abierta: `CONTENT_DIR` es la única ruta de estáticos y, como la
+  capa del disco gana (D1), la imagen sirve esos ficheros y no los del binario, de modo que quitarla
+  cambiaría qué bytes se sirven en producción. Es la pregunta abierta de `design.md`, y ahí sigue.
 
 ## Referencia de implementación (qué no repetir)
 
