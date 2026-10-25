@@ -24,12 +24,12 @@ al servir— está **en curso** en `openspec/changes/error-page-template/`, toda
 - `src/theme.rs` — los **seis temas** (`THEMES`, `theme_by_name`, `resolve`), la ruta de cada hoja dentro de `CONTENT_DIR` (`css/error.css` para `default`, `themes/<nombre>.css` para los demás) y `Theme::sheet`, que resuelve la hoja **como un asset** (disco si se puede leer, embebida si no).
 - `src/embedded.rs` — la **plantilla embebida** del proyecto: **una** página (`PAGE`, los bytes de `content/404.html`, que cubre cualquier código de `400..=599`), la hoja `css/error.css` (`DEFAULT_SHEET_BYTES`/`DEFAULT_SHEET`) y `asset(path)`, la consulta de assets por path exacto. Aquí vive la prueba de paridad de las dos copias (D5).
 - `src/metrics.rs` — contador de páginas servidas por código **y por origen del código**, y su serialización en texto Prometheus.
-- `content/` — **una** página HTML (`404.html`) con los marcadores `{{code}}`/`{{reason}}`/`{{description}}` y el marcador de la hoja `<link rel="stylesheet" href="/css/error.css" />`; se llama `404.html` porque es la del **código por defecto** (`DEFAULT_ERROR_PAGE`) y, rellenada al servir, cubre **cualquier** código de `400..=599`. Más la hoja `content/css/error.css` —el tema `default`— y las **cinco** hojas de `content/themes/`; esa página y esas **seis** hojas son las que van **embebidas** en el binario.
+- `content/` — **una** página HTML (`404.html`) con los marcadores `{{code}}`/`{{reason}}`/`{{description}}` y el marcador de la hoja `<link rel="stylesheet" href="/css/error.css" />`; el contenido va envuelto en un `<main>` —el *landmark* que el tema `default` anima— y la página cierra con un `<footer>errserve</footer>` **sin `href`** —el nombre es **texto del fichero**, no un cuarto marcador—. Se llama `404.html` porque es la del **código por defecto** (`DEFAULT_ERROR_PAGE`) y, rellenada al servir, cubre **cualquier** código de `400..=599`. Más la hoja `content/css/error.css` —el tema `default`— y las **cinco** hojas de `content/themes/`; esa página y esas **seis** hojas son las que van **embebidas** en el binario.
 - `Dockerfile`, `.dockerignore`, `.justfile`, `compose.yml` — empaquetado (imagen ~13 MB, no-root uid 10001); el `compose.yml` va endurecido: `read_only: true`, `cap_drop: [ALL]`, `no-new-privileges:true` e `init: true`.
 - `README.md` — el contrato con Traefik y los ejemplos.
 
-Puertas en verde: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` y **198 tests**
-(189 unitarios + 4 de integración sobre el contenido de `content/` + 5 sobre los respaldos de
+Puertas en verde: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` y **207 tests**
+(197 unitarias + 5 de integración sobre el contenido de `content/` + 5 sobre los respaldos de
 Traefik).
 Verificado además contra el servidor real y contra la imagen.
 
@@ -212,7 +212,7 @@ resolución del código. El puerto por defecto del servicio es **8080**, el mism
 
 ```sh
 cargo run                                   # servidor
-cargo test                                  # 198 tests
+cargo test                                  # 207 tests
 cargo test <substring>                      # un test por nombre
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
@@ -340,10 +340,23 @@ Se mantiene con [`git-cliff`](https://git-cliff.org) (`cliff.toml`) y la receta 
   `url(...)` cuyo destino no sea el **propio documento**; `url(#gradiente)` —un filtro o degradado
   SVG— es una referencia interna y **no** es una petición, mientras que un `url()` vacío o un `url(`
   sin cerrar **sí** cuentan, conservador a propósito porque es una hoja rota. Y
-  `una_hoja_que_anima_respeta_reduced_motion` exige `prefers-reduced-motion` a la hoja que traiga
-  `animation`, `transition` o `@keyframes`. `@font-face` **no** está prohibido: solo puede pedir algo
-  por la red vía `url(...)` o `@import`, ya prohibidos, y `src: local("Arial")` usa una fuente ya
-  instalada.
+  `una_hoja_que_anima_respeta_reduced_motion` —**conserva el nombre viejo por la regla D7 de
+  `error-page-template`**, «un nombre de escenario no se puede retirar»: la prueba existía y su nombre
+  ya no describe el contrato entero, pero renombrarla rompería el archivado— exige que la hoja que
+  **anime** pueda apagarse. Y **animar** es una cosa precisa: una **declaración** de `animation`,
+  `animation-name`, `transition` o `transition-property` con un valor **distinto de `none`**.
+  `@keyframes` **no** dispara nada por sí solo —define fotogramas y no anima mientras ninguna
+  declaración los use—, así que una hoja que solo trae fotogramas cumple sin necesitar la media query.
+  Lo que la hoja que anima tiene que traer es un bloque `@media (prefers-reduced-motion: reduce)` que
+  **exista**, **no esté vacío** —un bloque con solo un comentario dentro se lee vacío, porque los
+  comentarios se quitan antes de escanear— y **neutralice cada** animación declarada con la forma
+  canónica de su familia: `animation: none` o `animation-name: none` para una animación, `transition:
+  none` o `transition-property: none` para una transición. La lista es **cerrada** y **cada familia por
+  su forma** —`animation: none` **no** apaga una transición—; quedan fuera a propósito
+  `animation-duration: 0s` y `animation-play-state: paused`, porque una guarda textual no puede
+  demostrar que apagan igual en todos los navegadores. `@font-face` **no** está prohibido: solo puede
+  pedir algo por la red vía `url(...)` o `@import`, ya prohibidos, y `src: local("Arial")` usa una
+  fuente ya instalada.
 
   Un tema **puede** animar —el movimiento es una decisión de aspecto, no un defecto de
   autocontención—, pero tiene que poder apagarse: una página de error que se mueve mientras el usuario
@@ -356,14 +369,31 @@ Se mantiene con [`git-cliff`](https://git-cliff.org) (`cliff.toml`) y la receta 
   de la hoja—, porque un comentario no puede pedir nada ni animar: sin eso, la propia
   cabecera de una hoja documentando qué no puede hacer contaba como incumplimiento. La detección es
   **literal y sensible a mayúsculas** (las hojas son del proyecto y van en minúsculas), declarado a
-  propósito. Los dos contratos se comprueban con fixtures en línea a través de
+  propósito: la aguja del bloque es literal **y con el espacio después del `:`** —`@media
+  (prefers-reduced-motion: reduce)`; sin el espacio, a la guarda no le consta—, y el bloque se delimita
+  a mano contando llaves hasta **su** cierre equilibrado. Y el límite que ningún código salva, escrito
+  en lugar de escondido: la guarda **garantiza que el patrón está**, **no** que el CSS apague el
+  movimiento en todos los navegadores —eso exigiría un motor de CSS y una matriz de navegadores—. Los
+  dos contratos se comprueban con fixtures en línea a través de
   `pub fn incumplimientos(hoja: &[u8])` y `pub enum Incumplimiento` —**bajo `#[cfg(test)]`**: el crate
   es solo binario y el servicio no valida CSS—, más las dos guardas sobre la tabla `THEMES`.
+- **El `<hr>` de las seis hojas es decorativo, y su contraste bajo es una decisión medida.** Va entre
+  **1,31 y 1,55** según la hoja —1,31 `terminal`, 1,39 `paper`, **1,43** claro y **1,55** oscuro en
+  `default`/`minimal`/`compact`, 1,48 `amber`—, por debajo del 3:1 de WCAG 1.4.11, y queda fuera de ese
+  criterio porque cubre el **contenido no textual necesario para entender el contenido** y los
+  componentes de interfaz, no el adorno. Se decide **no** subirlo —llevarlo a 3:1 pediría un trazo mucho
+  más marcado y rompería el aire de las seis hojas—, y es una **decisión explícita del usuario**, no el
+  resultado de una guarda: el `<hr>` queda con su ratio en la cabecera de cada hoja para que quien
+  vuelva a medirlo no lo cuente como hallazgo. Lo que **sí** importa es el contraste del **texto** —el
+  que se lee—, que se mide **a mano** (**44 pares**, objetivo **AA**) y se deja escrito: **ninguna
+  guarda mide el aspecto** —paleta, escala, jerarquía y espaciado se revisan a ojo—.
 - **La página del proyecto es una plantilla, y ya no son once ficheros.** `content/404.html` es **la**
   página —una sola— y el servidor la **rellena al servir** (`src/render.rs::plantilla`): `{{code}}` con
   el código resuelto, `{{reason}}` con `resolve::canonical_reason(code)` y `{{description}}` con
   `resolve::description(code)`, los tres —el código también en la clase del `body`,
-  `class="c{{code}}"`—. Las reglas de esa sustitución son **las mismas** que las del marcador de la
+  `class="c{{code}}"`—. El marcado envuelve el contenido en un `<main>` y cierra con un
+  `<footer>errserve</footer>` —**sin `href`**, y con el nombre como **texto del fichero**, no como
+  marcador: siguen siendo tres—. Las reglas de esa sustitución son **las mismas** que las del marcador de la
   hoja: una página **sin** marcadores se sirve **byte a byte** —sin tocar el disco—, se sustituye
   **cada** aparición y no solo la primera, el escaneo es **por bytes** (una página del operador puede no
   estar en UTF-8) y se avanza por el documento de entrada, así que el valor recién insertado no se

@@ -218,6 +218,18 @@ lugar de disfrazarlo de puerta del CI. Lo que sí se hace, y queda en `tasks.md`
 - **Revisar a ojo** la escala y el espaciado sobre las seis hojas servidas, porque un número no distingue
   una jerarquía legible de una que no lo es.
 
+**La exención del `<hr>`, y por qué no se sube.** El separador de las seis hojas es **decorativo** —la
+página se entiende igual sin él—, y su contraste sobre el fondo va de **1,31 a 1,55** según la hoja
+—1,31 `terminal`, 1,39 `paper`, **1,43** claro y **1,55** oscuro en `default`/`minimal`/`compact`,
+1,48 `amber`—. Queda **fuera** del 3:1 de WCAG 1.4.11 porque ese criterio cubre el **contenido no
+textual necesario para entender el contenido** y los componentes de interfaz, **no** el adorno. Se
+decide **no** subirlo: llevarlo a 3:1 obligaría a un trazo mucho más marcado y rompería el aire de las
+seis hojas —el `<hr>` existe para separar, no para llamar la atención—. Y es una **decisión explícita
+del usuario**, no el resultado de una guarda: **ninguna guarda mide el aspecto**. Lo que sí importa es
+el contraste del **texto** —el que se lee—, que se mide **a mano** (**44 pares**, objetivo **AA**) y se
+deja escrito; el `<hr>` queda con su ratio en la cabecera de cada hoja, para que quien vuelva a medirlo
+no lo cuente como hallazgo.
+
 Lo que **sí** es comprobable y entra en la guarda es lo de siempre: que ninguna de las seis hojas puede
 hacer una petición y que la que anima puede apagarse. La hoja del operador sigue fuera del alcance —el
 servicio no parsea CSS al servir, y validarla al arrancar haría que el arranque dependiera del sistema de
