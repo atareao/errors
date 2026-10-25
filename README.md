@@ -88,7 +88,7 @@ curl -s  localhost:8080/version              # {"version":"..."}
 |---|---|---|
 | `PORT` | `8080` | Puerto de escucha (bind `0.0.0.0`). El que asume la guía de Traefik. |
 | `LOG_LEVEL` | `info` | Filtro de `tracing-subscriber`. |
-| `CONTENT_DIR` | `content` | Directorio de páginas HTML y assets. |
+| `CONTENT_DIR` | `content` | *Override* de las páginas HTML y los assets **embebidos** en el binario. |
 | `DEFAULT_ERROR_PAGE` | `404` | Código cuando el path y `X-Code` no aportan uno utilizable. |
 | `LOG_FORMAT` | `text` | Formato del registro: `text` o `json`. |
 | `RETRY_AFTER` | `120` | Segundos de la cabecera `Retry-After`. La llevan solo el `429` y el `503`. |
@@ -103,6 +103,12 @@ cinco minutos en recuperarse, `120` es una mentira que el cliente obedece. Admit
 segundos —`0` significa «reintenta ya»— y no tiene techo. Una variable vacía, o que no sea un entero
 de segundos, es un error de arranque. Lo que **no** se configura es qué códigos la llevan: son el
 `429` y el `503`, y eso lo decide el código.
+
+`CONTENT_DIR` es solo un ***override***. El binario lleva **dentro** las once páginas y su hoja, así
+que un `cargo install errserve` —que deja un ejecutable y ningún fichero de datos, con `CONTENT_DIR`
+apuntando por defecto a un `content` que no existe— sirve las páginas de verdad y su hoja, y no el
+respaldo de texto. Lo que haya en `CONTENT_DIR` gana **cuando se pueda leer**; lo que falte se sirve
+desde la copia embebida.
 
 ## Cómo se resuelve
 
@@ -121,8 +127,9 @@ Cada página de error lleva `Content-Type`, `Content-Length`,
 `Retry-After` con el valor de `RETRY_AFTER` (`120` por defecto).
 
 El HTML se sirve de `CONTENT_DIR/<código>.html` (con caída al fichero del código
-por defecto); JSON, XML y texto se generan del código, su razón canónica y su
-descripción.
+por defecto) y, agotadas esas dos lecturas, de la misma cascada sobre la copia
+**embebida** en el binario; JSON, XML y texto se generan del código, su razón
+canónica y su descripción.
 
 ## Códigos cubiertos
 
@@ -130,7 +137,8 @@ Once códigos tienen página propia: `400`, `401`, `403`, `404`, `405`, `408`, `
 `503` y `504`. Cualquier otro cae al fichero del código por defecto, pero **el estado sigue siendo
 el código resuelto**: nunca verás un `504` servido como `404`.
 
-Todas las páginas comparten una sola hoja, `css/error.css`, y cada una se identifica con la clase
+Todas las páginas comparten una sola hoja, `css/error.css` —que **también va embebida**, y es tan
+*override* como las páginas—, y cada una se identifica con la clase
 de su código (`<body class="c504">`), que es lo que permite diferenciar su aspecto sin duplicar la
 hoja once veces.
 

@@ -44,6 +44,7 @@
 //! es justo lo que este proyecto corrige.
 
 mod config;
+mod embedded;
 mod metrics;
 mod path;
 mod render;
@@ -58,7 +59,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::uri::{PathAndQuery, Uri};
-use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::routing::get;
@@ -151,9 +152,13 @@ fn build_router(config: &Config) -> Router {
         // hereda su `X-Robots-Tag`).
         .route("/metrics", get(metrics))
         // Los assets se sirven desde la **única** ruta de estáticos, la misma
-        // que usa el render del HTML (`CONTENT_DIR`).
+        // que usa el render del HTML (`CONTENT_DIR`). El respaldo del
+        // `ServeDir` sirve la copia **embebida** cuando no hay fichero: así un
+        // binario instalado sin ficheros de datos sirve su hoja igual (D2).
         .fallback_service(
-            ServeDir::new(&config.content_dir).append_index_html_on_directories(false),
+            ServeDir::new(&config.content_dir)
+                .append_index_html_on_directories(false)
+                .fallback(embedded_assets()),
         )
         // El middleware se añade después de las rutas: axum solo envuelve lo
         // que ya existe, y el *fallback* es una de esas cosas.
@@ -168,6 +173,81 @@ fn build_router(config: &Config) -> Router {
         // encontrarse un cuerpo ya comprimido ni escribir un `Content-Length`
         // que ya no corresponde a lo que se envía.
         .layer(CompressionLayer::new())
+}
+
+/// Servicio de respaldo de `ServeDir`: sirve los assets **embebidos** cuando no
+/// hay ningún fichero en `CONTENT_DIR`.
+///
+/// Es el segundo escalón de D2. `ServeDir` sigue intentando el disco primero
+/// —así el fichero de un operador gana cuando se puede leer (D1)— y solo cuando
+/// no encuentra el fichero cede el paso aquí. El `fallback` **no** altera el
+/// estado que devolvemos, así que un path que no esté en la tabla tiene que
+/// responder `404` —el middleware lo sustituye por la página de error— y no un
+/// `200` de más: lo fijan las pruebas 1.9 y 1.9c.
+///
+/// El camino corre en el hilo *async* —a diferencia del render, que va en
+/// `spawn_blocking` por la auditoría I-1—, y por eso aquí **no** hay E/S de
+/// disco: los bytes son la tabla en memoria de [`embedded`]. La forma es un
+/// `Router` de axum porque el `Service` que `ServeDir::fallback` espera es
+/// `tower::Service`, que este crate solo tiene como dependencia de desarrollo y
+/// no puede nombrar en producción; el `Router` **es** ese `Service` de verdad
+/// —`Clone + Send`, con un `poll_ready` que devuelve `Ready` sin bloquear— y no
+/// un cierre suelto.
+fn embedded_assets() -> Router {
+    Router::new().fallback(embedded_asset)
+}
+
+/// Respaldo de [`embedded_assets`]: el asset embebido del path, o `404`.
+///
+/// El path ya viene **normalizado** —el middleware [`error_pages`] reescribió la
+/// URI antes de ceder el paso, y `fold_components` pliega la barra final—, así
+/// que no hay una segunda forma de llegar al asset (tarea 3.3). La igualdad es
+/// **exacta**, sin prefijos ni subcadenas: lo que la discrimina es un path que
+/// **extiende** al del asset (`/css/error.css/extra`), que no tiene segmentos
+/// vacíos que plegar y llega entero al respaldo; una consulta con `starts_with`
+/// lo serviría con `200`.
+async fn embedded_asset(request: Request) -> Response {
+    let Some((bytes, content_type)) = embedded::asset(request.uri().path()) else {
+        return not_found_response();
+    };
+
+    let is_head = request.method() == Method::HEAD;
+
+    // A `HEAD` se le responde como al `GET` —estado y `Content-Type`— pero sin
+    // cuerpo; el `Content-Length` del asset se deja, que es lo que haría el
+    // `GET`.
+    let mut response = Response::new(if is_head {
+        Body::empty()
+    } else {
+        Body::from(bytes)
+    });
+
+    insert_header(
+        response.headers_mut(),
+        header::CONTENT_TYPE.as_str(),
+        content_type,
+    );
+
+    if is_head {
+        insert_header(
+            response.headers_mut(),
+            header::CONTENT_LENGTH.as_str(),
+            &bytes.len().to_string(),
+        );
+    }
+
+    response
+}
+
+/// `404` sin cuerpo: lo que un path fuera de la tabla de assets responde para
+/// que el middleware lo sustituya por la página de error.
+///
+/// Con `fallback` nadie corrige el estado de esta respuesta, así que devolver
+/// aquí un `200` de más saldría tal cual (D2).
+fn not_found_response() -> Response {
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = StatusCode::NOT_FOUND;
+    response
 }
 
 /// Arranque real: `Config::from_env()?`, `tracing`, `axum::serve` en
@@ -538,8 +618,15 @@ async fn error_response(state: &AppState, path: &NormalizedPath, hints: &Hints) 
         Ok(Err(err)) => {
             // Falta el HTML del código y el del código por defecto (o no se
             // pudo leer). El estado sigue siendo el código resuelto y nunca
-            // `500`: se responde el cuerpo de texto (auditoría I-2).
-            tracing::warn!(code, error = %err, "sin HTML de la página de error: se responde texto");
+            // `500`: se responde el cuerpo de texto (auditoría I-2). El mensaje
+            // no habla de «existe o no» porque cubre las dos causas, y la
+            // precisa —`MissingHtml` habla de las dos capas, `Io` de la lectura—
+            // viaja en el campo `error`.
+            tracing::warn!(
+                code,
+                error = %err,
+                "no se pudo obtener el HTML de la página de error: se responde texto"
+            );
             page_response(render_text_fallback(code, config.retry_after))
         }
         Err(err) => {
@@ -672,6 +759,65 @@ mod tests {
     /// Fichero de fixture que representa `content/404.html`.
     fn fixture_404_html() -> &'static str {
         include_str!("../tests/fixtures/content/404.html")
+    }
+
+    /// Página **embebida** del `503`: el fichero del repositorio (`content/503.html`)
+    /// que la fase GREEN embebe. Se fija aquí con `include_str!` —y no por la API
+    /// del módulo `embedded`, que aún no existe en RED— para no mezclar las dos
+    /// fases.
+    const EMBEDDED_503_HTML: &str = include_str!("../content/503.html");
+    /// Página **embebida** del `404`: el fichero del repositorio (`content/404.html`,
+    /// 460 bytes), distinto del fixture de 271 bytes de `fixture_404_html`.
+    const EMBEDDED_404_HTML: &str = include_str!("../content/404.html");
+    /// Hoja de estilos **embebida**: `content/css/error.css`.
+    const EMBEDDED_CSS: &str = include_str!("../content/css/error.css");
+    /// Hoja de estilos del directorio de fixtures: **propia y distinguible** de
+    /// la embebida (`tests/fixtures/content/css/error.css`).
+    const FIXTURE_CSS: &str = include_str!("../tests/fixtures/content/css/error.css");
+
+    /// Directorio de contenido que **no existe**: el caso de un binario
+    /// instalado sin ficheros de datos, con `CONTENT_DIR` apuntando a un
+    /// `content` que no está.
+    ///
+    /// La aserción de abajo impide que alguien cree el directorio por accidente
+    /// y convierta estas pruebas en otra cosa.
+    fn sin_contenido_dir() -> PathBuf {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/inexistente-y-ademas-inexistente");
+
+        assert!(
+            !dir.exists(),
+            "el fixture `sin contenido` no puede existir: {}",
+            dir.display()
+        );
+
+        dir
+    }
+
+    /// `Config` con un `CONTENT_DIR` inexistente y el defecto por defecto
+    /// (`404`): la capa del operador no aporta nada y tiene que entrar la
+    /// embebida.
+    fn sin_contenido_config() -> Config {
+        Config::from_env_iter([(
+            "CONTENT_DIR".to_string(),
+            sin_contenido_dir().to_string_lossy().into_owned(),
+        )])
+        .expect("la configuración de fixtures debe construirse")
+    }
+
+    /// `Config` con un `CONTENT_DIR` **sin ningún HTML** (`tests/fixtures/no-html`)
+    /// y `DEFAULT_ERROR_PAGE=418`: un defecto legal pero **fuera** de la tabla
+    /// embebida (los once son `400, 401, 403, 404, 405, 408, 429, 500, 502, 503,
+    /// 504`). Es el único camino que le queda al respaldo de texto una vez las
+    /// páginas están embebidas (D4).
+    ///
+    /// Reutiliza [`no_html_config`] —el directorio sin HTML ya existente— y le
+    /// cambia solo el defecto, para no dejar ese ayudante sin usar.
+    fn default_418_sin_html_config() -> Config {
+        let mut config = no_html_config();
+        config.default_error_page = 418;
+
+        config
     }
 
     fn get(uri: &str) -> Request<Body> {
@@ -1112,14 +1258,27 @@ mod tests {
 
     #[tokio::test]
     async fn sin_fichero_html_el_estado_sigue_siendo_el_codigo_resuelto() {
-        // `CONTENT_DIR` no tiene `418.html` **ni** `404.html`.
-        let response = build_router(&no_html_config())
+        // tasks.md 1.12, re-apuntada en el change `embedded-error-pages`. Antes
+        // arrancaba con `DEFAULT_ERROR_PAGE=404` y un `CONTENT_DIR` sin HTML; con
+        // las páginas embebidas, el defecto `404` **sí** está en la tabla, así
+        // que la prueba quedaría verde por la página embebida del `404` y
+        // dejaría de fijar el respaldo de texto —su motivo—. Por eso arranca con
+        // `DEFAULT_ERROR_PAGE=418`, legal pero fuera de la tabla, y sigue
+        // exigiendo el respaldo de texto (`text/plain`) con el código resuelto y
+        // nunca `500`.
+        let response = build_router(&default_418_sin_html_config())
             .oneshot(get("/418.html"))
             .await
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::IM_A_TEAPOT);
         assert_ne!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            content_type(&response).starts_with("text/plain"),
+            "un `418` no está en la tabla embebida: el cuerpo tiene que ser el respaldo \
+             de texto, fue: {}",
+            content_type(&response)
+        );
         assert_eq!(
             header_value(&response, "X-Robots-Tag").as_deref(),
             Some("noindex, nofollow, nosnippet, noarchive")
@@ -1919,5 +2078,384 @@ mod tests {
                 );
             }
         }
+    }
+
+    // --- Página embebida sin ficheros de datos (change `embedded-error-pages`,
+    //     tasks.md 1.3-1.5, 1.9-1.11, 1.13) --------------------------------
+    //
+    // Con `CONTENT_DIR` inexistente, la fase GREEN sirve las páginas y la hoja
+    // embebidas: el HTML por el render —la cascada del disco agotada **entera**
+    // antes de la copia embebida, D1— y la hoja por el `fallback` de `ServeDir`
+    // (D2). Las guardas de D1 (1.7, 1.8) y del respaldo (1.13) pasan ya en RED.
+
+    #[tokio::test]
+    async fn sin_directorio_una_pagina_html_sirve_la_copia_embebida_con_su_estado() {
+        // tasks.md 1.3: hoy `/503.html` con `CONTENT_DIR` inexistente responde
+        // un `503` con el respaldo de texto (`text/plain`); en GREEN responde la
+        // página embebida del `503` (`text/html`).
+        let response = build_router(&sin_contenido_config())
+            .oneshot(get("/503.html"))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(
+            content_type(&response).starts_with("text/html"),
+            "Content-Type inesperado: {}",
+            content_type(&response)
+        );
+
+        let body = body_bytes(response).await;
+        assert_eq!(
+            body,
+            EMBEDDED_503_HTML.as_bytes(),
+            "el cuerpo tiene que ser la página embebida de `content/503.html`"
+        );
+    }
+
+    #[tokio::test]
+    async fn sin_directorio_los_once_codigos_sirven_su_pagina_embebida() {
+        // tasks.md 1.4. Se pide `GET /<código>` con `Accept: text/html` y **no**
+        // `/<código>.html`: la extensión del path resolvería HTML por el primer
+        // eslabón de la cascada de formato (la extensión) y no probaría que un
+        // navegador —que manda `Accept: text/html`, no una extensión— también
+        // recibe la página embebida. El `Accept` es el cuarto eslabón de esa
+        // cascada, y es justo lo que un navegador detrás de Traefik envía.
+        let router = build_router(&sin_contenido_config());
+
+        for code in [400u16, 401, 403, 404, 405, 408, 429, 500, 502, 503, 504] {
+            let request = get_with_headers(&format!("/{code}"), &[("Accept", "text/html")]);
+            let response = router.clone().oneshot(request).await.unwrap();
+
+            assert_eq!(
+                response.status().as_u16(),
+                code,
+                "`/{code}` debe responder su propio estado"
+            );
+            assert!(
+                content_type(&response).starts_with("text/html"),
+                "`/{code}`: Content-Type inesperado: {}",
+                content_type(&response)
+            );
+
+            let body = String::from_utf8(body_bytes(response).await).unwrap();
+            assert!(
+                body.contains(&format!("class=\"c{code}\"")),
+                "`/{code}`: el cuerpo tiene que ser la página embebida de su código, fue: {body}"
+            );
+            assert_ne!(
+                body.as_bytes(),
+                render_text_fallback(code, 120).body.as_slice(),
+                "`/{code}`: el cuerpo no puede ser el respaldo de texto"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sin_directorio_la_pagina_embebida_no_se_sirve_como_asset_con_200() {
+        // tasks.md 1.5: `/404.html` se clasifica como página de error **antes**
+        // de llegar a `ServeDir`, así que la copia embebida nunca se sirve como
+        // asset. La prueba fija el `404` —nunca `200`— y, para que sea roja en
+        // RED (donde esta petición cae al respaldo de texto), que el cuerpo es
+        // la página embebida (`text/html`), no el respaldo (`text/plain`).
+        let response = build_router(&sin_contenido_config())
+            .oneshot(get("/404.html"))
+            .await
+            .unwrap();
+
+        assert_ne!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(
+            content_type(&response).starts_with("text/html"),
+            "Content-Type inesperado: {}",
+            content_type(&response)
+        );
+
+        let body = body_bytes(response).await;
+        assert_eq!(
+            body,
+            EMBEDDED_404_HTML.as_bytes(),
+            "el cuerpo tiene que ser la página embebida del `404`, no un asset ni el respaldo"
+        );
+    }
+
+    #[tokio::test]
+    async fn el_directorio_gana_a_la_pagina_embebida_por_su_defecto() {
+        // tasks.md 1.7 / D1 (guarda, verde en RED y en GREEN): con
+        // `CONTENT_DIR=tests/fixtures/content` y el defecto `404`, `GET
+        // /503.html` sirve el `404.html` del operador (271 bytes), **no** la
+        // página embebida del `503`. La cascada del disco se agota entera antes
+        // de entrar en la copia embebida.
+        let response = build_router(&fixtures_config())
+            .oneshot(get("/503.html"))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(content_type(&response).starts_with("text/html"));
+
+        let body = body_bytes(response).await;
+        assert_eq!(
+            body,
+            fixture_404_html().as_bytes(),
+            "el cuerpo tiene que ser el `404.html` del operador"
+        );
+        assert_ne!(
+            body,
+            EMBEDDED_503_HTML.as_bytes(),
+            "la página embebida del `503` no puede ganar al directorio del operador"
+        );
+    }
+
+    #[tokio::test]
+    async fn el_directorio_gana_a_la_pagina_embebida_del_mismo_codigo() {
+        // tasks.md 1.8 / D1 (guarda): con `tests/fixtures/content`, `GET
+        // /404.html` sirve su `404.html` (271 bytes) y no la copia embebida del
+        // `404` (460 bytes).
+        let response = build_router(&fixtures_config())
+            .oneshot(get("/404.html"))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body = body_bytes(response).await;
+        assert_eq!(body, fixture_404_html().as_bytes());
+        assert_ne!(
+            body,
+            EMBEDDED_404_HTML.as_bytes(),
+            "la copia embebida del `404` no puede ganar al `404.html` del operador"
+        );
+    }
+
+    #[tokio::test]
+    async fn sin_directorio_la_hoja_embebida_se_sirve_y_lo_demas_es_pagina_de_error() {
+        // tasks.md 1.9: la hoja embebida responde `200 text/css`; hoy responde
+        // la página de error del defecto. Y un path que no esté en la tabla
+        // sigue siendo página de error: el respaldo solo responde a sus paths.
+        let router = build_router(&sin_contenido_config());
+
+        let response = router.clone().oneshot(get("/css/error.css")).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "la hoja embebida tiene que servirse con 200, no como página de error"
+        );
+        assert!(
+            content_type(&response).starts_with("text/css"),
+            "Content-Type inesperado: {}",
+            content_type(&response)
+        );
+        assert!(
+            !body_bytes(response).await.is_empty(),
+            "la hoja embebida no puede estar vacía"
+        );
+
+        let response = router.oneshot(get("/nada.css")).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "un path que no está en la tabla de assets sigue siendo página de error"
+        );
+        assert_eq!(
+            header_value(&response, "X-Robots-Tag").as_deref(),
+            Some("noindex, nofollow, nosnippet, noarchive")
+        );
+    }
+
+    #[tokio::test]
+    async fn sin_directorio_head_de_la_hoja_embebida_responde_igual_sin_cuerpo() {
+        // tasks.md 1.9b: `ServeDir` copia método, URI y cabeceras a la petición
+        // del respaldo, así que `HEAD /css/error.css` pasa por la tabla y tiene
+        // que responder como el `GET` —estado y `Content-Type`— pero **sin
+        // cuerpo**. Ninguna prueba anterior montaba un `HEAD`.
+        let request = Request::builder()
+            .method("HEAD")
+            .uri("/css/error.css")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = build_router(&sin_contenido_config())
+            .oneshot(request)
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            content_type(&response).starts_with("text/css"),
+            "Content-Type inesperado: {}",
+            content_type(&response)
+        );
+        assert!(
+            body_bytes(response).await.is_empty(),
+            "una respuesta a `HEAD` no lleva cuerpo"
+        );
+    }
+
+    #[tokio::test]
+    async fn sin_directorio_un_path_que_extiende_al_asset_no_es_el_asset() {
+        // tasks.md 1.9c (guarda): la tabla de assets compara el path **de forma
+        // exacta**, no con prefijos ni subcadenas. El path que lo discrimina es
+        // uno que **extiende** al del asset, `/css/error.css/extra`: no tiene
+        // ningún segmento vacío que plegar (`src/path.rs::fold_components`,
+        // líneas 106-130), así que llega entero al respaldo de `ServeDir` y una
+        // consulta con `starts_with` o con `contains` devolvería la hoja con
+        // `200` y esta prueba se caería.
+        //
+        // Y no la barra final: `fold_components` descarta los segmentos vacíos
+        // (línea 111, `"" | "." => {}`) y reconstruye el path prefixando cada
+        // segmento con `/`, así que `/css/error.css/` es **`/css/error.css`**
+        // antes de llegar a `ServeDir` —`error_pages` reescribe la URI con esa
+        // cadena—. Una petición con barra final es indistinguible de la misma sin
+        // ella; no hay información que las separe, y por eso la prueba de abajo
+        // fija que las dos dan la misma respuesta.
+        let response = build_router(&sin_contenido_config())
+            .oneshot(get("/css/error.css/extra"))
+            .await
+            .unwrap();
+
+        assert_ne!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            header_value(&response, "X-Robots-Tag").as_deref(),
+            Some("noindex, nofollow, nosnippet, noarchive")
+        );
+        assert!(
+            !content_type(&response).starts_with("text/css"),
+            "un path que solo extiende al asset no puede servirse como la hoja: {}",
+            content_type(&response)
+        );
+    }
+
+    #[tokio::test]
+    async fn sin_directorio_la_barra_final_da_la_misma_respuesta_que_el_path_limpio() {
+        // `fold_components` pliega la barra final antes de que el path llegue a
+        // `ServeDir` (`src/path.rs`, línea 111: los segmentos vacíos se
+        // descartan), así que `/css/error.css/` y `/css/error.css` son la **misma**
+        // petición para el servidor de ficheros. La capa del disco responde a las
+        // dos igual —lo mismo que aquí: sin directorio de contenido, las dos caen
+        // al respaldo embebido—, así que un `200` con barra final no es una
+        // incoherencia: esta prueba compara las dos respuestas de verdad y fija
+        // que las dos capas coinciden, para que nadie «arregle» mañana una
+        // asimetría que no existe.
+        let router = build_router(&sin_contenido_config());
+
+        let con_barra = router
+            .clone()
+            .oneshot(get("/css/error.css/"))
+            .await
+            .unwrap();
+        let limpio = router.oneshot(get("/css/error.css")).await.unwrap();
+
+        assert_eq!(con_barra.status(), StatusCode::OK);
+        assert_eq!(limpio.status(), StatusCode::OK);
+        assert!(
+            content_type(&con_barra).starts_with("text/css"),
+            "Content-Type inesperado con barra final: {}",
+            content_type(&con_barra)
+        );
+        assert_eq!(
+            content_type(&con_barra),
+            content_type(&limpio),
+            "las dos formas del path tienen que dar el mismo `Content-Type`"
+        );
+
+        let cuerpo_con_barra = body_bytes(con_barra).await;
+        let cuerpo_limpio = body_bytes(limpio).await;
+        assert_eq!(
+            cuerpo_con_barra, cuerpo_limpio,
+            "las dos formas del path tienen que dar el mismo cuerpo"
+        );
+        assert_eq!(
+            cuerpo_con_barra,
+            EMBEDDED_CSS.as_bytes(),
+            "el cuerpo tiene que ser la hoja embebida"
+        );
+    }
+
+    #[tokio::test]
+    async fn sin_directorio_la_pagina_embebida_enlaza_a_la_hoja_embebida() {
+        // tasks.md 1.10: la página embebida del `404` referencia `css/error.css`
+        // y esa ruta resuelve como `200 text/css`, no como página de error —el
+        // «404 dentro del 404» que D2 existe para evitar—.
+        let router = build_router(&sin_contenido_config());
+
+        let response = router
+            .clone()
+            .oneshot(get_with_headers("/404.html", &[("Accept", "text/html")]))
+            .await
+            .unwrap();
+        let body = String::from_utf8(body_bytes(response).await).unwrap();
+        assert!(
+            body.contains("css/error.css"),
+            "la página embebida tiene que enlazar a `css/error.css`, fue: {body}"
+        );
+
+        let response = router.oneshot(get("/css/error.css")).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "la hoja referenciada tiene que servirse como asset, no como página de error"
+        );
+        assert!(
+            content_type(&response).starts_with("text/css"),
+            "Content-Type inesperado: {}",
+            content_type(&response)
+        );
+    }
+
+    #[tokio::test]
+    async fn la_hoja_del_directorio_gana_a_la_hoja_embebida() {
+        // tasks.md 1.11 / D1 (guarda): con `tests/fixtures/content`, la hoja del
+        // operador se sirve tal cual —comparada con el `include_str!` del
+        // fixture nuevo— y **no** la embebida.
+        let response = build_router(&fixtures_config())
+            .oneshot(get("/css/error.css"))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            content_type(&response).starts_with("text/css"),
+            "Content-Type inesperado: {}",
+            content_type(&response)
+        );
+
+        let body = body_bytes(response).await;
+        assert_eq!(
+            body,
+            FIXTURE_CSS.as_bytes(),
+            "el cuerpo tiene que ser la hoja del directorio de fixtures"
+        );
+        assert_ne!(
+            body,
+            EMBEDDED_CSS.as_bytes(),
+            "la hoja embebida no puede ganar a la del directorio del operador"
+        );
+    }
+
+    #[tokio::test]
+    async fn sin_pagina_en_ninguna_capa_un_codigo_distinto_del_defecto_no_da_500() {
+        // tasks.md 1.13 / D4 (guarda): con el defecto `418` —fuera de la tabla
+        // embebida— y un `CONTENT_DIR` sin HTML, `GET /599.html` responde `599`
+        // —el respaldo de texto— y nunca un `500`.
+        let response = build_router(&default_418_sin_html_config())
+            .oneshot(get("/599.html"))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status().as_u16(), 599);
+        assert_ne!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            content_type(&response).starts_with("text/plain"),
+            "sin página en ninguna capa el cuerpo es el respaldo de texto: {}",
+            content_type(&response)
+        );
+
+        let body = String::from_utf8(body_bytes(response).await).unwrap();
+        assert!(
+            body.contains("599"),
+            "el respaldo de texto debe llevar el código: {body}"
+        );
     }
 }
