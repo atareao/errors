@@ -111,7 +111,20 @@ jobs:
           # etiqueta antigua tiene que seguir funcionando aunque la rama haya avanzado de
           # versión —si no, republicar v0.4.0 tras subir main a 0.5.0 daría un rojo falso—.
           # Con un dispatch sobre una etiqueta que no existe, esto falla AQUÍ, antes que nada.
-          ref: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+          #
+          # El `ref` va CUALIFICADO a `refs/tags/…`, no como nombre suelto de etiqueta:
+          # `actions/checkout` resuelve un `ref` sin cualificar probando primero
+          # `origin/<ref>` como RAMA y solo después como etiqueta, y git permite que
+          # coexistan una rama `v0.4.0` y una etiqueta `v0.4.0`. Si eso pasara, este job y el
+          # de `crate` resolverían los dos lo mismo —la rama—, la afirmación de `crate`
+          # compararía la rama consigo misma y el crate saldría del árbol de la rama.
+          # `refs/tags/…` deja el refspec inequívoco y una etiqueta inexistente falla en el
+          # propio `checkout`. Con el `format(...)`, además, un dispatch con el input vacío
+          # produce `refs/tags/`, que falla en el checkout —no un paso después, en el filtro—:
+          # «un dispatch sin etiqueta válida falla en el primer paso», como promete la cabecera.
+          ref: >-
+            ${{ github.event_name == 'push' && github.ref
+            || format('refs/tags/{0}', inputs.tag) }}
 
       - name: Resolver la etiqueta, la versión y la imagen
         id: v
@@ -424,7 +437,15 @@ jobs:
           # la RAMA: sin fijar el `ref` se publicaría de forma irreversible el árbol de `main` bajo
           # la versión de una etiqueta que apunta a otro commit —y crates.io no permite
           # reemplazarlo ni borrarlo—.
-          ref: ${{ needs.version.outputs.tag }}
+          #
+          # El `ref` va CUALIFICADO a `refs/tags/…`: un `ref` sin cualificar se resuelve
+          # probando primero una RAMA del mismo nombre y solo después la etiqueta, así que si
+          # coexistieran rama y etiqueta `vX.Y.Z`, este job y el de `version` resolverían los
+          # dos la rama: la afirmación de abajo compararía la rama consigo misma y no cazaría
+          # nada. `refs/tags/…` deja el refspec inequívoco (`+refs/tags/X:refs/tags/X`) y una
+          # etiqueta inexistente falla en el propio `checkout`. No toca el comentario de la
+          # afirmación: ese habla de LEER un ref local, y esto es el DESTINO del fetch.
+          ref: refs/tags/${{ needs.version.outputs.tag }}
           # Nada se empuja desde aquí (publica `cargo` con su token, no `git`): que el `checkout`
           # no deje las credenciales en el `.git/config` del runner.
           persist-credentials: false
