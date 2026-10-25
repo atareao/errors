@@ -42,13 +42,15 @@ services:
     # --- Configuración, solo por entorno --------------------------------------
     # Son los valores por defecto de `src/config.rs`, escritos aquí para que
     # quien lea el fichero no tenga que abrirlos. Una variable presente pero
-    # VACÍA es error de arranque, no "usa el defecto".
+    # VACÍA es error de arranque, no "usa el defecto"; y `THEME` o `LOG_FORMAT`
+    # con un valor que no esté en su lista también lo son.
     environment:
       PORT: "8080"              # puerto de escucha dentro del contenedor
       LOG_LEVEL: "info"         # filtro de tracing (debug, info, warn, error)
       LOG_FORMAT: "text"        # text | json (json para recolectores)
       CONTENT_DIR: "content"    # relativo a WORKDIR (/app/content en la imagen)
       DEFAULT_ERROR_PAGE: "404" # fuera de 400..=599 es error de arranque
+      THEME: "default"          # default | minimal | terminal | paper | amber | compact
 
     # --- Puertos --------------------------------------------------------------
     # En producción NO se publica ninguno: Traefik llega al contenedor por la

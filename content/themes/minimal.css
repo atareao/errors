@@ -1,0 +1,76 @@
+/* Hoja del tema `minimal`.
+ *
+ * Es la hoja de las once páginas de error (400, 401, 403, 404, 405, 408, 429,
+ * 500, 502, 503 y 504). El servidor la incrusta en el HTML al servir,
+ * sustituyendo el `<link>` de la página por un bloque de estilo con estas
+ * reglas, así que no puede referenciar recursos externos ni animarse.
+ *
+ * Solo tipografía: ni un color de acento. La jerarquía la marcan el tamaño y
+ * el peso, y el paso de claro a oscuro lo decide el sistema operativo. El
+ * marcado lleva la clase `c<código>` en el `body`, pero este tema no la usa.
+ */
+
+:root {
+  color-scheme: light dark;
+  --fg: #1f2328;
+  --bg: #ffffff;
+  --muted: #59636e;
+  --rule: #d1d9e0;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #e6edf3;
+    --bg: #0d1117;
+    --muted: #9198a1;
+    --rule: #30363d;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0 auto;
+  padding: 2rem;
+  max-width: 40rem;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.75rem;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.6;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(2.5rem, 9vw, 4.5rem);
+  font-weight: 300;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+h2 {
+  margin: 0;
+  font-size: clamp(1.05rem, 2.5vw, 1.35rem);
+  font-weight: 500;
+  color: var(--muted);
+}
+
+hr {
+  width: 6rem;
+  margin: 0.5rem 0;
+  border: 0;
+  border-top: 1px solid var(--rule);
+}
+
+p {
+  margin: 0;
+  max-width: 40rem;
+  color: var(--muted);
+  line-height: 1.6;
+}

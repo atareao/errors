@@ -82,6 +82,7 @@ curl -s  localhost:8080/404.json             # {"error":true,"code":404,...}
 curl -s  -H 'X-Format: application/xml' localhost:8080/404
 curl -i  localhost:8080/healthz              # 200
 curl -s  localhost:8080/version              # {"version":"..."}
+curl -s  -H 'Accept: text/html' -H 'X-Theme: terminal' localhost:8080/404   # con la hoja del tema `terminal` dentro
 ```
 
 ## Configuración (solo variables de entorno)
@@ -94,10 +95,15 @@ curl -s  localhost:8080/version              # {"version":"..."}
 | `DEFAULT_ERROR_PAGE` | `404` | Código cuando el path y `X-Code` no aportan uno utilizable. |
 | `LOG_FORMAT` | `text` | Formato del registro: `text` o `json`. |
 | `RETRY_AFTER` | `120` | Segundos de la cabecera `Retry-After`. La llevan solo el `429` y el `503`. |
+| `THEME` | `default` | Tema de las páginas **HTML**: `default`, `minimal`, `terminal`, `paper`, `amber` o `compact`. |
 
 No se lee ningún fichero de configuración. Una variable **presente pero vacía**
 es un error de arranque, no un valor por defecto. `DEFAULT_ERROR_PAGE` fuera del
-rango `400..=599` también lo es.
+rango `400..=599` también lo es, y un `THEME` que no sea uno de los seis temas
+—o que venga vacío— aborta el arranque igual, con un error que **nombra la
+variable** y **enumera los seis nombres**: quien escribe `THEME` cree que está
+configurando algo, así que el error tiene que decirle qué puede escribir en su
+lugar.
 
 `RETRY_AFTER` es el único valor de la respuesta que depende de tu infraestructura: la cabecera
 `Retry-After` es lo que se le promete al cliente sobre cuándo volver, así que si tu backend tarda
@@ -124,6 +130,12 @@ rango `400..=599` se ignora y se pasa a la siguiente.
 
 Código y formato son ortogonales: `/503.xml` es un 503 en XML.
 
+Y hay un **tercer eje**, que no reparte códigos ni formatos sino aspecto, y que solo toca al HTML: la
+hoja que va incrustada. La elige `THEME` —el tema de todo el servicio— y, por petición, la cabecera
+`X-Theme`, que gana a `THEME` cuando nombra uno de los seis temas; un `X-Theme` ausente, desconocido o
+vacío **no** es un error y cae al tema configurado. En JSON, XML y texto no hay hoja que incrustar, así
+que ahí el tema se ignora (ver «Páginas autocontenidas y temas»).
+
 Cada página de error lleva `Content-Type`, `Content-Length`,
 `X-Robots-Tag: noindex, nofollow, nosnippet, noarchive` y, en `429` y `503`,
 `Retry-After` con el valor de `RETRY_AFTER` (`120` por defecto).
@@ -142,7 +154,70 @@ el código resuelto**: nunca verás un `504` servido como `404`.
 Todas las páginas comparten una sola hoja, `css/error.css` —que **también va embebida**, y es tan
 *override* como las páginas—, y cada una se identifica con la clase
 de su código (`<body class="c504">`), que es lo que permite diferenciar su aspecto sin duplicar la
-hoja once veces.
+hoja once veces. Esa hoja es el tema `default`, y el `<link>` que la referencia en el **fichero** es
+el marcador que el servidor sustituye al servir (ver «Páginas autocontenidas y temas»).
+
+## Páginas autocontenidas y temas
+
+El HTML que sirve este servicio es **autocontenido**: lleva la hoja de estilos **dentro**, así que la
+página no pide ningún fichero para verse. No es una preferencia estética, es el arreglo de un fallo
+medido. Con el middleware `errors` de Traefik —el montaje de cualquier aplicación con dominio
+propio—, la página se sirve **en el host de la aplicación**, donde `/css/error.css` lo contesta el
+upstream, no este servicio: el navegador pide la hoja, recibe su `404` con `Content-Type: text/plain`,
+el middleware intercepta ese `404` y lo vuelve a pedir como página de error con un `Accept` que no
+negocia HTML —`text/css,*/*;q=0.1`—, así que la cascada de formato cae al **texto plano** y el
+navegador rechaza la hoja: *«MIME type ('text/plain') is not a supported stylesheet MIME type»*. El
+resultado era un `503` correcto, con el código correcto, y la página **sin estilos**. En el host del
+respaldo el mismo enlace sí resolvía —un asset existente gana a la página de error—, y esa asimetría
+escondía el fallo.
+
+`error-pages` no lo sufre porque sus páginas son «fully self-contained — all styles and images are
+embedded directly in the HTML, without loading any external resources»: esto es **paridad**, no un
+adorno.
+
+Cómo se hace, sin romper nada de lo de arriba:
+
+- Los **ficheros** de `CONTENT_DIR` conservan su `<link rel="stylesheet" href="/css/error.css" />` y
+  el servidor lo sustituye por un bloque `<style>` **al servir**. El fichero conserva el enlace a
+  propósito: sigue siendo legible y previsualizable, y así no se duplican las once páginas por tema.
+- Una página **sin** el marcador —una página propia, ya autocontenida— se sirve **byte a byte**, sin
+  añadir ni sustituir nada; y en ese caso el servicio no lee ninguna hoja, así que un CSS roto no
+  puede afectar a una página que no lo necesita.
+- Un `<link>` que **no** sea el marcador no se toca: es tuyo.
+- `/css/error.css` **sigue sirviéndose** como asset, con su `200 text/css`: no es una página de error
+  y hay instalaciones que lo enlazan. Y la hoja que se incrusta y la que se sirve son **la misma**,
+  resuelta con la misma regla —tu fichero, si se puede leer; si no, la copia embebida—, así que no
+  pueden discrepar. Un fallo al leerla **no** tumba la página: deja un `warn` en el registro y se usa
+  la copia embebida.
+
+### Los seis temas
+
+Un tema es **una sola hoja**: elegirlo no duplica las once páginas.
+
+| Tema | Hoja en `CONTENT_DIR` | Aspecto |
+|---|---|---|
+| `default` | `css/error.css` | La hoja de siempre, con sus reglas intactas: quien no configure `THEME` no ve ningún cambio. |
+| `minimal` | `themes/minimal.css` | Solo tipografía, sin acento de color; claro u oscuro según decida el sistema. |
+| `terminal` | `themes/terminal.css` | Monoespaciado, fósforo verde sobre negro. |
+| `paper` | `themes/paper.css` | Serif, fondo crema, aire de página impresa. |
+| `amber` | `themes/amber.css` | Monocromo ámbar, tipo CRT. |
+| `compact` | `themes/compact.css` | Todo lo corto posible, con el título y el subtítulo en una línea: para móvil y CLI. |
+
+`THEME` (entorno, al arrancar) elige el tema de **todo el servicio**, y `X-Theme` (cabecera de la
+petición) elige el de **esa** petición, con el primer-origen-que-haga-match de siempre: un `X-Theme`
+conocido gana a `THEME`. Un `X-Theme` desconocido **no** es un error —cae al tema configurado—,
+porque esa cabecera la elige quien llama y un cliente no puede romper el servicio; la comparación es
+**exacta**, así que `X-Theme: Terminal` no es el tema `terminal` y cae al configurado. `X-Theme` solo
+afecta al **HTML**: un JSON o un XML no tienen hoja, así que ahí el tema se ignora.
+
+Ninguno de los seis referencia recursos externos —ni `@import`, ni `url(...)` remotos, ni fuentes
+descargadas—: una página que necesita la red para verse es exactamente el defecto que este apartado
+corrige. Los cinco temas nuevos viven en `CONTENT_DIR` (`content/themes/`), así que además se sirven
+como assets —`GET /themes/terminal.css` es un `200 text/css`— y puedes verlos sin incrustar nada.
+
+`THEME` es el equivalente del `--template-name`/`$TEMPLATE_NAME` de `error-pages` —que por defecto usa
+`app-down`—, con una diferencia que se declara: allí la plantilla puede **rotar**
+(`--rotation-mode`) y aquí no (ver «No incluye»).
 
 ## Quién decide el código HTTP
 
@@ -199,9 +274,12 @@ y nada más, y hoy no hay ningún aviso que lo haga explotable.
 
 La respuesta se comprime cuando el cliente envía `Accept-Encoding: gzip` —y entonces responde
 con codificación por trozos, sin `Content-Length`—, y declara `Vary: Accept-Encoding, X-Request-Id,
-X-Trace-Id, X-Correlation-Id, X-Amzn-Trace-Id`: las cinco, siempre, las traiga la petición o no.
-Las cabeceras de correlación se copian de la petición a la respuesta cuando vienen —no se
-inventan—, así que una caché intermedia tiene que saber que la respuesta varía por ellas.
+X-Trace-Id, X-Correlation-Id, X-Amzn-Trace-Id, X-Theme`: las seis, siempre, las traiga la petición o
+no. Las cabeceras de correlación se copian de la petición a la respuesta cuando vienen —no se
+inventan—, así que una caché intermedia tiene que saber que la respuesta varía por ellas; y `X-Theme`
+cambia **el cuerpo** —la hoja que va incrustada en el HTML—, así que sin declararla una caché le
+entregaría a un cliente el tema que pidió otro, o el cuerpo entero de otro. Sin caché por medio el
+impacto es nulo (Traefik no cachea por defecto), pero con un CDN delante no.
 
 ### El registro de peticiones
 
@@ -319,6 +397,13 @@ caché local de Cargo (`cargo check --offline`).
 Sin motor de plantillas, sin localización, sin generador estático y sin TLS (lo
 termina Traefik). Se copian **solo** las cuatro cabeceras de correlación, no el
 conjunto completo de `--proxy-headers`, y la compresión se limita a gzip.
+
+Tampoco hay rotación de temas: `error-pages` tiene `--rotation-mode` (aleatorio
+al arrancar, horario, diario) y aquí no existe —un tema, y ya—. Y los seis temas
+están **incorporados al binario**, así que `THEME` no admite un nombre que no sea
+uno de ellos: un `content/themes/<nombre>.css` propio **reemplaza** la hoja de un
+tema que ya existe, pero no **añade** un séptimo nombre, porque eso haría que
+`THEME` dependiera del sistema de ficheros al arrancar.
 
 ## Licencia
 

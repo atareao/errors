@@ -55,8 +55,20 @@
 //! | `CONTENT_DIR`        | `content` |
 //! | `DEFAULT_ERROR_PAGE` | `404`     |
 //! | `RETRY_AFTER`        | `120`     |
+//! | `THEME`              | `default` |
 //!
 //! No se lee ningún fichero de configuración (`config.yml` ni similar).
+//!
+//! `THEME` (change `self-contained-themes`, spec `error-page`) elige la hoja que
+//! se incrusta en el HTML servido, entre los temas **incorporados al binario**
+//! ([`crate::theme::THEMES`]). Un valor que no sea uno de los seis —**o la
+//! cadena vacía**— es un error de arranque, con el mismo criterio que
+//! `LOG_FORMAT` y `DEFAULT_ERROR_PAGE`: la variable la escribe el **operador** y
+//! quien la escribe cree que está configurando algo, así que un `default`
+//! silencioso le ocultaría el error. La cabecera `X-Theme` **no** sigue esa
+//! regla, y la asimetría es deliberada: esa la elige **quien llama**, y un
+//! cliente no puede romper el servicio, así que un `X-Theme` desconocido cae al
+//! tema configurado sin error (ver [`crate::theme::resolve`]).
 //!
 //! `LOG_FORMAT` (change `release-hardening`, spec `observability`) decide el
 //! formato de los registros: `text`, el de siempre, por defecto, y `json` para
@@ -84,6 +96,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use crate::resolve::{MAX_ERROR_CODE, MIN_ERROR_CODE, is_usable_code};
+use crate::theme::{self, DEFAULT_THEME_NAME, THEME_NAMES, Theme};
 
 /// Puerto de escucha por defecto (el que asume la guía de Traefik).
 const DEFAULT_PORT: u16 = 8080;
@@ -107,6 +120,7 @@ const LOG_FORMAT_VAR: &str = "LOG_FORMAT";
 const CONTENT_DIR_VAR: &str = "CONTENT_DIR";
 const DEFAULT_ERROR_PAGE_VAR: &str = "DEFAULT_ERROR_PAGE";
 const RETRY_AFTER_VAR: &str = "RETRY_AFTER";
+const THEME_VAR: &str = "THEME";
 
 /// Formato de los registros del servicio.
 ///
@@ -153,6 +167,9 @@ pub struct Config {
     /// Segundos de la cabecera `Retry-After` de los códigos que la llevan
     /// (`429` y `503`). `0` es válido («reintenta ya»).
     pub retry_after: u32,
+    /// Tema del servicio: la hoja que se incrusta en el HTML servido. Es uno de
+    /// los seis incorporados al binario ([`crate::theme::THEMES`]).
+    pub theme: &'static Theme,
 }
 
 /// Error de arranque por una variable de entorno presente pero inválida.
@@ -173,6 +190,9 @@ pub enum ConfigError {
     /// `RETRY_AFTER` no es un entero sin signo de 32 bits (la cadena vacía
     /// incluida).
     InvalidRetryAfter(String),
+    /// `THEME` está presente pero no es uno de los temas incorporados (la
+    /// cadena vacía incluida).
+    UnknownTheme(String),
 }
 
 impl fmt::Debug for ConfigError {
@@ -216,6 +236,12 @@ impl fmt::Display for ConfigError {
                  Se espera un entero de segundos (¿una variable vacía?). Omitir la variable \
                  usa {DEFAULT_RETRY_AFTER}."
             ),
+            ConfigError::UnknownTheme(value) => write!(
+                f,
+                "`{THEME_VAR}` está presente pero no es un tema válido: {value:?}. \
+                 Se espera uno de {THEME_NAMES} (¿una variable vacía?). Omitir la variable \
+                 usa `{DEFAULT_THEME_NAME}`."
+            ),
         }
     }
 }
@@ -231,9 +257,10 @@ impl Config {
     /// están presentes: una variable presente pero vacía no cae al defecto,
     /// es un [`ConfigError`]. `DEFAULT_ERROR_PAGE` tiene que estar además en el
     /// rango utilizable `400..=599`. `LOG_FORMAT` tiene que ser `text` o `json`
-    /// con el mismo criterio. `RETRY_AFTER` también es obligatoriamente numérica
-    /// cuando está presente, pero **sin** rango: `0` es válido. Las claves
-    /// desconocidas se ignoran.
+    /// con el mismo criterio, y `THEME` uno de los seis temas incorporados
+    /// —incluida la cadena vacía en el rechazo—. `RETRY_AFTER` también es
+    /// obligatoriamente numérica cuando está presente, pero **sin** rango: `0`
+    /// es válido. Las claves desconocidas se ignoran.
     ///
     /// # Errors
     ///
@@ -241,9 +268,11 @@ impl Config {
     /// no se puede interpretar como `u16`, [`ConfigError::UnknownLogFormat`] si
     /// `LOG_FORMAT` está presente y su valor no es `text` ni `json`,
     /// [`ConfigError::DefaultErrorPageOutOfRange`] si `DEFAULT_ERROR_PAGE` está
-    /// presente y su valor no es un entero de `400` a `599`, y
+    /// presente y su valor no es un entero de `400` a `599`,
     /// [`ConfigError::InvalidRetryAfter`] si `RETRY_AFTER` está presente y su
-    /// valor no se puede interpretar como `u32`.
+    /// valor no se puede interpretar como `u32`, y [`ConfigError::UnknownTheme`]
+    /// si `THEME` está presente y su valor no es uno de los seis temas
+    /// incorporados.
     pub fn from_env_iter<I>(iter: I) -> Result<Config, ConfigError>
     where
         I: IntoIterator<Item = (String, String)>,
@@ -303,6 +332,21 @@ impl Config {
             None => DEFAULT_LOG_FORMAT,
         };
 
+        // `THEME` la escribe el operador y selecciona de una lista **cerrada**
+        // —los temas incorporados al binario—, así que un valor que no esté en
+        // ella (la cadena vacía incluida) aborta el arranque: quien la escribe
+        // cree que está configurando algo, y un `default` silencioso le ocultaría
+        // el error. El canal de la cabecera `X-Theme` es el otro carril, y ahí
+        // un valor desconocido cae al configurado sin error (ver
+        // [`crate::theme::resolve`]). Sin la variable, el tema es el de siempre:
+        // `default`, la hoja que el proyecto ya trae.
+        let theme = match vars.get(THEME_VAR) {
+            Some(raw) => {
+                theme::theme_by_name(raw).ok_or_else(|| ConfigError::UnknownTheme(raw.clone()))?
+            }
+            None => theme::default_theme(),
+        };
+
         // Estas dos son cadenas: no hay valor inválido que rechazar, pero
         // también se respetan tal cual cuando llegan vacías (nunca se
         // sustituyen por el defecto).
@@ -323,6 +367,7 @@ impl Config {
             content_dir,
             default_error_page,
             retry_after,
+            theme,
         })
     }
 
@@ -604,6 +649,52 @@ mod tests {
         assert_eq!(
             config.retry_after, 0,
             "`RETRY_AFTER=0` debe llegar tal cual, no como 120: {config:?}"
+        );
+    }
+
+    // --- THEME (change `self-contained-themes`, tasks.md 1.5) --------------
+    //
+    // `THEME` la escribe el **operador**, así que se comporta como `LOG_FORMAT`
+    // y `DEFAULT_ERROR_PAGE`: un valor que no sea uno de los temas incorporados
+    // —o la cadena vacía— aborta el arranque. En RED `THEME` es todavía una
+    // clave desconocida para `from_env_iter`, de modo que devuelve `Ok` y la
+    // prueba falla por la aserción (`expect_err`), no por compilación.
+
+    #[test]
+    fn un_theme_desconocido_no_arranca() {
+        let err = Config::from_env_iter(env(&[("THEME", "neon")]))
+            .expect_err("`THEME=neon` debe ser un error de arranque, no un `Ok`");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("THEME"),
+            "el error debe nombrar la variable: {message}"
+        );
+
+        // La comprobación de la lista es **a propósito**: quien escribe `THEME`
+        // cree que está configurando algo, así que el error tiene que decirle
+        // qué puede escribir en su lugar —los temas incorporados—, no solo que
+        // se equivocó.
+        for nombre in ["minimal", "terminal", "paper", "amber", "compact"] {
+            assert!(
+                message.contains(nombre),
+                "el error tiene que enumerar los temas válidos: falta `{nombre}` en {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn un_theme_presente_pero_vacio_no_arranca() {
+        // Misma decisión que con las demás variables: una variable presente
+        // pero vacía no es una variable ausente. Un `THEME=""` es un error que
+        // nombra la variable, no un `default` silencioso.
+        let err = Config::from_env_iter(env(&[("THEME", "")]))
+            .expect_err("un `THEME` vacío debe ser un error de arranque, no `default`");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("THEME"),
+            "el error de `THEME` vacío debe nombrar la variable: {message}"
         );
     }
 }
