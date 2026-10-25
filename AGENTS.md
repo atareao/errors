@@ -6,12 +6,13 @@
 
 ## Estado real del repositorio (verificado)
 
-Implementado, verificado y versionado. Seis changes están **archivados** en
+Implementado, verificado y versionado. Siete changes están **archivados** en
 `openspec/changes/archive/` —`error-pages-parity`, `error-page-coverage`, `release-hardening`,
-`security-hardening`, `retry-after-configurable` y `embedded-error-pages`, los cinco primeros con
-fecha `2026-10-24` y el último con `2026-10-25`— y sus requisitos viven fusionados en los cuatro
-specs de `openspec/specs/`: `error-page`, `http-server`, `observability` y `response-extras`; los
-deltas del último, en `error-page` y `http-server`.
+`security-hardening`, `retry-after-configurable`, `embedded-error-pages` y `fix-image-build`, los
+cinco primeros con fecha `2026-10-24` y los dos últimos con `2026-10-25`— y sus requisitos viven
+fusionados en los cuatro specs de `openspec/specs/`: `error-page`, `http-server`, `observability` y
+`response-extras`. Las deltas del último de los antiguos entraron en `error-page` y `http-server`; las
+de `fix-image-build`, en `http-server`.
 
 - `src/main.rs` — arranque, router, middleware de páginas de error, la lista `SERVICE_ENDPOINTS` que acota ese middleware, el *fallback* de assets embebidos del servidor de ficheros, y los tests de router.
 - `src/config.rs` — configuración desde el entorno (`Config`, `ConfigError`, `from_env_iter`).
