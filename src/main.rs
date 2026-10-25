@@ -644,12 +644,10 @@ async fn error_response(state: &AppState, path: &NormalizedPath, hints: &Hints) 
     match rendered {
         Ok(Ok(page)) => page_response(page),
         Ok(Err(err)) => {
-            // Falta el HTML del código y el del código por defecto (o no se
-            // pudo leer). El estado sigue siendo el código resuelto y nunca
-            // `500`: se responde el cuerpo de texto (auditoría I-2). El mensaje
-            // no habla de «existe o no» porque cubre las dos causas, y la
-            // precisa —`MissingHtml` habla de las dos capas, `Io` de la lectura—
-            // viaja en el campo `error`.
+            // La página del operador existe y no se puede leer (`RenderError::Io`).
+            // El estado sigue siendo el código resuelto y nunca `500`: se responde
+            // el cuerpo de texto (auditoría I-2). La causa precisa —el fichero y su
+            // error— viaja en el campo `error`.
             tracing::warn!(
                 code,
                 error = %err,
@@ -745,8 +743,14 @@ mod tests {
         .unwrap()
     }
 
-    /// Directorio de contenido **sin ningún HTML**: sirve para comprobar que un
-    /// fallo al leer la página no cambia el estado (auditoría I-2).
+    /// Directorio de contenido **sin ningún HTML** (`tests/fixtures/no-html`): el
+    /// disco no aporta ninguna página, así que la respuesta sale de la **plantilla
+    /// embebida**, rellenada con el código resuelto.
+    ///
+    /// Ojo: el respaldo de texto **ya no** es este caso. Con la plantilla, la
+    /// falta de fichero la cubre ella; el texto queda reservado a un fichero que
+    /// **existe y no se puede leer** (fallo de E/S, ver
+    /// `una_pagina_del_operador_ilegible_no_tumba_la_respuesta`).
     fn no_html_config() -> Config {
         let content_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/no-html");
 
@@ -784,18 +788,40 @@ mod tests {
         .expect("la configuración de fixtures debe construirse")
     }
 
-    /// Fichero de fixture que representa `content/404.html`.
+    /// Fichero de fixture que representa `content/404.html`: la **plantilla** del
+    /// operador en `tests/fixtures/content/`.
     fn fixture_404_html() -> &'static str {
         include_str!("../tests/fixtures/content/404.html")
     }
 
-    /// Página **embebida** del `503`: el fichero del repositorio (`content/503.html`)
-    /// que la fase GREEN embebe. Se fija aquí con `include_str!` —y no por la API
-    /// del módulo `embedded`, que aún no existe en RED— para no mezclar las dos
-    /// fases.
-    const EMBEDDED_503_HTML: &str = include_str!("../content/503.html");
-    /// Página **embebida** del `404`: el fichero del repositorio (`content/404.html`,
-    /// 460 bytes), distinto del fixture de 271 bytes de `fixture_404_html`.
+    /// La página del operador de [`fixture_404_html`] tal como se **sirve** para
+    /// `code`: su plantilla rellenada con la **misma** función que producción
+    /// (`render::plantilla`). El fixture no lleva el marcador de la hoja, así que
+    /// el render no añade ningún `<style>`.
+    fn fixture_servida(code: u16) -> String {
+        let rellena = crate::render::plantilla(fixture_404_html().as_bytes(), code);
+        let rellena =
+            String::from_utf8(rellena).expect("la plantilla del fixture, rellenada, es UTF-8");
+
+        // Red de la sustitución: si `plantilla` dejara de rellenar los marcadores
+        // —o de usar el escape—, **todas** las pruebas que pasan por este
+        // ayudante caerían de golpe, en vez de quedarse verdes comparando el
+        // cuerpo consigo mismo.
+        assert!(
+            rellena.contains(&code.to_string()),
+            "red de la sustitución: el cuerpo servido del fixture tiene que \
+             **nombrar** su código (`{code}`), fue: {rellena}"
+        );
+        assert!(
+            !rellena.contains("{{"),
+            "red de la sustitución: no puede quedar ningún marcador sin rellenar, fue: {rellena}"
+        );
+
+        rellena
+    }
+
+    /// La **plantilla** embebida del proyecto (`content/404.html`, con los
+    /// marcadores), distinta del fixture del operador de [`fixture_404_html`].
     const EMBEDDED_404_HTML: &str = include_str!("../content/404.html");
     /// Hoja de estilos **embebida**: `content/css/error.css`.
     const EMBEDDED_CSS: &str = include_str!("../content/css/error.css");
@@ -816,6 +842,31 @@ mod tests {
         pagina
             .replace(MARCADOR, &format!("<style>\n{hoja}\n</style>"))
             .into_bytes()
+    }
+
+    /// La **plantilla embebida** del proyecto tal como se **sirve** para `code`:
+    /// sus marcadores rellenados y la hoja `default` incrustada donde estaba el
+    /// marcador. Es lo que devuelve el render con un `CONTENT_DIR` sin ficheros.
+    fn embedded_servida(code: u16) -> Vec<u8> {
+        let rellena = crate::render::plantilla(EMBEDDED_404_HTML.as_bytes(), code);
+        let rellena =
+            String::from_utf8(rellena).expect("la plantilla embebida, rellenada, es UTF-8");
+
+        // Red de la sustitución: si `plantilla` dejara de rellenar los marcadores
+        // —o de usar el escape—, **todas** las pruebas que pasan por este
+        // ayudante caerían de golpe, en vez de quedarse verdes comparando el
+        // cuerpo consigo mismo.
+        assert!(
+            rellena.contains(&code.to_string()),
+            "red de la sustitución: la plantilla embebida servida tiene que \
+             **nombrar** su código (`{code}`), fue: {rellena}"
+        );
+        assert!(
+            !rellena.contains("{{"),
+            "red de la sustitución: no puede quedar ningún marcador sin rellenar, fue: {rellena}"
+        );
+
+        pagina_autocontenida(&rellena, EMBEDDED_CSS)
     }
 
     /// Directorio de contenido que **no existe**: el caso de un binario
@@ -849,10 +900,10 @@ mod tests {
     }
 
     /// `Config` con un `CONTENT_DIR` **sin ningún HTML** (`tests/fixtures/no-html`)
-    /// y `DEFAULT_ERROR_PAGE=418`: un defecto legal pero **fuera** de la tabla
-    /// embebida (los once son `400, 401, 403, 404, 405, 408, 429, 500, 502, 503,
-    /// 504`). Es el único camino que le queda al respaldo de texto una vez las
-    /// páginas están embebidas (D4).
+    /// y `DEFAULT_ERROR_PAGE=418`: el disco no aporta ninguna página, así que la
+    /// respuesta sale de la **plantilla embebida**, rellenada con el código
+    /// resuelto. Sirve para fijar que el estado sigue siendo el código resuelto
+    /// —nunca `500`— aunque no haya ningún fichero de contenido.
     ///
     /// Reutiliza [`no_html_config`] —el directorio sin HTML ya existente— y le
     /// cambia solo el defecto, para no dejar ese ayudante sin usar.
@@ -1196,7 +1247,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
         let body = String::from_utf8(body_bytes(response).await).unwrap();
-        assert_eq!(body.trim(), fixture_404_html().trim());
+        assert_eq!(body.trim(), fixture_servida(404).trim());
     }
 
     #[tokio::test]
@@ -1228,7 +1279,7 @@ mod tests {
         );
 
         let body = String::from_utf8(body_bytes(response).await).unwrap();
-        assert_eq!(body.trim(), fixture_404_html().trim());
+        assert_eq!(body.trim(), fixture_servida(404).trim());
     }
 
     #[tokio::test]
@@ -1318,14 +1369,14 @@ mod tests {
 
     #[tokio::test]
     async fn el_html_cae_al_defecto_conservando_el_codigo() {
-        // No hay `418.html`: el cuerpo es el de `404.html` y el estado sigue
-        // siendo 418.
+        // No hay `418.html`: el cuerpo sale del `404.html` del operador —su
+        // plantilla—, rellenado con **418**, y el estado sigue siendo 418.
         let response = send(get("/418.html")).await;
 
         assert_eq!(response.status(), StatusCode::IM_A_TEAPOT);
 
         let body = String::from_utf8(body_bytes(response).await).unwrap();
-        assert_eq!(body.trim(), fixture_404_html().trim());
+        assert_eq!(body.trim(), fixture_servida(418).trim());
     }
 
     // --- Cabeceras a nivel de router (tasks.md 1.7) -----------------------
@@ -1378,14 +1429,11 @@ mod tests {
 
     #[tokio::test]
     async fn sin_fichero_html_el_estado_sigue_siendo_el_codigo_resuelto() {
-        // tasks.md 1.12, re-apuntada en el change `embedded-error-pages`. Antes
-        // arrancaba con `DEFAULT_ERROR_PAGE=404` y un `CONTENT_DIR` sin HTML; con
-        // las páginas embebidas, el defecto `404` **sí** está en la tabla, así
-        // que la prueba quedaría verde por la página embebida del `404` y
-        // dejaría de fijar el respaldo de texto —su motivo—. Por eso arranca con
-        // `DEFAULT_ERROR_PAGE=418`, legal pero fuera de la tabla, y sigue
-        // exigiendo el respaldo de texto (`text/plain`) con el código resuelto y
-        // nunca `500`.
+        // Con un `CONTENT_DIR` sin HTML y el defecto `418`, la cascada del disco
+        // no aporta nada y entra la **plantilla embebida**, rellenada con `418`.
+        // El estado sigue siendo el código resuelto y nunca `500`; el respaldo de
+        // texto queda reservado al fallo de **E/S** (ver
+        // `una_pagina_del_operador_ilegible_no_tumba_la_respuesta`).
         let response = build_router(&default_418_sin_html_config())
             .oneshot(get("/418.html"))
             .await
@@ -1394,9 +1442,8 @@ mod tests {
         assert_eq!(response.status(), StatusCode::IM_A_TEAPOT);
         assert_ne!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert!(
-            content_type(&response).starts_with("text/plain"),
-            "un `418` no está en la tabla embebida: el cuerpo tiene que ser el respaldo \
-             de texto, fue: {}",
+            content_type(&response).starts_with("text/html"),
+            "sin fichero en ninguna capa el cuerpo es la plantilla embebida (HTML), fue: {}",
             content_type(&response)
         );
         assert_eq!(
@@ -1404,10 +1451,11 @@ mod tests {
             Some("noindex, nofollow, nosnippet, noarchive")
         );
 
-        let body = String::from_utf8(body_bytes(response).await).unwrap();
-        assert!(
-            body.contains("418"),
-            "el respaldo de texto debe llevar el código: {body}"
+        let body = body_bytes(response).await;
+        assert_eq!(
+            body,
+            embedded_servida(418),
+            "el cuerpo tiene que ser la plantilla embebida rellenada con `418`"
         );
     }
 
@@ -2148,7 +2196,7 @@ mod tests {
         let body = body_bytes(response).await;
         assert_eq!(
             body,
-            fixture_404_html().as_bytes(),
+            fixture_servida(404).into_bytes(),
             "el cuerpo debe ser la página HTML del código resuelto (`404`)"
         );
     }
@@ -2230,8 +2278,8 @@ mod tests {
         let body = body_bytes(response).await;
         assert_eq!(
             body,
-            pagina_autocontenida(EMBEDDED_503_HTML, EMBEDDED_CSS),
-            "el cuerpo tiene que ser la página embebida de `content/503.html`, autocontenida"
+            embedded_servida(503),
+            "el cuerpo tiene que ser la plantilla embebida rellenada con `503`, autocontenida"
         );
     }
 
@@ -2296,9 +2344,9 @@ mod tests {
         let body = body_bytes(response).await;
         assert_eq!(
             body,
-            pagina_autocontenida(EMBEDDED_404_HTML, EMBEDDED_CSS),
-            "el cuerpo tiene que ser la página embebida del `404`, autocontenida, no un asset \
-             ni el respaldo"
+            embedded_servida(404),
+            "el cuerpo tiene que ser la plantilla embebida rellenada con `404`, autocontenida, \
+             no un asset ni el respaldo"
         );
     }
 
@@ -2320,13 +2368,13 @@ mod tests {
         let body = body_bytes(response).await;
         assert_eq!(
             body,
-            fixture_404_html().as_bytes(),
-            "el cuerpo tiene que ser el `404.html` del operador"
+            fixture_servida(503).into_bytes(),
+            "el cuerpo tiene que ser el `404.html` del operador, rellenado con `503`"
         );
         assert_ne!(
             body,
-            EMBEDDED_503_HTML.as_bytes(),
-            "la página embebida del `503` no puede ganar al directorio del operador"
+            embedded_servida(503),
+            "la plantilla embebida no puede ganar al directorio del operador"
         );
     }
 
@@ -2343,10 +2391,10 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
         let body = body_bytes(response).await;
-        assert_eq!(body, fixture_404_html().as_bytes());
+        assert_eq!(body, fixture_servida(404).into_bytes());
         assert_ne!(
             body,
-            EMBEDDED_404_HTML.as_bytes(),
+            embedded_servida(404),
             "la copia embebida del `404` no puede ganar al `404.html` del operador"
         );
     }
@@ -2569,9 +2617,9 @@ mod tests {
 
     #[tokio::test]
     async fn sin_pagina_en_ninguna_capa_un_codigo_distinto_del_defecto_no_da_500() {
-        // tasks.md 1.13 / D4 (guarda): con el defecto `418` —fuera de la tabla
-        // embebida— y un `CONTENT_DIR` sin HTML, `GET /599.html` responde `599`
-        // —el respaldo de texto— y nunca un `500`.
+        // Con el defecto `418` y un `CONTENT_DIR` sin HTML, `GET /599.html`
+        // responde `599` —la plantilla embebida rellenada con `599`— y nunca un
+        // `500`: la plantilla cubre cualquier código de `400..=599`.
         let response = build_router(&default_418_sin_html_config())
             .oneshot(get("/599.html"))
             .await
@@ -2580,15 +2628,16 @@ mod tests {
         assert_eq!(response.status().as_u16(), 599);
         assert_ne!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert!(
-            content_type(&response).starts_with("text/plain"),
-            "sin página en ninguna capa el cuerpo es el respaldo de texto: {}",
+            content_type(&response).starts_with("text/html"),
+            "sin página en ninguna capa el cuerpo es la plantilla embebida (HTML): {}",
             content_type(&response)
         );
 
-        let body = String::from_utf8(body_bytes(response).await).unwrap();
-        assert!(
-            body.contains("599"),
-            "el respaldo de texto debe llevar el código: {body}"
+        let body = body_bytes(response).await;
+        assert_eq!(
+            body,
+            embedded_servida(599),
+            "el cuerpo tiene que ser la plantilla embebida rellenada con `599`"
         );
     }
 
@@ -2923,20 +2972,173 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sin_marcador_la_pagina_se_sirve_byte_a_byte() {
-        // tasks.md 1.1/D2 (guarda: hoy ya pasa). Una página sin el marcador se
-        // sirve **tal cual**, sin leer ninguna hoja para servirla. El `404.html`
-        // de los fixtures no lleva marcador.
+    async fn la_pagina_del_operador_sin_el_marcador_no_recibe_estilos() {
+        // El `404.html` de los fixtures **no** lleva el marcador de la hoja, así
+        // que el render no lee ninguna hoja para servirla: su cuerpo servido son
+        // sus marcadores de plantilla rellenados, **sin** ningún `<style>`. La
+        // garantía «sin marcador de plantilla → byte a byte» vive en
+        // `render::tests` (con una página literal), donde no depende de este
+        // fixture.
         let response = build_router(&fixtures_config())
             .oneshot(get_with_headers("/404", &[("Accept", "text/html")]))
             .await
             .unwrap();
 
         let body = body_bytes(response).await;
+        assert_eq!(body, fixture_servida(404).into_bytes());
+        assert!(
+            !String::from_utf8_lossy(&body).contains("<style"),
+            "sin el marcador de la hoja, el cuerpo no puede llevar ninguna hoja incrustada: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+
+    #[tokio::test]
+    async fn una_pagina_sin_marcadores_se_sirve_byte_a_byte_por_el_router() {
+        // El escenario del spec («una página sin marcadores se sirve byte a
+        // byte») solo estaba probado en unitarias. Aquí se mide de verdad, de
+        // extremo a extremo: un `CONTENT_DIR` con una página propia **sin ningún
+        // marcador** —ni de plantilla ni de hoja— y `GET /404` en HTML tiene que
+        // devolver el **fichero tal cual**, comparado con sus bytes y no con una
+        // función que pudiera reimplementar la regla.
+        let content_dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pagina-sin-marcadores");
+        let config = Config::from_env_iter([(
+            "CONTENT_DIR".to_string(),
+            content_dir.to_string_lossy().into_owned(),
+        )])
+        .expect("la configuración del fixture `pagina-sin-marcadores` debe construirse");
+
+        let response = build_router(&config)
+            .oneshot(get_with_headers("/404", &[("Accept", "text/html")]))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(
+            content_type(&response).starts_with("text/html"),
+            "Content-Type inesperado: {}",
+            content_type(&response)
+        );
+
+        let esperado = std::fs::read(content_dir.join("404.html"))
+            .expect("el fixture `pagina-sin-marcadores/404.html` tiene que existir");
+
+        let body = body_bytes(response).await;
         assert_eq!(
-            body,
-            include_str!("../tests/fixtures/content/404.html").as_bytes(),
-            "sin marcador, la página se sirve byte a byte"
+            body, esperado,
+            "una página sin marcadores se sirve **byte a byte**: el cuerpo tiene que ser el \
+             fichero tal cual, sin rellenar ni incrustar nada"
+        );
+    }
+
+    // --- Plantilla del cuerpo HTML (change `error-page-template`,
+    //     tasks.md de la fase RED) -------------------------------------------
+    //
+    // El cuerpo HTML deja de ser once ficheros con los valores a mano y pasa a
+    // ser **una** plantilla —`content/404.html`, la del código por defecto— con
+    // los marcadores `{{code}}`, `{{reason}}` y `{{description}}`, que el render
+    // sustituye al servir. Un código sin fichero propio (`451`) deja de recibir
+    // el cuerpo del `404` y recibe el suyo. Estas pruebas fallan por aserción en
+    // RED (la costura todavía devuelve el cuerpo tal cual) y las dos guardas de
+    // abajo pasan ya.
+
+    #[tokio::test]
+    async fn un_codigo_sin_fichero_propio_recibe_su_propio_cuerpo() {
+        // `451` no tiene fichero propio: con la plantilla el cuerpo tiene que
+        // ser suyo, no el del `404`.
+        let response = send(get_with_headers("/451", &[("Accept", "text/html")])).await;
+
+        assert_eq!(response.status().as_u16(), 451, "`/451` debe responder 451");
+
+        let cuerpo = String::from_utf8(body_bytes(response).await).unwrap();
+        assert!(
+            cuerpo.contains("451"),
+            "el cuerpo tiene que ser el de su propio código (`451`): {cuerpo}"
+        );
+        assert!(
+            !cuerpo.contains("404"),
+            "el cuerpo no puede nombrar el `404`: es el defecto que este change corrige: {cuerpo}"
+        );
+    }
+
+    #[tokio::test]
+    async fn la_clase_del_cuerpo_es_la_del_codigo_pedido() {
+        // La plantilla rellena `{{code}}` también en la clase del `body`, así
+        // que un `GET /451` en HTML tiene que llevar `class="c451"`.
+        let response = send(get_with_headers("/451", &[("Accept", "text/html")])).await;
+
+        assert_eq!(response.status().as_u16(), 451);
+
+        let cuerpo = String::from_utf8(body_bytes(response).await).unwrap();
+        assert!(
+            cuerpo.contains(r#"class="c451""#),
+            "el cuerpo tiene que llevar la clase de su propio código (`c451`): {cuerpo}"
+        );
+    }
+
+    #[tokio::test]
+    async fn la_razon_y_la_descripcion_del_html_son_las_de_los_demas_formatos() {
+        // `GET /400` en HTML y en JSON: el `<h2>` y el `<p>` del HTML tienen
+        // que ser el `message` y la `description` del JSON —una sola fuente, un
+        // solo sitio donde se escriben—.
+        let json = send(get("/400.json")).await;
+        let json: serde_json::Value = serde_json::from_slice(&body_bytes(json).await).unwrap();
+        let message = json["message"].as_str().unwrap().to_string();
+        let description = json["description"].as_str().unwrap().to_string();
+
+        let response = send(get_with_headers("/400", &[("Accept", "text/html")])).await;
+        assert_eq!(response.status().as_u16(), 400);
+
+        let cuerpo = String::from_utf8(body_bytes(response).await).unwrap();
+        assert!(
+            cuerpo.contains(&message),
+            "la razón del HTML tiene que ser el `message` del JSON (`{message}`): {cuerpo}"
+        );
+        assert!(
+            cuerpo.contains(&description),
+            "la descripción del HTML tiene que ser la `description` del JSON (`{description}`): \
+             {cuerpo}"
+        );
+    }
+
+    #[tokio::test]
+    async fn una_pagina_del_operador_ilegible_no_tumba_la_respuesta() {
+        // El fixture pone un **directorio** (`404.html`) donde el render espera
+        // su fichero: `std::fs::read` de un directorio falla en Linux (un error
+        // de lectura real y reproducible), así que la página del operador existe
+        // y no se puede leer. La respuesta tiene que seguir siendo el código
+        // resuelto (`404`) con el respaldo de texto, **no** un `500`. Es una
+        // guarda: pasa en RED y tiene que seguir pasando en GREEN.
+        let content_dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pagina-ilegible");
+        let config = Config::from_env_iter([(
+            "CONTENT_DIR".to_string(),
+            content_dir.to_string_lossy().into_owned(),
+        )])
+        .expect("la configuración del fixture `pagina-ilegible` debe construirse");
+
+        let response = build_router(&config)
+            .oneshot(get_with_headers("/404", &[("Accept", "text/html")]))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_ne!(
+            response.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "una página ilegible no puede fabricar un `500`: el estado es el código resuelto"
+        );
+        assert!(
+            content_type(&response).starts_with("text/plain"),
+            "sin poder leer la página, el cuerpo tiene que ser el respaldo de texto, fue: {}",
+            content_type(&response)
+        );
+
+        let body = String::from_utf8(body_bytes(response).await).unwrap();
+        assert!(
+            body.contains("404"),
+            "el respaldo de texto debe llevar el código resuelto: {body}"
         );
     }
 }

@@ -1,19 +1,22 @@
-//! Pruebas de integración del **contenido** de páginas de error
-//! (`error-page-coverage`, requisitos «Los códigos que un proxy emite tienen su
-//! propia página», «Las páginas no referencian ficheros que no existen» y «Cada
-//! página se identifica con la clase de su código»).
+//! Pruebas de integración del **contenido** de la página de error del proyecto
+//! (change `error-page-template`, sobre los requisitos «Los códigos que un proxy
+//! emite tienen su propia página», «Las páginas no referencian ficheros que no
+//! existen» y «Cada página se identifica con la clase de su código»).
 //!
 //! Estas pruebas no dependen del router: leen el directorio `content/` del
 //! repositorio, el mismo que `CONTENT_DIR` apunta por defecto (`content`). Lo
 //! que cierran no es un caso suelto sino **la clase entera de fallo**: si
-//! mañana falta una página, una página deja de nombrar su código, un `href`
-//! local apunta a un fichero inexistente, una página se cuelga de la hoja de
-//! otro código en lugar de la hoja única `css/error.css`, o el `body` deja de
-//! llevar la clase de su propio código, estas pruebas vuelven a fallar.
+//! mañana el proyecto entrega otra página, la página deja de llevar los
+//! marcadores de la plantilla, un `href` local apunta a un fichero inexistente,
+//! la página se cuelga de la hoja de un código en lugar de la hoja única
+//! `css/error.css`, o el `body` deja de llevar el marcador de la clase, estas
+//! pruebas vuelven a fallar.
 //!
-//! La hoja de estilos es **una sola** (`css/error.css`): once copias del mismo
-//! contenido no son once hojas, son una mal repartida. La diferencia de aspecto
-//! por código se expresa con la clase `c<código>` del `body`, no duplicando
+//! La página es **una plantilla** —no once ficheros por código—: lleva el código,
+//! la razón y la descripción como marcadores que el servidor rellena al servir, y
+//! conserva el nombre del código por defecto (`404.html`). La hoja de estilos es
+//! **una sola** (`css/error.css`): la diferencia de aspecto por código se expresa
+//! con la clase `c<código>` del `body` —el marcador `c{{code}}`—, no duplicando
 //! fichero; por eso la prueba de hojas comprueba a la vez la hoja y la clase.
 //!
 //! Decisiones:
@@ -25,16 +28,11 @@
 //!   `href="` … `"`. Es suficiente para el HTML que genera el proyecto y no
 //!   arrastra un parser completo.
 //! - Los fallos se **acumulan** en vez de abortar en el primero: cada aserción
-//!   **nombra el código o el fichero** que falla, y un solo `cargo test` deja
-//!   la lista completa de lo que incumple el contrato, no el primero de los
-//!   once elementos.
+//!   **nombra el fichero** que falla, y un solo `cargo test` deja la lista
+//!   completa de lo que incumple el contrato.
 
 use std::fs;
 use std::path::{Path, PathBuf};
-
-/// Códigos que un proxy emite con normalidad: los once que el change exige
-/// cubiertos con página propia. Es la lista de la spec, en el mismo orden.
-const CODIGOS_CUBIERTOS: [u16; 11] = [400, 401, 403, 404, 405, 408, 429, 500, 502, 503, 504];
 
 /// Directorio de contenido del repositorio.
 fn content_dir() -> PathBuf {
@@ -119,11 +117,6 @@ fn es_hoja_por_codigo(ruta: &str) -> bool {
         .is_some_and(|cuerpo| !cuerpo.is_empty() && cuerpo.bytes().all(|b| b.is_ascii_digit()))
 }
 
-/// El código que el nombre del fichero declara (`404.html` → `404`).
-fn codigo_de_pagina(pagina: &Path) -> Option<u16> {
-    pagina.file_stem()?.to_str()?.parse::<u16>().ok()
-}
-
 /// El valor del atributo `class` del elemento `body`, si lo lleva.
 fn clase_del_body(html: &str) -> Option<String> {
     const PREFIJO: &str = "class=\"";
@@ -146,36 +139,38 @@ fn exigir_sin_fallos(motivo: &str, fallos: &[String]) {
     );
 }
 
-/// Cada código cubierto tiene su página `<código>.html` y esa página nombra su
-/// propio código, de modo que el cuerpo nunca contradiga al estado.
+/// La única página del proyecto lleva los tres marcadores de la plantilla
+/// (`{{code}}`, `{{reason}}`, `{{description}}`): su código, su razón y su
+/// descripción los rellena el servidor al servir, no el fichero a mano.
 #[test]
-fn cada_codigo_cubierto_tiene_pagina_que_se_nombra() {
-    let dir = content_dir();
-    let mut fallos = Vec::new();
+fn la_pagina_lleva_los_marcadores_de_la_plantilla() {
+    // El proyecto entrega **una** página, y su código, su razón y su descripción
+    // son marcadores que el servidor rellena al servir.
+    let pagina = leer(&content_dir().join("404.html"));
 
-    for codigo in CODIGOS_CUBIERTOS {
-        let pagina = dir.join(format!("{codigo}.html"));
-
-        if !pagina.is_file() {
-            fallos.push(format!(
-                "falta la página {} del código cubierto {codigo}",
-                pagina.display()
-            ));
-            continue;
-        }
-
-        let html = leer(&pagina);
-        if !html.contains(&codigo.to_string()) {
-            fallos.push(format!(
-                "{} no nombra su propio código {codigo}: el cuerpo contradice al estado",
-                pagina.display()
-            ));
-        }
+    for marcador in ["{{code}}", "{{reason}}", "{{description}}"] {
+        assert!(
+            pagina.contains(marcador),
+            "la página del proyecto tiene que llevar `{marcador}`: {pagina}"
+        );
     }
+}
 
-    exigir_sin_fallos(
-        "cada código cubierto necesita su página, y la página debe nombrar ese código",
-        &fallos,
+/// El proyecto entrega **una sola** página —la plantilla—, y conserva el nombre
+/// del código por defecto (`404.html`), no una por código.
+#[test]
+fn el_proyecto_entrega_una_sola_pagina() {
+    let paginas = paginas_html(&content_dir());
+
+    assert_eq!(
+        paginas.len(),
+        1,
+        "el proyecto entrega **una** página —la plantilla—, no una por código: {paginas:?}"
+    );
+    assert_eq!(
+        paginas[0].file_name().unwrap(),
+        "404.html",
+        "la plantilla conserva el nombre del código por defecto"
     );
 }
 
@@ -213,13 +208,18 @@ fn cada_href_local_de_cada_pagina_resuelve() {
     );
 }
 
-/// Toda página de `content/` comparte la **única** hoja `css/error.css` —ninguna
-/// cuelga de la hoja de un código, ni siquiera de la suya—, esa hoja existe, y
-/// el `body` de cada página se identifica con la clase `c<código>` de su propio
-/// código: sobre una sola hoja, la clase es lo que diferencia la apariencia.
+/// La página única de `content/` comparte la **única** hoja `css/error.css` —no
+/// cuelga de la hoja de un código—, esa hoja existe, y el `body` lleva la clase
+/// de su código como **marcador** (`c{{code}}`), que el servidor rellena con el
+/// código resuelto **al servir**: sobre una sola hoja, la clase es lo que
+/// diferencia la apariencia, y quien la garantiza es la plantilla, no el fichero
+/// escrito a mano.
 #[test]
 fn cada_pagina_comparte_la_hoja_unica_y_se_identifica_con_su_clase() {
     const HOJA_COMPARTIDA: &str = "css/error.css";
+    /// El marcador del código en la clase del `body`: el servidor lo sustituye
+    /// por el código resuelto, así que la clase y el estado no pueden discrepar.
+    const CLASE_DE_PLANTILLA: &str = "c{{code}}";
 
     let dir = content_dir();
     let paginas = paginas_html(&dir);
@@ -234,7 +234,7 @@ fn cada_pagina_comparte_la_hoja_unica_y_se_identifica_con_su_clase() {
     let hoja = dir.join(HOJA_COMPARTIDA);
     if !hoja.is_file() {
         fallos.push(format!(
-            "falta la hoja compartida {} que deben referenciar todas las páginas",
+            "falta la hoja compartida {} que debe referenciar la página",
             hoja.display()
         ));
     }
@@ -261,37 +261,31 @@ fn cada_pagina_comparte_la_hoja_unica_y_se_identifica_con_su_clase() {
                 ));
             } else {
                 fallos.push(format!(
-                    "{} referencia {hoja}; todas las páginas deben usar la hoja compartida {HOJA_COMPARTIDA}",
+                    "{} referencia {hoja}; la página debe usar la hoja compartida {HOJA_COMPARTIDA}",
                     pagina.display()
                 ));
             }
         }
 
-        // Clase del `body` según el código del nombre del fichero.
-        let Some(codigo) = codigo_de_pagina(&pagina) else {
-            fallos.push(format!(
-                "{} no declara un código en su nombre de fichero: no se puede saber su clase c<código>",
-                pagina.display()
-            ));
-            continue;
-        };
-        let esperada = format!("c{codigo}");
-
+        // La clase del `body` es el marcador que el servidor rellena con el
+        // código resuelto.
         match clase_del_body(&html) {
-            Some(clase) if clase.split_whitespace().any(|c| c == esperada) => {}
+            Some(clase) if clase.split_whitespace().any(|c| c == CLASE_DE_PLANTILLA) => {}
             Some(clase) => fallos.push(format!(
-                "{} tiene el body con clase {clase:?}; debería llevar {esperada:?}",
+                "{} tiene el body con clase {clase:?}; debería llevar {CLASE_DE_PLANTILLA:?}, el \
+                 marcador que el servidor rellena con el código resuelto",
                 pagina.display()
             )),
             None => fallos.push(format!(
-                "{} no tiene un body con atributo class; debería llevar {esperada:?}",
+                "{} no tiene un body con atributo class; debería llevar {CLASE_DE_PLANTILLA:?}",
                 pagina.display()
             )),
         }
     }
 
     exigir_sin_fallos(
-        "toda página debe usar la hoja única `css/error.css` y llevar en el body la clase de su código",
+        "la página debe usar la hoja única `css/error.css` y llevar en el body el marcador de \
+         su código",
         &fallos,
     );
 }

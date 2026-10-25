@@ -1,12 +1,15 @@
 <!doctype html>
-<!-- Fixture de la fase RED: representa `content/404.html`. -->
+<!-- Fixture del operador: su propia plantilla en `CONTENT_DIR`. Lleva los tres
+     marcadores de plantilla, así que el render la rellena al servir y un código
+     sin fichero propio recibe **su** cuerpo, no el de otro. -->
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>404 — Not Found (fixture)</title>
+    <title>{{code}} — {{reason}}</title>
   </head>
-  <body>
-    <h1>404</h1>
-    <p>Not Found (fixture 404)</p>
+  <body class="c{{code}}">
+    <h1>{{code}}</h1>
+    <h2>{{reason}}</h2>
+    <p>{{description}}</p>
   </body>
 </html>
