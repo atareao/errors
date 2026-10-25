@@ -65,8 +65,18 @@
 //! 2. **Si anima, tiene que poder apagarse.** `animation`, `transition` y
 //!    `@keyframes` son cómputo local: no piden nada. Animar es una decisión de
 //!    aspecto, no un defecto de autocontención. Pero una hoja que anime tiene que
-//!    declarar `prefers-reduced-motion`: una página de error que se mueve
-//!    mientras el usuario intenta leer qué ha pasado es peor página de error.
+//!    **neutralizar** cada animación declarada dentro de un bloque
+//!    `@media (prefers-reduced-motion: reduce)` que **exista** y **no esté
+//!    vacío**: una página de error que se mueve mientras el usuario intenta leer
+//!    qué ha pasado es peor página de error.
+//!
+//! La guarda de movimiento es **textual y sobre bytes**, y lo dice en lugar de
+//! esconderlo: escanea los bytes de la hoja sin decodificar, limpia los
+//! comentarios respetando las cadenas —un comentario no anima ni apaga—, y
+//! delimita el bloque contando llaves a mano. Lo que **garantiza** es que el
+//! patrón canónico de neutralización está; lo que **no** puede garantizar es que
+//! el CSS apague el movimiento en todos los navegadores: eso exigiría un motor de
+//! CSS y una matriz de navegadores, que este repositorio no tiene ni quiere.
 //!
 //! Las dos guardas —`ninguna_hoja_puede_hacer_una_peticion` y
 //! `una_hoja_que_anima_respeta_reduced_motion`— miden **estos dos contratos y
@@ -114,8 +124,9 @@ pub struct Theme {
 /// **sobrios** —sin adornos que compitan con el mensaje— porque son páginas de
 /// **error** y su trabajo es decir qué ha pasado. Lo que sí es contrato lo miden
 /// las guardas del módulo de pruebas: no poder provocar una petición, y poder
-/// apagar el movimiento. Una hoja que anime respetando `prefers-reduced-motion`
-/// cumple el contrato.
+/// apagar el movimiento. Una hoja que anime **neutralizando** cada animación
+/// declarada dentro del bloque `@media (prefers-reduced-motion: reduce)` cumple el
+/// contrato.
 ///
 /// Es un `static` y no una `const` **a propósito**: el campo `embedded` del tema
 /// `default` apunta al `static` de tipo array [`embedded::DEFAULT_SHEET_BYTES`],
@@ -250,8 +261,12 @@ pub enum Incumplimiento {
     /// **no** es el propio documento—, para que el incumplimiento se pueda
     /// nombrar en el mensaje.
     Peticion(&'static str),
-    /// La hoja anima con ese token —`animation`, `transition` o `keyframes`— y
-    /// no declara `prefers-reduced-motion`. Lleva consigo el token que anima.
+    /// La hoja declara una animación con ese token —`animation`,
+    /// `animation-name`, `transition` o `transition-property`, siempre con un
+    /// valor distinto de `none`— y no la neutraliza dentro del bloque
+    /// `@media (prefers-reduced-motion: reduce)`. Lleva consigo el token que
+    /// anima, el de la **primera** declaración sin neutralizar. `@keyframes` ya
+    /// no es un token: definir fotogramas no anima a nadie.
     Movimiento(&'static str),
 }
 
@@ -266,8 +281,11 @@ pub enum Incumplimiento {
 ///    una referencia interna y no hay ninguna petición que hacer.
 /// 2. **Si anima, poder apagarlo.** `animation`, `transition` y `@keyframes` son
 ///    cómputo local: el navegador los ejecuta sin pedir nada a nadie, así que
-///    animar es una decisión de aspecto. Pero una hoja que anime tiene que
-///    declarar `prefers-reduced-motion`.
+///    animar es una decisión de aspecto. Pero una hoja que **anime** —declarar
+///    `animation`, `animation-name`, `transition` o `transition-property` con un
+///    valor distinto de `none`— tiene que **neutralizar** cada declaración dentro
+///    de un bloque `@media (prefers-reduced-motion: reduce)` que exista y no esté
+///    vacío. `@keyframes` por sí solo no anima: no obliga a nada.
 ///
 /// `@font-face` **no** está prohibido, y el motivo importa: solo puede pedir
 /// algo por la red a través de `url(...)` o `@import`, que ya están prohibidos, y
@@ -300,9 +318,7 @@ pub fn incumplimientos(hoja: &[u8]) -> Vec<Incumplimiento> {
         fallos.push(Incumplimiento::Peticion(token));
     }
 
-    if let Some(token) = token_que_anima(&hoja)
-        && !puede_apagarse(&hoja)
-    {
+    if let Some(token) = token_que_anima(&hoja) {
         fallos.push(Incumplimiento::Movimiento(token));
     }
 
@@ -383,18 +399,283 @@ fn token_que_pide(hoja: &[u8]) -> Option<&'static str> {
     None
 }
 
-/// El primer token que anima, si lo hay.
+/// Las cuatro propiedades cuyo valor distinto de `none` **anima**, y por las
+/// que la guarda pregunta.
+///
+/// `animation-name` y `transition-property` van **explícitas** por una razón de
+/// fronteras de identificador: en `animation-name` la `-` es carácter de
+/// identificador, así que buscar `animation` **no** casa ahí —la frontera por la
+/// derecha lo impide, y hace bien—. Tratar las cuatro por su nombre es la única
+/// forma de verlas todas.
+#[cfg(test)]
+const PROPIEDADES_QUE_ANIMAN: [&str; 4] = [
+    "animation",
+    "animation-name",
+    "transition",
+    "transition-property",
+];
+
+/// Las formas que **neutralizan** una animación (declarada con `animation` o
+/// `animation-name`): `animation: none` o `animation-name: none`.
+#[cfg(test)]
+const NEUTRALIZA_ANIMACION: [&str; 2] = ["animation", "animation-name"];
+
+/// Las formas que **neutralizan** una transición (declarada con `transition` o
+/// `transition-property`): `transition: none` o `transition-property: none`.
+#[cfg(test)]
+const NEUTRALIZA_TRANSICION: [&str; 2] = ["transition", "transition-property"];
+
+/// La aguja del bloque de movimiento reducido.
+///
+/// Es **literal y sensible a mayúsculas**, con el espacio después del `:`: las
+/// hojas son del proyecto y van en minúsculas, así que el rigor es el mismo que
+/// el del resto de la guarda. Por eso `@media (prefers-reduced-motion:reduce)`
+/// —sin el espacio— o `@media (PREFERS-REDUCED-MOTION: reduce)` —en otra caja—
+/// **no** son la aguja: a la guarda no le constan.
+#[cfg(test)]
+const AGUJA_REDUCE: &[u8] = b"@media (prefers-reduced-motion: reduce)";
+
+/// El primer token que **anima sin neutralizar**, si lo hay.
+///
+/// Animar es declarar `animation`, `animation-name`, `transition` o
+/// `transition-property` con un valor distinto de `none`: una declaración con
+/// valor `none` **no** anima, es precisamente la forma de apagar. `@keyframes`
+/// **no** dispara nada por sí solo: define fotogramas y no anima mientras ninguna
+/// declaración los use, así que exigirle la media query a una hoja que solo trae
+/// fotogramas sería medir algo distinto del contrato —lo era: `keyframes` estaba
+/// en la lista de disparadores y una hoja que solo los definía incumplía—.
+///
+/// Una animación declarada queda neutralizada si el bloque [`AGUJA_REDUCE`]
+/// existe, **no está vacío** y trae la forma que le corresponde —ver
+/// [`bloque_neutraliza`]—. Se devuelve el token de la **primera** declaración que
+/// incumpla, para poder nombrarla en el mensaje.
 #[cfg(test)]
 fn token_que_anima(hoja: &[u8]) -> Option<&'static str> {
-    ["animation", "transition", "keyframes"]
-        .into_iter()
-        .find(|token| contiene(hoja, token))
+    let bloque = bloque_reduce(hoja).filter(|cuerpo| es_bloque_con_contenido(cuerpo));
+
+    let mut desde = 0;
+    while let Some((posicion, propiedad, valor)) = primera_declaracion(hoja, desde) {
+        desde = posicion + propiedad.len();
+
+        // Una declaración con valor `none` no anima.
+        if valor == b"none" {
+            continue;
+        }
+
+        if !bloque.is_some_and(|cuerpo| bloque_neutraliza(cuerpo, propiedad)) {
+            return Some(propiedad);
+        }
+    }
+
+    None
 }
 
-/// ¿La hoja declara que el movimiento se puede apagar?
+/// El cuerpo del bloque `@media (prefers-reduced-motion: reduce)`, si la hoja lo
+/// trae.
+///
+/// La delimitación es **a mano**, contando llaves: el bloque va desde la llave de
+/// apertura de la aguja hasta **su** cierre **equilibrado**, no hasta la primera
+/// `}` que aparezca. Sin eso, una regla anidada con su propia llave
+/// —`@media (prefers-reduced-motion: reduce) { main { animation: none; } }`—
+/// cortaría el bloque en la llave del `main` y se perdería la neutralización. Un
+/// bloque que **no cierra** se lleva el resto de la hoja: nadie puede saber dónde
+/// acaba. No hay `regex` ni parser: el árbol compila sin red y no añade
+/// dependencias.
 #[cfg(test)]
-fn puede_apagarse(hoja: &[u8]) -> bool {
-    contiene(hoja, "prefers-reduced-motion")
+fn bloque_reduce(hoja: &[u8]) -> Option<&[u8]> {
+    let mut cursor = crate::render::busca(hoja, AGUJA_REDUCE)? + AGUJA_REDUCE.len();
+
+    while hoja.get(cursor).copied().is_some_and(es_espacio) {
+        cursor += 1;
+    }
+
+    if hoja.get(cursor) != Some(&b'{') {
+        return None;
+    }
+    cursor += 1;
+
+    let inicio = cursor;
+    let mut profundidad = 1u32;
+
+    while let Some(&byte) = hoja.get(cursor) {
+        match byte {
+            b'{' => profundidad += 1,
+            b'}' => {
+                profundidad -= 1;
+                if profundidad == 0 {
+                    return Some(&hoja[inicio..cursor]);
+                }
+            }
+            _ => {}
+        }
+        cursor += 1;
+    }
+
+    Some(&hoja[inicio..])
+}
+
+/// ¿El cuerpo del bloque reduce tiene algo que **no** sea espacio en blanco?
+///
+/// Es la cláusula «no está vacío»: un bloque vacío —o cuyo único contenido sea un
+/// comentario, que ya se quitó antes de escanear— no apaga nada, así que no cuenta
+/// como bloque que neutraliza.
+#[cfg(test)]
+fn es_bloque_con_contenido(cuerpo: &[u8]) -> bool {
+    cuerpo.iter().any(|&byte| !es_espacio(byte))
+}
+
+/// ¿El bloque neutraliza la familia de la animación declarada con `propiedad`?
+///
+/// La lista es **cerrada**, por familias: una animación —declarada con
+/// `animation` o `animation-name`— se neutraliza con `animation: none` o
+/// `animation-name: none`; una transición —declarada con `transition` o
+/// `transition-property`— con `transition: none` o `transition-property: none`.
+/// **Cada familia por su forma**: `animation: none` **no** neutraliza una
+/// transición. Fuera de la lista quedan a propósito `animation-duration: 0s`,
+/// `animation-play-state: paused` y cualquier otra forma que también apague en un
+/// navegador real: una guarda textual no puede demostrar equivalencia entre dos
+/// formas, así que exige la canónica y rechaza de más —la dirección segura, la
+/// misma que el contrato de red eligió para un `url()` vacío—.
+///
+/// El espacio entre la propiedad y el valor **no** es semántico, así que
+/// `animation:none` y `animation: none` cuentan igual; la detección sigue siendo
+/// **sensible a mayúsculas**, como la del resto de la guarda.
+#[cfg(test)]
+fn bloque_neutraliza(cuerpo: &[u8], propiedad: &str) -> bool {
+    let formas = if propiedad.starts_with("animation") {
+        NEUTRALIZA_ANIMACION
+    } else {
+        NEUTRALIZA_TRANSICION
+    };
+
+    formas
+        .iter()
+        .any(|&forma| declara_con_valor(cuerpo, forma, b"none"))
+}
+
+/// ¿`hoja` declara `propiedad` con un valor cuyo primer token sea `valor`?
+///
+/// Recorre **todas** las apariciones: una declaración anterior con otro valor no
+/// puede tapar la que sí neutraliza.
+#[cfg(test)]
+fn declara_con_valor(hoja: &[u8], propiedad: &str, valor: &[u8]) -> bool {
+    let mut desde = 0;
+
+    while let Some((posicion, encontrado)) = primera_declaracion_de(hoja, propiedad, desde) {
+        if encontrado == valor {
+            return true;
+        }
+        desde = posicion + propiedad.len();
+    }
+
+    false
+}
+
+/// La primera declaración de una de las cuatro propiedades que animan a partir de
+/// `desde`: la propiedad, dónde empieza y el primer token de su valor.
+///
+/// Se elige la que **antes** aparece en el documento, para poder reportar el
+/// primer incumplimiento.
+#[cfg(test)]
+fn primera_declaracion(hoja: &[u8], desde: usize) -> Option<(usize, &'static str, &[u8])> {
+    PROPIEDADES_QUE_ANIMAN
+        .iter()
+        .filter_map(|&propiedad| {
+            let (posicion, valor) = primera_declaracion_de(hoja, propiedad, desde)?;
+            Some((posicion, propiedad, valor))
+        })
+        .min_by_key(|(posicion, _, _)| *posicion)
+}
+
+/// La primera declaración de `propiedad` a partir de `desde`, con el primer token
+/// de su valor.
+#[cfg(test)]
+fn primera_declaracion_de<'a>(
+    hoja: &'a [u8],
+    propiedad: &str,
+    desde: usize,
+) -> Option<(usize, &'a [u8])> {
+    let posicion = posicion_declaracion(hoja, propiedad, desde)?;
+    Some((posicion, primer_token(&hoja[posicion + propiedad.len()..])))
+}
+
+/// La posición de la primera aparición de `propiedad` como **declaración** a
+/// partir de `desde`, si la hay: nombre con frontera de identificador por los dos
+/// lados y seguido de `:`.
+///
+/// Las fronteras son lo que hace que `animation` **no** case dentro de
+/// `animation-name` —la `-` es carácter de identificador— ni dentro de
+/// `animation-duration`: son propiedades distintas y la guarda las trata por su
+/// nombre.
+#[cfg(test)]
+fn posicion_declaracion(hoja: &[u8], propiedad: &str, desde: usize) -> Option<usize> {
+    let aguja = propiedad.as_bytes();
+    let mut cursor = desde;
+
+    loop {
+        let posicion = cursor + crate::render::busca(hoja.get(cursor..)?, aguja)?;
+
+        if (posicion == 0 || !es_byte_de_identificador(hoja[posicion - 1]))
+            && !hoja
+                .get(posicion + aguja.len())
+                .copied()
+                .is_some_and(es_byte_de_identificador)
+        {
+            let mut dos_puntos = posicion + aguja.len();
+            while hoja.get(dos_puntos).copied().is_some_and(es_espacio) {
+                dos_puntos += 1;
+            }
+
+            if hoja.get(dos_puntos) == Some(&b':') {
+                return Some(posicion);
+            }
+        }
+
+        cursor = posicion + 1;
+    }
+}
+
+/// El primer token del valor de una declaración.
+///
+/// `resto` empieza justo tras el nombre de la propiedad: se saltan los espacios,
+/// el `:`, los espacios, y se devuelven los bytes hasta el primer espacio, el `;`
+/// o el `}`. Es lo que distingue `none` de lo que anima.
+#[cfg(test)]
+fn primer_token(resto: &[u8]) -> &[u8] {
+    let mut cursor = 0;
+
+    while resto.get(cursor).copied().is_some_and(es_espacio) {
+        cursor += 1;
+    }
+    if resto.get(cursor) == Some(&b':') {
+        cursor += 1;
+    }
+    while resto.get(cursor).copied().is_some_and(es_espacio) {
+        cursor += 1;
+    }
+
+    let inicio = cursor;
+    while resto
+        .get(cursor)
+        .copied()
+        .is_some_and(|byte| !es_espacio(byte) && byte != b';' && byte != b'}')
+    {
+        cursor += 1;
+    }
+
+    &resto[inicio..cursor]
+}
+
+/// ¿`byte` puede formar parte de un identificador de CSS?
+#[cfg(test)]
+fn es_byte_de_identificador(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'
+}
+
+/// ¿`byte` es espacio en blanco de CSS?
+#[cfg(test)]
+fn es_espacio(byte: u8) -> bool {
+    matches!(byte, b' ' | b'\t' | b'\n' | b'\r')
 }
 
 /// ¿La hoja trae algún `url(...)` cuyo destino **no** sea el propio documento?
@@ -524,6 +805,15 @@ mod tests {
         false
     }
 
+    /// ¿La hoja tiene algún incumplimiento de **movimiento**? Es la pregunta de
+    /// casi todas las pruebas de este contrato: la lista de incumplimientos se
+    /// consulta por el token, pero aquí lo único que importa es si hay alguno.
+    fn incumple_movimiento(hoja: &str) -> bool {
+        incumplimientos(hoja.as_bytes())
+            .iter()
+            .any(|i| matches!(i, Incumplimiento::Movimiento(_)))
+    }
+
     #[test]
     fn las_hojas_embebidas_son_byte_a_byte_las_de_content() {
         // D5: los bytes embebidos de cada tema igualan la lectura de
@@ -640,14 +930,16 @@ mod tests {
     #[test]
     fn cada_hoja_cubre_el_marcado() {
         // Sin esto, un tema que se olvide de un elemento deja una página a medio
-        // vestir y nadie se entera: las cinco etiquetas son las que lleva la
-        // única página de error.
+        // vestir y nadie se entera: las seis etiquetas son las que lleva la única
+        // página de error. `main` **no** está en la lista a propósito: es
+        // estructura —el bloque que `default` anima— y no todos los temas
+        // necesitan una regla para él, mientras que `footer` lo estilan las seis.
         let mut fallos = Vec::new();
 
         for theme in THEMES.iter() {
             let hoja = String::from_utf8_lossy(theme.embedded);
 
-            for selector in ["body", "h1", "h2", "hr", "p"] {
+            for selector in ["body", "h1", "h2", "hr", "p", "footer"] {
                 if !tiene_regla(&hoja, selector) {
                     fallos.push(format!(
                         "la hoja del tema `{}` no define `{selector}`",
@@ -724,6 +1016,64 @@ body { transition: opacity 0.2s; }
     /// Una hoja quieta: no pide nada y no anima.
     const QUIETA: &str = r#"
 body { color: #222; }
+"#;
+
+    /// Una hoja que anima y **solo nombra** la media query: el bloque reduce
+    /// existe, pero su único contenido es un comentario, así que no apaga nada.
+    const NOMBRA_SIN_NEUTRALIZAR: &str = r#"
+main { animation: entrada 180ms ease-out; }
+@media (prefers-reduced-motion: reduce) { /* esta animación se apaga sola */ }
+"#;
+
+    /// Una hoja que anima y neutraliza bajo la preferencia **contraria**: el
+    /// bloque existe, pero es el que ve quien **no** pide movimiento reducido.
+    const NEUTRALIZA_BAJO_LA_OTRA_PREFERENCIA: &str = r#"
+main { animation: entrada 180ms ease-out; }
+@media (prefers-reduced-motion: no-preference) { main { animation: none; } }
+"#;
+
+    /// Una hoja que anima y trae el bloque reduce **vacío**.
+    const REDUCE_VACIO: &str = r#"
+main { animation: entrada 180ms ease-out; }
+@media (prefers-reduced-motion: reduce) { }
+"#;
+
+    /// La forma canónica de D2: fotogramas propios, la `animation` declarada y el
+    /// bloque reduce que la **neutraliza**.
+    const REDUCE_QUE_NEUTRALIZA: &str = r#"
+@keyframes entrada { from { opacity: 0 } to { opacity: 1 } }
+main { animation: entrada 180ms ease-out; }
+@media (prefers-reduced-motion: reduce) { main { animation: none; } }
+"#;
+
+    /// Una hoja que declara una `transition` y cuyo bloque reduce solo neutraliza
+    /// una `animation`: la transición declarada sigue viva.
+    const REDUCE_QUE_NEUTRALIZA_OTRA: &str = r#"
+main { transition: opacity 200ms; }
+@media (prefers-reduced-motion: reduce) { main { animation: none; } }
+"#;
+
+    /// Una hoja cuyo bloque reduce **anima** en vez de apagar.
+    const REDUCE_QUE_ANIMA: &str = r#"
+@media (prefers-reduced-motion: reduce) { main { animation: entrada 180ms ease-out; } }
+"#;
+
+    /// Unos fotogramas **sin ninguna declaración** que los use: definen fotogramas
+    /// y no animan a nadie, así que no obligan a nada.
+    const SOLO_FOTOGRAMAS: &str = r#"
+@keyframes entrada { from { opacity: 0 } to { opacity: 1 } }
+"#;
+
+    /// La neutralización vive en una **regla anidada** del bloque reduce y **no**
+    /// es la primera que se cierra: hay una regla antes que la neutralizadora, así
+    /// que el bloque tiene que delimitarse por su llave de apertura y **su** cierre
+    /// equilibrado, no por la primera `}` que aparezca.
+    const REDUCE_CON_REGLA_ANIDADA: &str = r#"
+main { animation: entrada 180ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  main { color: inherit; }
+  main { animation: none; }
+}
 "#;
 
     /// Las tres formas de pedir un fichero que el contrato prohíbe, con el token
@@ -826,25 +1176,48 @@ body { background: url(foto.png); }
 
     #[test]
     fn una_hoja_que_anima_respeta_reduced_motion() {
-        // El segundo contrato, sobre las hojas **incorporadas** al binario.
-        // Animar **no** es un defecto de autocontención: el navegador ejecuta la
-        // animación sin pedirle nada a nadie, es cómputo local, y por eso es una
-        // decisión de aspecto y no se prohíbe. Pero hay gente a la que el
-        // movimiento le produce mareo, y una página de error que se mueve
-        // mientras el usuario intenta leer qué ha pasado es peor página de error.
-        // La regla no prohíbe el adorno: prohíbe el adorno que no se puede
-        // apagar, así que una hoja que traiga `animation`, `transition` o
-        // `@keyframes` tiene que traer también `prefers-reduced-motion`. Hoy
-        // ninguna de las seis anima, así que cumplen por vacío; el día que una
-        // anime, esta guarda es la que lo exige.
+        // El segundo contrato, cláusula a cláusula y sobre las hojas
+        // **incorporadas** al binario. Animar **no** es un defecto de
+        // autocontención: el navegador ejecuta la animación sin pedirle nada a
+        // nadie, es cómputo local, y por eso es una decisión de aspecto y no se
+        // prohíbe. Pero hay gente a la que el movimiento le produce mareo, y una
+        // página de error que se mueve mientras el usuario intenta leer qué ha
+        // pasado es peor página de error. La regla no prohíbe el adorno: prohíbe
+        // el adorno que no se puede apagar, así que una hoja que anime tiene que
+        // **neutralizar** cada animación declarada dentro de un bloque
+        // `@media (prefers-reduced-motion: reduce)`.
+
+        // 1. Incumple si anima y no neutraliza.
+        assert!(
+            incumple_movimiento(ANIMADA_SIN_FRENO),
+            "una hoja que anima y no neutraliza dentro de `@media \
+             (prefers-reduced-motion: reduce)` tiene que incumplir: {ANIMADA_SIN_FRENO:?}"
+        );
+
+        // 2. Cumple si neutraliza.
+        assert!(
+            !incumple_movimiento(ANIMADA_CON_FRENO),
+            "una hoja que anima **y** neutraliza dentro de `@media \
+             (prefers-reduced-motion: reduce)` tiene que cumplir: {ANIMADA_CON_FRENO:?}"
+        );
+
+        // 3. Una hoja sin animación cumple sin declarar nada.
+        assert!(
+            !incumple_movimiento(QUIETA),
+            "una hoja sin animación tiene que cumplir sin declarar nada: {QUIETA:?}"
+        );
+
+        // Y el barrido de las hojas embebidas: hoy ninguna de las seis anima, así
+        // que cumplen por vacío; el día que una anime, esta guarda es la que lo
+        // exige.
         let mut fallos = Vec::new();
 
         for theme in THEMES.iter() {
             for incumplimiento in incumplimientos(theme.embedded) {
                 if let Incumplimiento::Movimiento(token) = incumplimiento {
                     fallos.push(format!(
-                        "la hoja del tema `{}` anima con `{token}` y no declara \
-                         `prefers-reduced-motion`",
+                        "la hoja del tema `{}` anima con `{token}` y no neutraliza la animación \
+                         dentro de `@media (prefers-reduced-motion: reduce)`",
                         theme.name
                     ));
                 }
@@ -856,6 +1229,101 @@ body { background: url(foto.png); }
             "una hoja que anima tiene que poder apagarse ({} incumplimiento(s)):\n- {}",
             fallos.len(),
             fallos.join("\n- ")
+        );
+    }
+
+    #[test]
+    fn una_hoja_que_solo_nombra_prefers_reduced_motion_incumple() {
+        // Nombrar la media query no es apagar nada: si el bloque existe pero su
+        // contenido es **solo un comentario**, la animación declarada sigue viva.
+        assert!(
+            incumple_movimiento(NOMBRA_SIN_NEUTRALIZAR),
+            "nombrar `prefers-reduced-motion` no neutraliza nada: el bloque reduce trae solo un \
+             comentario, así que la animación declarada sigue viva y la hoja tiene que incumplir. \
+             Hoja: {NOMBRA_SIN_NEUTRALIZAR:?}"
+        );
+    }
+
+    #[test]
+    fn una_media_query_que_no_es_la_de_movimiento_reducido_no_basta() {
+        // Neutralizar bajo `no-preference` no cuenta: quien pide movimiento
+        // reducido no ve ese bloque, así que no es la puerta que el usuario cierra.
+        assert!(
+            incumple_movimiento(NEUTRALIZA_BAJO_LA_OTRA_PREFERENCIA),
+            "neutralizar bajo `prefers-reduced-motion: no-preference` no es la puerta que el \
+             usuario cierra, así que la hoja tiene que incumplir. \
+             Hoja: {NEUTRALIZA_BAJO_LA_OTRA_PREFERENCIA:?}"
+        );
+    }
+
+    #[test]
+    fn un_bloque_reduce_vacio_no_basta() {
+        // El bloque tiene que existir **y** tener la neutralización: uno vacío no
+        // apaga nada, que es el agujero medido.
+        assert!(
+            incumple_movimiento(REDUCE_VACIO),
+            "el bloque `@media (prefers-reduced-motion: reduce)` tiene que **tener** la \
+             neutralización: uno vacío no apaga nada, así que la hoja tiene que incumplir. \
+             Hoja: {REDUCE_VACIO:?}"
+        );
+    }
+
+    #[test]
+    fn un_bloque_reduce_que_neutraliza_la_animacion_cumple() {
+        // La forma canónica: hay `@keyframes`, hay declaración que los usa y el
+        // bloque reduce neutraliza esa animación.
+        assert!(
+            !incumple_movimiento(REDUCE_QUE_NEUTRALIZA),
+            "una hoja que anima y neutraliza su animación dentro del bloque reduce tiene que \
+             cumplir: {REDUCE_QUE_NEUTRALIZA:?}"
+        );
+    }
+
+    #[test]
+    fn neutralizar_otra_animacion_distinta_de_la_declarada_no_basta() {
+        // Cada animación declarada tiene que quedar neutralizada por la forma que
+        // le corresponde: `animation: none` no apaga una transición.
+        assert!(
+            incumple_movimiento(REDUCE_QUE_NEUTRALIZA_OTRA),
+            "la hoja declara una `transition` y el bloque reduce solo trae `animation: none`: la \
+             transición declarada sigue sin neutralizarse, así que la hoja tiene que incumplir. \
+             Hoja: {REDUCE_QUE_NEUTRALIZA_OTRA:?}"
+        );
+    }
+
+    #[test]
+    fn una_animacion_declarada_dentro_del_bloque_reduce_no_se_neutraliza_sola() {
+        // El bloque reduce tiene que **apagar**, no animar: una animación
+        // declarada dentro del propio bloque no neutraliza la que la hoja anima.
+        assert!(
+            incumple_movimiento(REDUCE_QUE_ANIMA),
+            "el bloque reduce trae una declaración que **anima** en vez de apagar, así que no \
+             neutraliza nada y la hoja tiene que incumplir. Hoja: {REDUCE_QUE_ANIMA:?}"
+        );
+    }
+
+    #[test]
+    fn unos_fotogramas_sin_declaracion_que_los_use_no_obligan() {
+        // `@keyframes` define fotogramas y no anima mientras ninguna declaración
+        // los use: exigirle la media query a una hoja que no puede animar sería
+        // medir algo distinto del contrato.
+        assert!(
+            !incumple_movimiento(SOLO_FOTOGRAMAS),
+            "una hoja cuyo único contenido son `@keyframes` —sin ninguna declaración de \
+             `animation` ni de `transition`— tiene que cumplir sin necesitar el bloque reduce, \
+             porque definir fotogramas no anima nada. Hoja: {SOLO_FOTOGRAMAS:?}"
+        );
+    }
+
+    #[test]
+    fn una_regla_anidada_dentro_del_bloque_reduce_cuenta() {
+        // La neutralización vive en una regla anidada y **no** es la primera que
+        // se cierra: el bloque se delimita por su llave de apertura y **su** cierre
+        // equilibrado, así que la neutralizadora —que va después— cuenta igual.
+        assert!(
+            !incumple_movimiento(REDUCE_CON_REGLA_ANIDADA),
+            "la neutralización dentro de una regla anidada del bloque reduce tiene que contar, \
+             aunque no sea la primera regla que se cierra: {REDUCE_CON_REGLA_ANIDADA:?}"
         );
     }
 

@@ -5,11 +5,17 @@
  * servidor la incrusta en el HTML al servir, sustituyendo el `<link>` de la
  * página por un bloque de estilo con estas reglas, así que no puede referenciar
  * recursos externos: nada de hojas importadas ni de ficheros remotos.
- * Si animase, tendría que declarar `prefers-reduced-motion`.
+ * Si animase, tendría que neutralizarlo en `prefers-reduced-motion: reduce`.
  *
  * Monocromo ámbar, como la pantalla de un CRT viejo, pero sin brillos ni
  * rastro: todos los elementos en tonos de ámbar. El marcado lleva la clase
  * `c<código>` en el `body`, pero este tema no la usa.
+ *
+ * El `<hr>` decorativo —un separador, no información— se queda fuera del 3:1
+ * de WCAG 1.4.11, que cubre el contenido no textual necesario para entender el
+ * contenido y los componentes de interfaz. Su `--rule` mide 1,48 sobre el fondo
+ * `#12100c`: es una decisión medida, no un descuido, así que quien vuelva a
+ * medirla no debería contarla como hallazgo.
  */
 
 :root {
@@ -17,7 +23,7 @@
   --bg: #12100c;
   --fg: #ffb000;
   --accent: #ffcf6b;
-  --muted: #8c7a2f;
+  --muted: #9a8836;
   --rule: #3a3120;
 }
 
@@ -66,5 +72,13 @@ hr {
 p {
   margin: 0;
   max-width: 46rem;
+  color: var(--muted);
+}
+
+/* La firma, en el ámbar atenuado: sin brillos, como el resto del tema. */
+footer {
+  margin-top: 0.75rem;
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
   color: var(--muted);
 }
