@@ -1,16 +1,41 @@
 name: Release
 
-# Publica la imagen en GHCR y crea el Release de GitHub. Dos disparadores:
+# Publica la imagen en GHCR, publica el crate en crates.io y crea el Release de GitHub. Dos
+# disparadores:
 #
 #   * push de una etiqueta `v*`  -> el camino normal (`git tag v0.2.0 && git push origin v0.2.0`).
 #   * workflow_dispatch          -> republicar una etiqueta YA existente, pasándola en el input
 #                                   `tag`.
 #
+# TRES JOBS, EN ESTE ORDEN: `version` -> `imagen` -> `crate`
+#   El orden es deliberado, y va de lo que se comprueba a lo que no se puede deshacer. `version` es
+#   el primero porque es la comprobación —la etiqueta existe, tiene forma de versión y coincide con
+#   el `Cargo.toml`—: un desajuste entre `v0.4.1` y un `Cargo.toml` en `0.4.0` tiene que fallar
+#   ANTES de publicar nada. Si esa comprobación viviera al final, cuando el workflow por fin dijera
+#   que la versión no cuadra ya estarían la imagen en GHCR, `latest` movido y el Release creado:
+#   dos artefactos anunciando una versión que no existe. Y `crate` va el ÚLTIMO porque `cargo
+#   publish` es lo irreversible —una versión publicada solo se puede *yank*, jamás reemplazar ni
+#   borrar—, así que se deja para cuando la imagen ya está construida, probada y publicada.
+#
+# NINGÚN VALOR DEL EVENTO ENTRA EN UN `run:`
+#   Regla del fichero, sin excepciones: un `run:` no lleva nunca un `${{ }}` de un valor que venga
+#   del evento o de otro job. `${{ … }}` no es una variable de shell: GitHub compone el fichero de
+#   script con el valor ya dentro y *después* bash lo parsea, así que un filtro posterior —como el
+#   de forma de versión de más abajo— validaría una cadena que YA está incrustada en código. Es
+#   inyección de comandos: `tag="${{ inputs.tag }}"` con un input `v0.4.0-$(cualquier cosa)`
+#   ejecutaría ese comando, con el `GITHUB_TOKEN` del workflow al alcance y en el mismo job que
+#   publica —y podría plantar un `cargo` falso en `$GITHUB_PATH` y quedarse con el token del
+#   registro—. Lo que entra del evento entra por `env:`: ahí el valor llega como DATO y bash lo lee
+#   como variable. Vale para `inputs.tag`, para `needs.version.outputs.*`, para `secrets.*` y para
+#   `github.actor`. Y lo que Actions ya expone como variable de entorno —`$GITHUB_REF_NAME`,
+#   `$GITHUB_REPOSITORY`, `$GITHUB_EVENT_NAME`— se lee tal cual, sin interpolar.
+#
 # POR QUÉ EL INPUT ES OBLIGATORIO
 #   En un `workflow_dispatch` no hay etiqueta: `github.ref_name` es la RAMA (`main`). Sin input,
-#   este job habría construido la imagen como `main`, empujado `ghcr.io/atareao/errserve:main` y
-#   creado un Release llamado `main` sobre el último commit de la rama. Con el input, un dispatch
-#   sin etiqueta válida falla en el primer paso en lugar de publicar basura.
+#   el job `version` habría resuelto la imagen como `main`, `imagen` habría empujado
+#   `ghcr.io/atareao/errserve:main` y se habría creado un Release llamado `main` sobre el último
+#   commit de la rama. Con el input, un dispatch sin etiqueta válida falla en el primer paso en
+#   lugar de publicar basura.
 #
 # POR QUÉ AQUÍ SÍ HAY DOCKER
 #   La máquina de desarrollo no tiene docker (usa podman), así que la imagen solo se había
@@ -41,7 +66,9 @@ on:
         type: string
 
 # `contents: write` para crear el Release; `packages: write` para empujar a GHCR con el
-# GITHUB_TOKEN. No hace falta ningún secreto extra.
+# GITHUB_TOKEN. Esos dos los cubre el token del propio workflow, sin secreto; el crate, no:
+# publica en crates.io con el secreto `CARGO_REGISTRY_TOKEN` (un token de crates.io), y sin él el
+# job `crate` falla al intentarlo.
 permissions:
   contents: write
   packages: write
@@ -57,35 +84,81 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  imagen:
-    name: construir, probar y publicar
+  # La comprobación, antes de nada. No necesita Rust: la versión del `Cargo.toml` se lee con `awk`
+  # y el commit con `git`, así que meterle un toolchain sería tiempo regalado. Sus `outputs` son la
+  # única resolución de etiqueta/versión/imagen del fichero: los dos jobs siguientes la leen en vez
+  # de repetirla (que era la duplicación que dejaba la comprobación de versión en el job
+  # equivocado, el último).
+  version:
+    name: comprobar la etiqueta y la versión
     runs-on: ubuntu-latest
+    # Este job no publica nada y su `checkout` solo necesita lectura: no hereda el `contents: write`
+    # + `packages: write` del workflow, y es el job que maneja la etiqueta en crudo.
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+      repo: ${{ steps.v.outputs.repo }}
+      image: ${{ steps.v.outputs.image }}
+      commit: ${{ steps.c.outputs.commit }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          # El árbol de la ETIQUETA, no el de la rama. Dos razones: la versión que se anuncia
+          # tiene que ser la del árbol del que va a salir el crate; y un dispatch sobre una
+          # etiqueta antigua tiene que seguir funcionando aunque la rama haya avanzado de
+          # versión —si no, republicar v0.4.0 tras subir main a 0.5.0 daría un rojo falso—.
+          # Con un dispatch sobre una etiqueta que no existe, esto falla AQUÍ, antes que nada.
+          #
+          # El `ref` va CUALIFICADO a `refs/tags/…`, no como nombre suelto de etiqueta:
+          # `actions/checkout` resuelve un `ref` sin cualificar probando primero
+          # `origin/<ref>` como RAMA y solo después como etiqueta, y git permite que
+          # coexistan una rama `v0.4.0` y una etiqueta `v0.4.0`. Si eso pasara, este job y el
+          # de `crate` resolverían los dos lo mismo —la rama—, la afirmación de `crate`
+          # compararía la rama consigo misma y el crate saldría del árbol de la rama.
+          # `refs/tags/…` deja el refspec inequívoco y una etiqueta inexistente falla en el
+          # propio `checkout`. Con el `format(...)`, además, un dispatch con el input vacío
+          # produce `refs/tags/`, que falla en el checkout —no un paso después, en el filtro—:
+          # «un dispatch sin etiqueta válida falla en el primer paso», como promete la cabecera.
+          ref: >-
+            ${{ github.event_name == 'push' && github.ref
+            || format('refs/tags/{0}', inputs.tag) }}
 
       - name: Resolver la etiqueta, la versión y la imagen
         id: v
+        env:
+          # NUNCA interpolar el input dentro del `run:`: `${{ }}` se sustituye antes de que bash
+          # vea el script, así que el filtro de forma de versión de más abajo no podría proteger
+          # (validaría una cadena ya incrustada en código). Por `env:` el valor llega como DATO.
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
 
           if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
             tag="$GITHUB_REF_NAME"
           else
-            tag="${{ inputs.tag }}"
+            tag="$INPUT_TAG"
           fi
 
-          # Solo `v` + versión. Acepta `v1.2.3` y pre-releases tipo `v1.2.3-rc1`; rechaza `main`,
-          # `feature/x` y cualquier etiqueta sin forma de versión, que es lo que un dispatch
-          # descuidado produciría.
-          if [[ ! "$tag" =~ ^v[0-9]+(\.[0-9]+)*([-+].*)?$ ]]; then
-            echo "::error::La etiqueta '$tag' no tiene forma de versión vX.Y.Z. En un workflow_dispatch, rellena el input 'tag' con una etiqueta existente."
+          # `v` + versión semántica de tres números, con un sufijo opcional que empieza por
+          # alfanumérico. El patrón es un *whitelist* de caracteres —`[0-9A-Za-z.-]` más la `v` y
+          # los separadores—, no un `.*` suelto al final: así lo que se propaga solo puede ser una
+          # versión, y una inyección como `v0.4.0-$(…)` no pasa. Rechaza `main`, `feature/x`,
+          # `v0.4` (sin el tercer número), `v0.4.0-` (sufijo vacío) y cualquier etiqueta sin forma
+          # de versión, que es lo que un dispatch descuidado produciría.
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "::error::La etiqueta '$tag' no tiene forma de versión vX.Y.Z " \
+              "(ni pre-release vX.Y.Z-algo). En un workflow_dispatch, rellena el input 'tag' " \
+              "con una etiqueta existente."
             exit 1
           fi
 
-          # `github.repository` es `atareao/errserve` (con las mayúsculas que tenga el repo), y GHCR
+          # `GITHUB_REPOSITORY` es `atareao/errserve` (con las mayúsculas que tenga el repo), y GHCR
           # **rechaza** nombres con mayúsculas ("repository name must be lowercase"): se baja a
           # minúsculas aquí en vez de confiar en cómo esté escrito el repositorio hoy.
-          repo="$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
+          repo="$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
           image="${REGISTRY}/${repo}"
 
           {
@@ -99,21 +172,77 @@ jobs:
           echo "versión  : ${tag#v}"
           echo "imagen   : $image"
 
+      # `cargo publish` publica lo que diga el `[package]` de Cargo.toml, NO lo que diga la
+      # etiqueta. Sin esta comprobación, etiquetar `v0.4.1` con el Cargo.toml en `0.4.0` daría dos
+      # desenlaces y los dos malos: o un «esa versión ya está publicada» que no explica la causa,
+      # o publicar en silencio una versión que no es la que se anuncia. Y es la clase de error que,
+      # en un artefacto irreversible, hay que cazar ANTES de tocar crates.io — de ahí que viva en
+      # este job, el primero, y no en `crate`, que es donde estaba—.
+      - name: La versión es la del Cargo.toml
+        env:
+          TAG_VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          # La versión se lee del [package] de Cargo.toml: es la que `cargo publish`
+          # va a publicar DE VERDAD, no la que diga la etiqueta.
+          cargo_version="$(awk '
+            /^\[/ { in_pkg = ($0 == "[package]") }
+            in_pkg && /^version[[:space:]]*=/ {
+              line = $0; sub(/^[^"]*"/, "", line); sub(/".*$/, "", line); print line; exit
+            }
+          ' Cargo.toml)"
+
+          if [[ -z "$cargo_version" ]]; then
+            echo "::error::no se pudo leer la versión del [package] de Cargo.toml"
+            exit 1
+          fi
+
+          echo "versión de Cargo.toml : $cargo_version"
+          echo "etiqueta              : $TAG_VERSION"
+
+          if [[ "$TAG_VERSION" != "$cargo_version" ]]; then
+            echo "::error::la etiqueta v$TAG_VERSION y la versión de Cargo.toml " \
+              "('$cargo_version') no coinciden: 'cargo publish' publicaría '$cargo_version', " \
+              "no '$TAG_VERSION'. Corrige Cargo.toml o la etiqueta."
+            exit 1
+          fi
+
+      # El commit sobre el que se comprobó la versión, para que `crate` pueda afirmar que va a
+      # publicar ESE árbol y no otro. `git rev-parse HEAD` es el commit al que apunta el `ref` del
+      # `checkout` de arriba, es decir, la etiqueta.
+      - name: El commit que se va a publicar
+        id: c
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  imagen:
+    name: construir, probar y publicar
+    runs-on: ubuntu-latest
+    needs: version
+    steps:
+      - uses: actions/checkout@v5
+
       - name: Construir la imagen
+        env:
+          IMAGE: ${{ needs.version.outputs.image }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
           docker build \
-            --tag "${{ steps.v.outputs.image }}:${{ steps.v.outputs.version }}" \
-            --tag "${{ steps.v.outputs.image }}:latest" \
+            --tag "$IMAGE:$VERSION" \
+            --tag "$IMAGE:latest" \
             .
 
       # El smoke test es el punto de este job: hasta hoy la imagen solo se había probado con
       # podman. Aquí corre con docker de verdad y comprueba lo que el proyecto promete.
       - name: Probar la imagen con docker (smoke test)
+        env:
+          IMAGE: ${{ needs.version.outputs.image }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
 
-          image="${{ steps.v.outputs.image }}:${{ steps.v.outputs.version }}"
+          image="$IMAGE:$VERSION"
           base="http://127.0.0.1:8080"
 
           # Al fallar se vuelca el registro del contenedor: un `test` a secas en Actions deja
@@ -172,16 +301,19 @@ jobs:
           #    docker por primera vez. Su `interval` es 30s, así que el primer veredicto tarda
           #    ~30s: de ahí los 90s de margen.
           for _ in $(seq 1 45); do
-            estado=$(docker inspect --format '{{.State.Health.Status}}' smoke 2>/dev/null || echo sin-healthcheck)
+            estado=$(docker inspect --format '{{.State.Health.Status}}' smoke 2>/dev/null \
+              || echo sin-healthcheck)
             [[ "$estado" == "healthy" ]] && break
             sleep 2
           done
-          [[ "${estado:-}" == "healthy" ]] || fallo "el healthcheck de la imagen quedó en '$estado' (se esperaba 'healthy')"
+          [[ "${estado:-}" == "healthy" ]] \
+            || fallo "el healthcheck de la imagen quedó en '$estado' (se esperaba 'healthy')"
           echo "ok   healthcheck -> healthy"
 
           # 5) La imagen no corre como root (uid/gid 10001 fijos, lo promete el README).
           usuario=$(docker inspect --format '{{.Config.User}}' smoke)
-          [[ "$usuario" == "10001:10001" ]] || fallo "la imagen declara USER '$usuario'; se esperaba 10001:10001"
+          [[ "$usuario" == "10001:10001" ]] \
+            || fallo "la imagen declara USER '$usuario'; se esperaba 10001:10001"
           echo "ok   USER -> $usuario"
 
           echo "--- docker logs smoke ---"
@@ -192,49 +324,60 @@ jobs:
         run: docker rm --force smoke || true
 
       - name: Entrar en GHCR
+        env:
+          # El token del workflow y su actor, por `env:` como todo lo demás: por `run:` habría que
+          # interpolar `${{ secrets.GITHUB_TOKEN }}` y `${{ github.actor }}` dentro del script.
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
-          echo "${{ secrets.GITHUB_TOKEN }}" \
-            | docker login "$REGISTRY" --username "${{ github.actor }}" --password-stdin
+          echo "$GHCR_TOKEN" \
+            | docker login "$REGISTRY" --username "$ACTOR" --password-stdin
 
       - name: Publicar
+        env:
+          IMAGE: ${{ needs.version.outputs.image }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
 
-          image="${{ steps.v.outputs.image }}"
-          version="${{ steps.v.outputs.version }}"
-
-          docker push "$image:$version"
+          docker push "$IMAGE:$VERSION"
 
           # `latest` solo para versiones estables: si la etiqueta es una pre-release
           # (`v0.2.0-rc1`), mover `latest` mandaría a producción una release candidate.
-          if [[ "$version" == *-* ]]; then
+          if [[ "$VERSION" == *-* ]]; then
             echo "pre-release: no se mueve :latest"
           else
-            docker push "$image:latest"
+            docker push "$IMAGE:latest"
           fi
 
       # No falla el release (la imagen ya está publicada y el Release se crea igual), pero deja
       # la pega de GHCR a la vista en el resumen del job en vez de que la descubra quien intente
       # hacer `pull` sin credenciales. Ver "LA PEGA DE GHCR" arriba.
       - name: Aviso si el paquete sigue privado
+        env:
+          REPO: ${{ needs.version.outputs.repo }}
+          IMAGE: ${{ needs.version.outputs.image }}
         run: |
           set -euo pipefail
 
           codigo=$(curl -s -o /dev/null -w '%{http_code}' \
-            "https://ghcr.io/token?scope=repository:${{ steps.v.outputs.repo }}:pull")
+            "https://ghcr.io/token?scope=repository:$REPO:pull")
 
           if [[ "$codigo" == "200" ]]; then
             echo "El paquete admite pull anónimo (público): $codigo"
           else
-            aviso="GHCR responde $codigo a un token anónimo para '${{ steps.v.outputs.repo }}': el paquete sigue PRIVADO, así que 'docker pull ${{ steps.v.outputs.image }}' sin credenciales da 'denied'."
+            aviso="GHCR responde $codigo a un token anónimo para '$REPO': el paquete sigue " \
+              "PRIVADO, así que 'docker pull $IMAGE' sin credenciales da 'denied'."
             echo "::warning::$aviso"
             {
               echo "### ⚠️ El paquete de GHCR sigue privado"
               echo
               echo "$aviso"
               echo
-              echo "Se arregla a mano, una vez por paquete: <https://github.com/users/atareao/packages/container/errserve/settings> » Danger Zone » Change visibility » Public."
+              echo "Se arregla a mano, una vez por paquete:"
+              echo "<https://github.com/users/atareao/packages/container/errserve/settings> »"
+              echo "Danger Zone » Change visibility » Public."
               echo "(No hay API para cambiarlo: el \`PATCH /user/packages/...\` ya no existe.)"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -242,22 +385,196 @@ jobs:
       - name: Crear el Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
 
-          tag="${{ steps.v.outputs.tag }}"
-          version="${{ steps.v.outputs.version }}"
-
           # Republicar una etiqueta ya publicada (dispatch) no debe petar: si el Release existe,
           # se reutiliza. El `create` final sí falla si falla.
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "El Release $tag ya existe: se reutiliza."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "El Release $TAG ya existe: se reutiliza."
             exit 0
           fi
 
-          args=(--title "$tag" --generate-notes --verify-tag)
-          if [[ "$version" == *-* ]]; then
+          args=(--title "$TAG" --generate-notes --verify-tag)
+          if [[ "$VERSION" == *-* ]]; then
             args+=(--prerelease)
           fi
 
-          gh release create "$tag" "${args[@]}"
+          gh release create "$TAG" "${args[@]}"
+
+  # El crate se publica DESPUÉS de la imagen, nunca en paralelo. La razón no es de estilo, es de
+  # orden de lo irreparable: publicar en crates.io es irreversible —una versión publicada solo se
+  # puede *yank*, jamás reemplazar ni borrar—, mientras que construir y probar la imagen no lo es.
+  # Si el crate saliera a la vez que la imagen y la imagen fallara, quedaría una versión publicada
+  # de la que no hay artefacto, que es el peor estado posible: ya no se puede retirar. Con
+  # `needs: [version, imagen]`, el crate solo sale cuando la versión ya se comprobó y la imagen ya
+  # está construida, probada y publicada.
+  #
+  # Y es un job aparte, no un paso más de `imagen`, porque `imagen` es de docker y no tiene
+  # toolchain de Rust: meter el crate ahí obligaría a instalar Rust en un job que no lo necesita.
+  # Un job, una cosa que se publica.
+  crate:
+    name: publicar el crate
+    runs-on: ubuntu-latest
+    needs: [version, imagen]
+    # El job no usa el `GITHUB_TOKEN` para nada: el `checkout` solo necesita `contents: read`, y
+    # publicar se hace con el secreto `CARGO_REGISTRY_TOKEN`, no con el token del workflow. A nivel
+    # de job se concede lo mínimo —y NO se hereda el `contents: write` + `packages: write` de nivel
+    # de workflow—: así el proceso de `cargo publish`, y lo que un `run:` interpolado pudiera
+    # colar, no tienen un token de escritura al alcance.
+    permissions:
+      contents: read
+    # El crate es minúsculo, pero `cargo publish` sí habla con el índice y el registro: 15 minutos
+    # son de sobra y acotan un colgado de la red.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # El árbol de la ETIQUETA, no el de la rama. `cargo publish` publica lo que hay en el
+          # árbol de trabajo, y en un `workflow_dispatch` el `github.sha` por defecto es el tip de
+          # la RAMA: sin fijar el `ref` se publicaría de forma irreversible el árbol de `main` bajo
+          # la versión de una etiqueta que apunta a otro commit —y crates.io no permite
+          # reemplazarlo ni borrarlo—.
+          #
+          # El `ref` va CUALIFICADO a `refs/tags/…`: un `ref` sin cualificar se resuelve
+          # probando primero una RAMA del mismo nombre y solo después la etiqueta, así que si
+          # coexistieran rama y etiqueta `vX.Y.Z`, este job y el de `version` resolverían los
+          # dos la rama: la afirmación de abajo compararía la rama consigo misma y no cazaría
+          # nada. `refs/tags/…` deja el refspec inequívoco (`+refs/tags/X:refs/tags/X`) y una
+          # etiqueta inexistente falla en el propio `checkout`. No toca el comentario de la
+          # afirmación: ese habla de LEER un ref local, y esto es el DESTINO del fetch.
+          ref: refs/tags/${{ needs.version.outputs.tag }}
+          # Nada se empuja desde aquí (publica `cargo` con su token, no `git`): que el `checkout`
+          # no deje las credenciales en el `.git/config` del runner.
+          persist-credentials: false
+
+      # `cargo package` mete un `.cargo_vcs_info.json` dentro del `.crate` con el sha1 del commit
+      # desde el que se empaquetó, así que «desde qué árbol salió» es comprobable. Con el `ref`
+      # fijado arriba, este `HEAD` debería ser el mismo commit sobre el que comprobó la versión el
+      # job `version`; si no lo es —un dispatch sobre una etiqueta movida, un `ref` que no resolvió
+      # a la etiqueta—, se iba a publicar un árbol que no es el que se validó, y en crates.io eso
+      # no se deshace. Se compara contra el `output` del job, no contra `refs/tags/…`: con `ref:`
+      # el ref local de la etiqueta puede no existir en un clon superficial.
+      - name: El commit es el que comprobó el job de la versión
+        env:
+          COMMIT_ESPERADO: ${{ needs.version.outputs.commit }}
+        run: |
+          set -euo pipefail
+
+          real="$(git rev-parse HEAD)"
+          echo "commit del job de la versión : $COMMIT_ESPERADO"
+          echo "commit de este checkout       : $real"
+          if [[ "$real" != "$COMMIT_ESPERADO" ]]; then
+            echo "::error::este job iba a publicar $real, y la versión se comprobó sobre " \
+              "$COMMIT_ESPERADO: no se publica un árbol que no es el que se validó."
+            exit 1
+          fi
+
+      # El crate usa edition 2024, que exige rustc >= 1.85; `stable` lo cumple.
+      - name: Instalar el toolchain
+        run: rustup toolchain install stable --profile minimal
+
+      # Sin caché de Cargo, a diferencia de `ci.yml`: el crate es minúsculo y este job corre de
+      # release en release —la caché era por coherencia, no por necesidad—, y `Swatinem/rust-cache`
+      # es una acción de tercero con tag mutable dentro del job que maneja el token de publicación.
+      # No compensa.
+
+      # Sin este paso, re-ejecutar el workflow sobre una etiqueta ya publicada —que es justo para
+      # lo que existe el `workflow_dispatch`— fallaría con «crate version already uploaded»: un
+      # rojo FALSO, porque la versión está publicada, que es lo que se quería. La `User-Agent` es
+      # obligatoria: medido, sin ella la API responde 403 y la comprobación daría un falso «no está
+      # publicada», que es exactamente lo que este paso evita.
+      - name: ¿Está ya publicada esta versión?
+        id: ya
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          url="https://crates.io/api/v1/crates/errserve/$VERSION"
+          UA='errserve-release (github.com/atareao/errserve)'
+
+          # `-sS` para que un fallo de transporte se VEA en vez de abortar en silencio por `set -e`
+          # (un `-s` a secas no imprime el error de curl), y `--max-time`/`--retry` para no
+          # quedarse colgado contra un registro caído.
+          if ! codigo=$(curl -sS --max-time 20 --retry 2 --retry-connrefused \
+            -o /dev/null -w '%{http_code}' \
+            -H "User-Agent: $UA" \
+            -H 'Accept: application/json' \
+            "$url"); then
+            echo "::error::no se pudo consultar crates.io ($url)."
+            exit 1
+          fi
+
+          # SOBRE FALLAR CUANDO EL `.crate` PUBLICADO NO ES DE ESTE COMMIT: se AVISA, no se falla,
+          # y es deliberado. Subirlo a fallo parece más estricto y es peor, por dos razones.
+          #   Primera: en la rama del 200 ya no hay nada que reparar —la publicación es
+          #   irreversible y ya está hecha—, así que un fallo no arregla nada y sí bloquea lo que
+          #   queda del release (republicar la imagen y reutilizar el Release): convertiría en rojo
+          #   el camino de republicación que este workflow tiene por diseño.
+          #   Segunda, MEDIDO: el `.crate` publicado de la `0.3.0` registra `bdb76fa…`, que NO es el
+          #   commit de su etiqueta `v0.3.0` (`d0032a2…`). Las versiones publicadas a mano no
+          #   cuadran con su etiqueta, así que una puerta dura daría rojo en la primera
+          #   republicación legítima que alguien hiciera.
+          # El aviso queda en el log y en el `$GITHUB_STEP_SUMMARY`, con los dos sha a la vista.
+          case "$codigo" in
+            200)
+              # Un 200 solo dice que la versión EXISTE, no que sea la de este commit. El `.crate`
+              # lleva dentro `.cargo_vcs_info.json`, que registra el sha1 del commit desde el que
+              # se empaquetó: eso es lo que se compara.
+              tmp="$(mktemp -d)"
+              curl -sSL --max-time 60 --retry 2 -H "User-Agent: $UA" \
+                -o "$tmp/publicado.crate" \
+                "https://crates.io/api/v1/crates/errserve/$VERSION/download"
+              publicado="$(tar xzOf "$tmp/publicado.crate" \
+                "errserve-$VERSION/.cargo_vcs_info.json" 2>/dev/null \
+                | grep -oE '[0-9a-f]{40}' || true)"
+              rm -rf "$tmp"
+              aqui="$(git rev-parse HEAD)"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              if [[ -z "$publicado" ]]; then
+                echo "::warning::la versión $VERSION ya está publicada, pero su .crate no " \
+                  "declara de qué commit salió: no se puede comprobar que sea este."
+              elif [[ "$publicado" == "$aqui" ]]; then
+                echo "ok   el .crate publicado lo empaquetó este mismo commit ($aqui)"
+              else
+                echo "::warning::la versión $VERSION ya publicada la empaquetó el commit " \
+                  "$publicado, y este árbol es $aqui: NO es la misma publicación. No se " \
+                  "republica (crates.io es irreversible), pero conviene mirarlo."
+              fi
+              {
+                echo "### crates.io: $VERSION ya estaba publicada (no se toca)"
+                echo
+                echo "- commit del \`.crate\` publicado: \`${publicado:-desconocido}\`"
+                echo "- commit de este árbol: \`$aqui\`"
+              } >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            404)
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+              echo "La versión $VERSION no está publicada todavía: se publica."
+              ;;
+            *)
+              echo "::error::crates.io respondió $codigo al consultar $url. Un 403 suele ser un " \
+                "User-Agent ausente o bloqueado; un 5xx, el registro caído. No se publica a ciegas."
+              exit 1
+              ;;
+          esac
+
+      - name: Publicar en crates.io
+        if: steps.ya.outputs.skip != 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Un `cargo publish` sin token falla con un error de cargo que NO nombra el
+          # secreto: mejor decir qué falta antes de intentarlo.
+          if [[ -z "${CARGO_REGISTRY_TOKEN:-}" ]]; then
+            echo "::error::el secreto CARGO_REGISTRY_TOKEN está vacío o no existe en este " \
+              "repositorio: es el token de crates.io que hace falta para publicar."
+            exit 1
+          fi
+
+          cargo publish --locked
