@@ -70,15 +70,32 @@ El formato SHALL resolverse con el primer origen que haga match, en este orden: 
 
 ### Requirement: El cuerpo depende del formato y el código es ortogonal
 
-El cuerpo HTML SHALL servirse del fichero `CONTENT_DIR/<code>.html` y, si el del código pedido no existe, del fichero del código por defecto, como hasta ahora. Si no existe **ninguno** de los dos ficheros, SHALL servirse la copia **embebida** del código pedido y, si esa no existiera, la copia embebida del código por defecto. La cascada del directorio SHALL intentarse **entera** antes que la embebida, y un fichero de `CONTENT_DIR` **que se pueda leer** NO SHALL ser desplazado por la copia embebida de otro código. Los cuerpos JSON, XML y texto SHALL generarse a partir del código, su razón canónica y su descripción. El código resuelto NO SHALL depender del formato ni del origen del cuerpo.
+El cuerpo HTML SHALL servirse del fichero `CONTENT_DIR/<code>.html` y, si el del código pedido no existe, del fichero del código por defecto. Si no existe **ninguno** de los dos ficheros, SHALL servirse la plantilla **embebida** en el binario, que cubre cualquier código. La cascada del directorio SHALL intentarse **entera** antes que la embebida, y un fichero de `CONTENT_DIR` **que se pueda leer** NO SHALL ser desplazado por la copia embebida. Los cuerpos JSON, XML y texto SHALL generarse a partir del código, su razón canónica y su descripción. El código resuelto NO SHALL depender del formato ni del origen del cuerpo.
+
+La página HTML del proyecto SHALL ser **una plantilla**, no once ficheros: la misma página SHALL
+servir para cualquier código, con el código, la razón canónica y la descripción como **marcadores**
+(`{{code}}`, `{{reason}}`, `{{description}}`) que el servidor SHALL sustituir **al servir** por el
+código resuelto y por lo que devuelven `canonical_reason` y `description`. El motivo SHALL quedar
+escrito: el fichero por código repetía cinco valores escritos a mano en cada uno de los once, y un
+código sin fichero propio recibía el cuerpo de **otro** código —un `451` con el cuerpo de un `404`—,
+con el estado y el cuerpo en desacuerdo.
+
+Las reglas de la sustitución SHALL ser **las mismas** que las del marcador de la hoja (`El HTML servido
+es autocontenido`): una página **sin** marcadores SHALL servirse **byte a byte**, y SHALL sustituirse
+**cada** aparición, no solo la primera. La razón y la descripción SHALL insertarse **escapadas** para
+HTML (`&`, `<`, `>`): las escribe el servidor, no un humano dentro del fichero.
+
+La cascada del cuerpo HTML SHALL ser: `CONTENT_DIR/<código>.html` —el *override* del operador—; si no,
+`CONTENT_DIR/<código por defecto>.html`; y si no, la plantilla embebida. Un fichero **ilegible** SHALL
+seguir siendo un fallo de E/S, con el respaldo de texto y sin cambiar el estado.
 
 #### Scenario: HTML desde el fichero del código
-- **GIVEN** que `content/404.html` existe
+- **GIVEN** que `content/404.html` existe y no lleva marcadores de plantilla
 - **WHEN** se pide `GET /404.html`
 - **THEN** el cuerpo SHALL ser el contenido de `content/404.html`
 
 #### Scenario: HTML cae al código por defecto
-- **GIVEN** que `content/418.html` no existe, que el defecto es `404` y que `content/404.html` existe
+- **GIVEN** que `content/418.html` no existe, que el defecto es `404` y que `content/404.html` existe y no lleva marcadores de plantilla
 - **WHEN** se pide `GET /418.html`
 - **THEN** el cuerpo SHALL ser el contenido de `content/404.html`
 - **AND** el estado SHALL ser `418`
@@ -87,33 +104,34 @@ El cuerpo HTML SHALL servirse del fichero `CONTENT_DIR/<code>.html` y, si el del
 - **GIVEN** un servicio cuyo `CONTENT_DIR` no contiene ningún fichero
 - **WHEN** se pide `GET /503.html`
 - **THEN** el estado SHALL ser `503`
-- **AND** el cuerpo SHALL ser la página embebida del `503`
+- **AND** el cuerpo SHALL ser la plantilla embebida rellenada con `503`
 - **AND** el `Content-Type` SHALL ser HTML
 
 #### Scenario: el fichero del directorio gana a la copia embebida
 - **GIVEN** un `CONTENT_DIR` con un `404.html` propio, distinto del embebido
 - **WHEN** se pide `GET /404.html`
 - **THEN** el cuerpo SHALL ser el de `CONTENT_DIR/404.html`
-- **AND** NO SHALL ser la copia embebida del `404`
+- **AND** NO SHALL ser la plantilla embebida rellenada con `404`
 
 #### Scenario: el directorio se agota antes de entrar en la copia embebida
 - **GIVEN** un `CONTENT_DIR` con su propio `404.html` y sin `503.html`, y el defecto `404`
 - **WHEN** se pide `GET /503.html`
 - **THEN** el cuerpo SHALL ser el de `CONTENT_DIR/404.html`
-- **AND** NO SHALL ser la página embebida del `503`
+- **AND** NO SHALL ser la plantilla embebida rellenada con `503`
 
 #### Scenario: sin ficheros, un código sin página propia cae a la embebida del defecto
 - **GIVEN** un servicio sin ningún fichero en `CONTENT_DIR` y con el defecto `404`
 - **WHEN** se pide `GET /418.html`
 - **THEN** el estado SHALL ser `418`
-- **AND** el cuerpo SHALL ser la página embebida del `404`
+- **AND** el cuerpo SHALL ser la plantilla embebida rellenada con `418`
+- **AND** NO SHALL nombrar `404`
 
 #### Scenario: una página embebida no se sirve como asset
 - **GIVEN** un servicio sin ningún fichero en `CONTENT_DIR`
 - **WHEN** se pide `GET /404.html`
 - **THEN** el estado SHALL ser `404`
 - **AND** NO SHALL ser `200`
-- **AND** el cuerpo SHALL ser la página embebida del `404`
+- **AND** el cuerpo SHALL ser la plantilla embebida rellenada con `404`
 
 #### Scenario: JSON se genera
 - **GIVEN** una petición a `GET /404.json`
@@ -126,6 +144,23 @@ El cuerpo HTML SHALL servirse del fichero `CONTENT_DIR/<code>.html` y, si el del
 - **WHEN** se responde
 - **THEN** el estado SHALL ser `503`
 - **AND** el cuerpo SHALL ser XML con el elemento `code` igual a `503`
+
+#### Scenario: un código sin fichero propio recibe su propio cuerpo
+- **GIVEN** un servicio con la plantilla del proyecto y sin fichero para `451`
+- **WHEN** se pide `GET /451` con `Accept: text/html`
+- **THEN** el estado SHALL ser `451`
+- **AND** el cuerpo SHALL nombrar `451` y su razón canónica
+- **AND** el cuerpo NO SHALL nombrar `404`
+
+#### Scenario: la razón y la descripción del HTML son las de los demás formatos
+- **GIVEN** un código con prosa propia en la tabla de descripciones
+- **WHEN** se pide ese código en HTML y en JSON
+- **THEN** la razón y la descripción SHALL ser las mismas en los dos
+
+#### Scenario: la plantilla escapa lo que inserta
+- **GIVEN** una razón canónica o una descripción que contenga `&`, `<` o `>`
+- **WHEN** se rellena la plantilla con ese valor
+- **THEN** el valor SHALL insertarse escapado, y el cuerpo servido SHALL seguir siendo HTML válido
 
 ### Requirement: Las cabeceras de acompañamiento
 
@@ -232,15 +267,16 @@ Una petición cuyo path normalizado corresponda a un fichero existente de `CONTE
 
 ### Requirement: Un fallo al leer el HTML no cambia el estado
 
-Si no existe el fichero HTML del código ni el del código por defecto —ni en `CONTENT_DIR` ni entre las copias embebidas—, la aplicación SHALL responder el **código resuelto** con el cuerpo del formato resuelto, y NO SHALL responder `500`.
+Si el fichero HTML del código y el del código por defecto faltan o no se pueden leer —ni en `CONTENT_DIR` ni entre lo embebido—, la aplicación SHALL responder el **código resuelto** con el cuerpo del formato resuelto, y NO SHALL responder `500`.
 
-Con las páginas embebidas esa situación NO SHALL ser alcanzable para los once códigos que un proxy emite, que siempre tienen copia; SHALL quedar al alcance de un `DEFAULT_ERROR_PAGE` fuera de esa lista, que es un valor legal y que ninguna copia cubre. El respaldo NO SHALL retirarse.
+Con la plantilla embebida esa situación NO SHALL ser alcanzable por **ausencia** de fichero: la plantilla cubre cualquier código de `400..=599`, así que ya no hay ningún `DEFAULT_ERROR_PAGE` legal que se quede sin página. SHALL quedar al alcance de un fichero de `CONTENT_DIR` que **exista y no se pueda leer**, que es un fallo de E/S: la aplicación SHALL responder el respaldo de texto con el código resuelto, dejando constancia en el registro, en vez de tapar el fichero roto del operador con la copia embebida. El respaldo NO SHALL retirarse.
 
 #### Scenario: sin fichero HTML se mantiene el código
-- **GIVEN** un `CONTENT_DIR` sin ningún fichero HTML y con el defecto `418`, que no tiene página ni en el directorio ni embebida
+- **GIVEN** un `CONTENT_DIR` sin ningún fichero HTML y con el defecto `418`
 - **WHEN** se pide `GET /418.html`
 - **THEN** el estado SHALL ser `418`
 - **AND** NO SHALL ser `500`
+- **AND** el cuerpo SHALL ser la plantilla embebida rellenada con `418`
 
 #### Scenario: el respaldo cubre también un código distinto del defecto
 - **GIVEN** un `CONTENT_DIR` sin ningún fichero HTML y con el defecto `418`
@@ -248,18 +284,27 @@ Con las páginas embebidas esa situación NO SHALL ser alcanzable para los once 
 - **THEN** el estado SHALL ser `599`
 - **AND** NO SHALL ser `500`
 
+#### Scenario: una página del operador ilegible no tumba la respuesta
+- **GIVEN** un `CONTENT_DIR` cuyo `404.html` existe y no se puede leer, y el defecto `404`
+- **WHEN** se pide `GET /404.html`
+- **THEN** el estado SHALL ser `404`
+- **AND** el cuerpo SHALL ser el respaldo de texto del código resuelto
+- **AND** NO SHALL ser `500`
+
 ### Requirement: Los códigos que un proxy emite tienen su propia página
 
-Los códigos que un proxy emite con normalidad —`400`, `401`, `403`, `404`, `405`, `408`, `429`, `500`, `502`, `503` y `504`— SHALL tener una página HTML **embebida en el binario**, de modo que un servicio instalado sin ficheros de datos lo sirva con su propia página. `CONTENT_DIR` SHALL contener además el fichero `<código>.html` de esos mismos once códigos, como hasta ahora.
+Los códigos que un proxy emite con normalidad —`400`, `401`, `403`, `404`, `405`, `408`, `429`, `500`, `502`, `503` y `504`— SHALL tener una página HTML, y SHALL tenerla **cualquier** otro código del rango `400..=599`: la **plantilla embebida en el binario**, rellenada con el código resuelto, de modo que un servicio instalado sin ficheros de datos sirva su propia página para todos ellos. La plantilla SHALL entregarse **una sola vez** —una página, no once ficheros por código—, porque el fichero por código repetía cinco valores escritos a mano en cada uno de los once y un código sin fichero propio recibía el cuerpo de **otro**.
 
-La copia embebida de una página SHALL ser idéntica, byte a byte, al fichero del repositorio, y toda página de `CONTENT_DIR` SHALL tener copia embebida: las dos listas NO SHALL poder divergir en silencio.
+`CONTENT_DIR` PUEDE contener el fichero `<código>.html`, que es el *override* **opcional** del operador y gana a la plantilla: el proyecto NO SHALL exigirlo, y su ausencia NO SHALL degradar ninguna página.
 
-La página HTML de un código SHALL identificar ese código en su título o en su cuerpo, de modo que el cuerpo nunca contradiga al estado, y esto SHALL cumplirse igual en la copia embebida.
+La plantilla embebida SHALL ser idéntica, byte a byte, al fichero del repositorio del que se embebe: las dos copias NO SHALL poder divergir en silencio.
 
-Fuera de esa lista el respaldo sigue existiendo —el fichero del código por defecto y, si no, su copia embebida—, pero un código de la lista NO SHALL depender de él.
+La página HTML de un código SHALL identificar ese código en su título o en su cuerpo, de modo que el cuerpo nunca contradiga al estado, y esto SHALL cumplirse tanto en la plantilla embebida como en el *override* del operador.
+
+Ningún código del rango SHALL depender del respaldo de texto: SHALL bastar la plantilla embebida. El respaldo NO SHALL retirarse, pero queda reservado al caso de un fichero de `CONTENT_DIR` que **exista y no se pueda leer**.
 
 #### Scenario: el 504 tiene página propia y la nombra
-- **GIVEN** que `content/504.html` existe
+- **GIVEN** un servicio con la plantilla del proyecto y sin fichero propio para `504`
 - **WHEN** se pide `GET /504`
 - **THEN** el estado SHALL ser `504`
 - **AND** el cuerpo SHALL contener `504`
@@ -277,22 +322,28 @@ Fuera de esa lista el respaldo sigue existiendo —el fichero del código por de
 - **AND** NO SHALL ser el respaldo de texto
 
 #### Scenario: las dos copias de una página no divergen
-- **GIVEN** las páginas del repositorio y las copias embebidas en el binario
-- **WHEN** se comparan los bytes de cada una de las once
+- **GIVEN** el fichero de la plantilla en el árbol del repositorio y su copia embebida en el binario
+- **WHEN** se comparan sus bytes
 - **THEN** SHALL ser idénticos
+
+#### Scenario: un código que no está tabulado también tiene página
+- **GIVEN** un servicio sin ficheros de datos
+- **WHEN** se pide `GET /451` con `Accept: text/html`
+- **THEN** el estado SHALL ser `451` y el cuerpo SHALL ser la plantilla rellenada con `451`
+- **AND** NO SHALL ser el respaldo de texto
 
 ### Requirement: Las páginas no referencian ficheros que no existen
 
-Toda página HTML de `CONTENT_DIR`, y su copia embebida, SHALL referenciar únicamente ficheros servibles:
+La página HTML del proyecto —la plantilla—, y su copia embebida, SHALL referenciar únicamente ficheros servibles:
 presentes en `CONTENT_DIR` o embebidos en el binario. Esa referencia SHALL ser **una sola**: el marcador
 `<link rel="stylesheet" href="/css/error.css" />`, que apunta a la hoja del tema `default` —que es también
 el asset `/css/error.css`—.
 
-Las páginas SHALL compartir **una sola** hoja de estilos, `css/error.css`, con un nombre neutro. Ninguna
-página SHALL referenciar una hoja cuyo nombre sea el de **otro** código: un `403` que carga `404.css` hace
+La página SHALL usar **una sola** hoja de estilos, `css/error.css`, con un nombre neutro: hay **una**
+página, no once, así que no hay once copias del mismo contenido que repartir. Ninguna página SHALL
+referenciar una hoja cuyo nombre sea el de **otro** código: una página que carga `404.css` hace
 que el error se presente con el nombre —y la apariencia— de otro, que es el defecto que este requisito
-corrige. La hoja SHALL ser única porque once copias del mismo contenido no son once hojas, son una hoja mal
-repartida; la diferencia de aspecto por código, si se quiere, se expresa con una clase en el elemento
+corrige. La diferencia de aspecto por código, si se quiere, se expresa con una clase en el elemento
 `body`, no duplicando el fichero.
 
 El **fichero** conserva el marcador; la página **servida** no: el marcador se sustituye al servir por la
@@ -300,18 +351,18 @@ hoja del tema elegido en un bloque `<style>` (requisito «El HTML servido es aut
 además, el único dato que el render necesita para saber **dónde** incrustar la hoja.
 
 #### Scenario: ninguna página carga la hoja de otro código
-- **GIVEN** las páginas de `content/`
+- **GIVEN** la página de `content/`
 - **WHEN** se revisan sus `href` de hojas de estilos
-- **THEN** todas SHALL apuntar a `css/error.css`
-- **AND** ninguna SHALL apuntar a `css/<código>.css`
+- **THEN** SHALL apuntar a `css/error.css`
+- **AND** NO SHALL apuntar a `css/<código>.css`
 
 #### Scenario: la hoja compartida existe y resuelve
-- **GIVEN** que las páginas referencian `css/error.css`
+- **GIVEN** que la página referencia `css/error.css`
 - **WHEN** se comprueba el directorio de contenido
 - **THEN** `content/css/error.css` SHALL existir
 
 #### Scenario: cada enlace local resuelve
-- **GIVEN** las páginas de `content/`
+- **GIVEN** la página de `content/`
 - **WHEN** se extraen sus `href` que no salen a otro host
 - **THEN** cada ruta SHALL existir como fichero dentro de `CONTENT_DIR`
 
@@ -325,12 +376,17 @@ además, el único dato que el render necesita para saber **dónde** incrustar l
 
 ### Requirement: Cada página se identifica con la clase de su código
 
-El elemento `body` de la página de un código cubierto SHALL llevar la clase `c<código>` —`c404`, `c504`—, de modo que la apariencia pueda diferenciarse por código con una sola hoja compartida y sin duplicarla.
+El elemento `body` de la página SHALL llevar la clase `c<código>` del **código resuelto** —`c404`, `c451`—, de modo que la apariencia pueda diferenciarse por código con una sola hoja compartida y sin duplicarla. La clase SHALL quedar garantizada por la **plantilla**, que la rellena al servir con el código resuelto, y no por once ficheros que la escriben a mano: así la clase del cuerpo y el estado NO SHALL poder discrepar.
 
 #### Scenario: la página del 504 se identifica como tal
-- **GIVEN** `content/504.html`
-- **WHEN** se inspecciona su cuerpo
+- **GIVEN** un servicio con la plantilla del proyecto y sin fichero propio para `504`
+- **WHEN** se sirve su página HTML
 - **THEN** el elemento `body` SHALL llevar la clase `c504`
+
+#### Scenario: la clase del cuerpo es la del código pedido aunque no tenga fichero propio
+- **GIVEN** un servicio sin fichero para `451`
+- **WHEN** se sirve su página HTML
+- **THEN** el `body` SHALL llevar la clase `c451`
 
 ### Requirement: Ningún estado de error del servidor de ficheros se escapa
 
@@ -407,8 +463,12 @@ escondía el fallo. `error-pages` no lo sufre porque sus páginas son autoconten
 imágenes en el propio HTML, sin cargar ningún recurso externo. Es paridad, no un adorno.
 
 Una página **sin** el marcador —una página propia del operador, ya autocontenida— SHALL servirse **tal
-cual**, sin añadir ni sustituir nada, y sin que el servicio lea hoja alguna para servirla. Un `<link>` que
-**no** sea el marcador NO SHALL tocarse: es del operador.
+cual** en lo que a la hoja respecta: sin añadir ni sustituir el marcador, y sin que el servicio lea hoja
+alguna para servirla. Un `<link>` que **no** sea el marcador NO SHALL tocarse: es del operador. La
+sustitución de los **marcadores de plantilla** (`{{code}}`, `{{reason}}`, `{{description}}`) es un paso
+**aparte**, con su propia regla —sin marcadores, **byte a byte**—, y vive en el requisito «El cuerpo
+depende del formato y el código es ortogonal»: una página sin el marcador de la hoja pero con un marcador
+de plantilla SHALL tener ese marcador rellenado.
 
 Ninguna hoja de tema SHALL poder hacer que el navegador **pida** algo por la red. En concreto: NO SHALL
 contener `@import` en ninguna de sus formas —incluida `@import "otra.css";`, que no lleva `url(`—, ni
@@ -446,7 +506,7 @@ hoja en un incumplimiento.
 - **AND** el cuerpo SHALL contener `<style`
 
 #### Scenario: una página propia y ya autocontenida se sirve sin tocar
-- **GIVEN** un `CONTENT_DIR` cuya página `404.html` no lleva el marcador
+- **GIVEN** un `CONTENT_DIR` cuya página `404.html` no lleva el marcador ni ningún marcador de plantilla
 - **WHEN** se pide `GET /404` en HTML
 - **THEN** el cuerpo SHALL ser esa página **byte a byte**, sin añadidos ni sustituciones
 
@@ -475,7 +535,7 @@ hoja en un incumplimiento.
 ### Requirement: El tema del HTML es configurable
 
 La hoja que se incrusta en el HTML SHALL elegirse entre los temas **incorporados al binario**. Un tema SHALL
-ser **una sola hoja de estilos**: añadir un tema es añadir un fichero, no duplicar las once páginas. El
+ser **una sola hoja de estilos**: añadir un tema es añadir un fichero, no duplicar la página. El
 conjunto de temas SHALL ser `default` —la hoja que el proyecto ya trae, con sus reglas intactas, de modo que
 quien no configure nada no vea ningún cambio de aspecto—, `minimal`, `terminal`, `paper`, `amber` y
 `compact`.
@@ -505,8 +565,8 @@ Una hoja de tema PUEDE animar: el movimiento es una decisión de aspecto, no un 
 autocontención. Pero una hoja que traiga `animation`, `transition` o `@keyframes` SHALL respetar también
 `prefers-reduced-motion`. El motivo SHALL quedar escrito: hay gente a la que el movimiento le produce
 mareo, y una página de error que se mueve mientras el usuario intenta leer qué ha pasado es peor página
-de error. La regla no prohíbe el adorno: prohíbe el adorno que no se puede apagar. El mismo principio
-rige para el movimiento: una hoja que mencione `animation` **solo dentro de un
+de error. La regla no prohíbe el adorno: prohíbe el adorno que no se puede apagar. Y el mismo
+principio rige para los **comentarios**: una hoja que mencione `animation` **solo dentro de un
 comentario** NO SHALL tener que declarar `prefers-reduced-motion`, porque un comentario no anima.
 Una hoja que no anima NO SHALL tener que declarar nada.
 

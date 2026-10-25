@@ -1,7 +1,9 @@
 //! Temas de las páginas de error: nombre, hoja y bytes embebidos.
 //!
 //! Un **tema** es **una sola hoja de estilos**: añadir un tema es añadir un
-//! fichero, no duplicar las once páginas. El HTML que se sirve es autocontenido
+//! fichero, no duplicar la página. Hay **una página** —la del código por
+//! defecto, con `{{code}}`, `{{reason}}` y `{{description}}`, que se rellenan al
+//! servir— y **una hoja por tema**. El HTML que se sirve es autocontenido
 //! —[`crate::render`] sustituye el marcador `<link rel="stylesheet"
 //! href="/css/error.css" />` por un `<style>` con la hoja del tema elegido—, así
 //! que el navegador no pide ningún fichero para ver la página.
@@ -331,10 +333,12 @@ fn hoja_sin_comentarios(hoja: &[u8]) -> Vec<u8> {
 
     while i < hoja.len() {
         match hoja[i] {
-            b'/' if hoja.get(i + 1) == Some(&b'*') => match busca(&hoja[i + 2..], b"*/") {
-                Some(cierre) => i += 2 + cierre + 2,
-                None => return salida,
-            },
+            b'/' if hoja.get(i + 1) == Some(&b'*') => {
+                match crate::render::busca(&hoja[i + 2..], b"*/") {
+                    Some(cierre) => i += 2 + cierre + 2,
+                    None => return salida,
+                }
+            }
             comilla @ (b'"' | b'\'') => {
                 salida.push(comilla);
                 i += 1;
@@ -411,7 +415,7 @@ fn tiene_url_externa(hoja: &[u8]) -> bool {
     const AGUJA: &[u8] = b"url(";
     let mut desde = 0;
 
-    while let Some(pos) = busca(hoja.get(desde..).unwrap_or_default(), AGUJA) {
+    while let Some(pos) = crate::render::busca(hoja.get(desde..).unwrap_or_default(), AGUJA) {
         let inicio = desde + pos + AGUJA.len();
         let destino = hoja
             .get(inicio..)
@@ -434,14 +438,6 @@ fn tiene_url_externa(hoja: &[u8]) -> bool {
 #[cfg(test)]
 fn contiene(pajar: &[u8], aguja: &str) -> bool {
     String::from_utf8_lossy(pajar).contains(aguja)
-}
-
-/// Busca `aguja` en `pajar` y devuelve su posición.
-#[cfg(test)]
-fn busca(pajar: &[u8], aguja: &[u8]) -> Option<usize> {
-    pajar
-        .windows(aguja.len())
-        .position(|ventana| ventana == aguja)
 }
 
 #[cfg(test)]
@@ -644,8 +640,8 @@ mod tests {
     #[test]
     fn cada_hoja_cubre_el_marcado() {
         // Sin esto, un tema que se olvide de un elemento deja una página a medio
-        // vestir y nadie se entera: las cinco etiquetas son las que llevan las
-        // once páginas de error.
+        // vestir y nadie se entera: las cinco etiquetas son las que lleva la
+        // única página de error.
         let mut fallos = Vec::new();
 
         for theme in THEMES.iter() {

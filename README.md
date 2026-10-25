@@ -112,11 +112,11 @@ segundos —`0` significa «reintenta ya»— y no tiene techo. Una variable vac
 de segundos, es un error de arranque. Lo que **no** se configura es qué códigos la llevan: son el
 `429` y el `503`, y eso lo decide el código.
 
-`CONTENT_DIR` es solo un ***override***. El binario lleva **dentro** las once páginas y su hoja, así
-que un `cargo install errserve` —que deja un ejecutable y ningún fichero de datos, con `CONTENT_DIR`
-apuntando por defecto a un `content` que no existe— sirve las páginas de verdad y su hoja, y no el
-respaldo de texto. Lo que haya en `CONTENT_DIR` gana **cuando se pueda leer**; lo que falte se sirve
-desde la copia embebida.
+`CONTENT_DIR` es solo un ***override***. El binario lleva **dentro** la página —una plantilla— y su
+hoja, así que un `cargo install errserve` —que deja un ejecutable y ningún fichero de datos, con
+`CONTENT_DIR` apuntando por defecto a un `content` que no existe— sirve la página de verdad y su hoja,
+y no el respaldo de texto. Lo que haya en `CONTENT_DIR` gana **cuando se pueda leer**; lo que falte se
+sirve desde la copia embebida.
 
 ## Cómo se resuelve
 
@@ -141,21 +141,51 @@ Cada página de error lleva `Content-Type`, `Content-Length`,
 `Retry-After` con el valor de `RETRY_AFTER` (`120` por defecto).
 
 El HTML se sirve de `CONTENT_DIR/<código>.html` (con caída al fichero del código
-por defecto) y, agotadas esas dos lecturas, de la misma cascada sobre la copia
-**embebida** en el binario; JSON, XML y texto se generan del código, su razón
-canónica y su descripción.
+por defecto) y, agotadas esas dos lecturas, de la **plantilla embebida** en el
+binario, rellenada con el código resuelto; JSON, XML y texto se generan del
+código, su razón canónica y su descripción. Las cuatro formas de un mismo código
+llevan la **misma** razón y la **misma** descripción: las tablas de `resolve` son
+su fuente única.
 
 ## Códigos cubiertos
 
-Once códigos tienen página propia: `400`, `401`, `403`, `404`, `405`, `408`, `429`, `500`, `502`,
-`503` y `504`. Cualquier otro cae al fichero del código por defecto, pero **el estado sigue siendo
-el código resuelto**: nunca verás un `504` servido como `404`.
+**Cualquier** código de `400..=599` tiene página, no solo once: la página es una **plantilla**
+(`content/404.html`) que el servidor rellena al vuelo, así que un `451`, un `418` o un `599` salen
+con **su propio** código, su razón y su descripción, y con **su propio** estado —nunca verás un `504`
+servido como `404`, ni un cuerpo que diga `404` para otro código—. Quince códigos traen su
+descripción escrita en el código (`400`, `401`, `403`, `404`, `405`, `408`, `410`, `418`, `422`,
+`429`, `500`, `501`, `502`, `503` y `504`); el resto usa una genérica, siempre con la razón canónica
+del código en el título.
 
-Todas las páginas comparten una sola hoja, `css/error.css` —que **también va embebida**, y es tan
-*override* como las páginas—, y cada una se identifica con la clase
-de su código (`<body class="c504">`), que es lo que permite diferenciar su aspecto sin duplicar la
-hoja once veces. Esa hoja es el tema `default`, y el `<link>` que la referencia en el **fichero** es
-el marcador que el servidor sustituye al servir (ver «Páginas autocontenidas y temas»).
+La plantilla lleva tres marcadores que el servidor sustituye **al servir**:
+
+| Marcador | Se sustituye por |
+|---|---|
+| `{{code}}` | El código resuelto (`404`), allí donde aparezca: el `<title>`, el `<h1>` y la clase del `body` (`class="c{{code}}"`). |
+| `{{reason}}` | La razón canónica del código (`Not Found`). |
+| `{{description}}` | La descripción del código (la tabla de `resolve`). |
+
+Todo comparte una sola hoja, `css/error.css` —que **también va embebida**, y es tan *override* como
+la página—, y la clase del `body` (`c504`, `c503`…) es lo que permite diferenciar el aspecto de cada
+código sin duplicar la hoja. Esa hoja es el tema `default`, y el `<link>` que la referencia en el
+**fichero** es el marcador que el servidor sustituye al servir (ver «Páginas autocontenidas y
+temas»).
+
+### Cómo cambiar el texto de una página de error
+
+Hay tres vías, de la más global a la más local:
+
+1. **El texto de todos los códigos**: edita la tabla de `resolve::description` en `src/resolve.rs` y
+   recompila. Es la **fuente única** del texto de los cuatro formatos (HTML, JSON, XML y texto), así
+   que el cambio vale para todos ellos a la vez.
+2. **Una página propia para un código**: deja tu fichero en `CONTENT_DIR/<código>.html` (por ejemplo
+   `content/451.html`). Gana a la plantilla del proyecto y, si **no** lleva marcadores, se sirve **tal
+   cual**, byte a byte: su texto fijo es tuyo. Un `CONTENT_DIR/<código por defecto>.html` (por
+   defecto, `content/404.html`) sirve de respaldo para cualquier código que no tenga el suyo.
+3. **Una página propia que se adapte al código**: escribe los marcadores `{{code}}`, `{{reason}}` y
+   `{{description}}` en tu propia página y el servidor la rellenará con el código resuelto, igual que
+   hace con la del proyecto. Un `CONTENT_DIR/<código>.html` con marcadores cubre así cualquier código
+   sin que tengas que escribir un fichero por código.
 
 ## Páginas autocontenidas y temas
 
@@ -177,9 +207,9 @@ adorno.
 
 Cómo se hace, sin romper nada de lo de arriba:
 
-- Los **ficheros** de `CONTENT_DIR` conservan su `<link rel="stylesheet" href="/css/error.css" />` y
+- Las **páginas** de `CONTENT_DIR` conservan su `<link rel="stylesheet" href="/css/error.css" />` y
   el servidor lo sustituye por un bloque `<style>` **al servir**. El fichero conserva el enlace a
-  propósito: sigue siendo legible y previsualizable, y así no se duplican las once páginas por tema.
+  propósito: sigue siendo legible y previsualizable, y así no se duplica la página por tema.
 - Una página **sin** el marcador —una página propia, ya autocontenida— se sirve **byte a byte**, sin
   añadir ni sustituir nada; y en ese caso el servicio no lee ninguna hoja, así que un CSS roto no
   puede afectar a una página que no lo necesita.
@@ -192,7 +222,7 @@ Cómo se hace, sin romper nada de lo de arriba:
 
 ### Los seis temas
 
-Un tema es **una sola hoja**: elegirlo no duplica las once páginas.
+Un tema es **una sola hoja**: elegirlo no duplica la página.
 
 | Tema | Hoja en `CONTENT_DIR` | Aspecto |
 |---|---|---|
@@ -404,9 +434,10 @@ caché local de Cargo (`cargo check --offline`).
 
 ## No incluye (a propósito)
 
-Sin motor de plantillas, sin localización, sin generador estático y sin TLS (lo
-termina Traefik). Se copian **solo** las cuatro cabeceras de correlación, no el
-conjunto completo de `--proxy-headers`, y la compresión se limita a gzip.
+Sin motor de plantillas —solo la sustitución literal de los tres marcadores de la
+página—, sin localización, sin generador estático y sin TLS (lo termina Traefik).
+Se copian **solo** las cuatro cabeceras de correlación, no el conjunto completo de
+`--proxy-headers`, y la compresión se limita a gzip.
 
 Tampoco hay rotación de temas: `error-pages` tiene `--rotation-mode` (aleatorio
 al arrancar, horario, diario) y aquí no existe —un tema, y ya—. Y los seis temas

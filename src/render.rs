@@ -1,14 +1,13 @@
 //! Construcción del cuerpo y de las cabeceras de una página de error.
 //!
 //! ---------------------------------------------------------------------------
-//! API que asume la fase RED (la fase GREEN debe implementarla tal cual):
+//! API pública del módulo:
 //!
 //! ```ignore
 //! #[derive(Debug)]
 //! pub enum RenderError {
-//!     /// No hay página HTML del código pedido ni del código por defecto en
-//!     /// ninguna de las dos capas: `CONTENT_DIR` y la copia embebida.
-//!     MissingHtml { code: u16, default_code: u16 },
+//!     /// Error de E/S: la página del operador existe y no se puede leer, o la
+//!     /// serialización del cuerpo generado falló.
 //!     Io(std::io::Error),
 //! }
 //! impl std::fmt::Display for RenderError { /* ... */ }
@@ -28,13 +27,12 @@
 //! }
 //!
 //! /// Cuerpo por formato. HTML se lee de `content_dir/<code>.html` con caída a
-//! /// `content_dir/<default_code>.html`; agotadas esas dos, la misma cascada
-//! /// sobre la copia **embebida** —la del código y la del defecto—, y solo
-//! /// entonces `MissingHtml`. El HTML se sirve **autocontenido**: el marcador
-//! /// `<link rel="stylesheet" href="/css/error.css" />` se sustituye por un
-//! /// `<style>` con la hoja del `theme`. JSON, XML y texto se generan a partir
-//! /// de `code`, `canonical_reason(code)` y `description(code)` —y **ignoran**
-//! /// el tema—.
+//! /// `content_dir/<default_code>.html`; agotadas esas dos, entra la **plantilla
+//! /// embebida**, rellenada con el código resuelto. El HTML se sirve
+//! /// **autocontenido**: el marcador `<link rel="stylesheet" href="/css/error.css" />`
+//! /// se sustituye por un `<style>` con la hoja del `theme`. JSON, XML y texto se
+//! /// generan a partir de `code`, `canonical_reason(code)` y `description(code)`
+//! /// —y **ignoran** el tema—.
 //! pub fn render_body(
 //!     code: u16,
 //!     default_code: u16,
@@ -52,7 +50,8 @@
 //! ) -> Result<RenderedPage, RenderError>;
 //!
 //! /// Respaldo de texto, infalible (no lee ficheros), con el estado y las
-//! /// cabeceras de `code`: lo que se sirve cuando falta el HTML.
+//! /// cabeceras de `code`: lo que se sirve cuando la página del operador existe
+//! /// y no se puede leer.
 //! pub fn render_text_fallback(code: u16, retry_after: u32) -> RenderedPage;
 //! ```
 //!
@@ -95,22 +94,17 @@ const RETRY_AFTER_NAME: &str = "Retry-After";
 /// Fallo al construir el cuerpo de una página de error.
 #[derive(Debug)]
 pub enum RenderError {
-    /// No hay página HTML del código pedido ni del código por defecto **en
-    /// ninguna de las dos capas**: ni en `CONTENT_DIR` ni entre las páginas
-    /// embebidas.
-    MissingHtml { code: u16, default_code: u16 },
-    /// Error de E/S al leer el HTML, o al serializar el cuerpo generado.
+    /// Error de E/S al leer el HTML del operador, o al serializar el cuerpo
+    /// generado. Es el **único** fallo posible: la plantilla embebida cubre
+    /// cualquier código de `400..=599`, así que la cascada ya no puede quedarse
+    /// sin página por **ausencia** de fichero —solo por una página del operador
+    /// que exista y no se pueda leer—.
     Io(std::io::Error),
 }
 
 impl fmt::Display for RenderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RenderError::MissingHtml { code, default_code } => write!(
-                f,
-                "no hay página HTML para el error: ni `{code}.html` ni `{default_code}.html` \
-                 están ni en `CONTENT_DIR` ni entre las páginas embebidas"
-            ),
             RenderError::Io(err) => {
                 write!(
                     f,
@@ -125,7 +119,6 @@ impl std::error::Error for RenderError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             RenderError::Io(err) => Some(err),
-            RenderError::MissingHtml { .. } => None,
         }
     }
 }
@@ -145,7 +138,8 @@ pub struct RenderedPage {
 }
 
 /// Cuerpo por formato. HTML se lee de `content_dir/<code>.html` con caída a
-/// `content_dir/<default_code>.html`; JSON, XML y texto se generan a partir de
+/// `content_dir/<default_code>.html`; agotadas esas dos, la **plantilla
+/// embebida** rellenada con el código. JSON, XML y texto se generan a partir de
 /// `code`, [`resolve::canonical_reason`] y [`resolve::description`].
 ///
 /// El `theme` solo se usa en [`Format::Html`] —para la hoja que se incrusta—:
@@ -153,10 +147,8 @@ pub struct RenderedPage {
 ///
 /// # Errors
 ///
-/// [`RenderError::MissingHtml`] si no hay página del código pedido ni del código
-/// por defecto en ninguna de las dos capas —`CONTENT_DIR` y la copia embebida—
-/// (solo en [`Format::Html`]), y [`RenderError::Io`] si la lectura o la
-/// serialización fallan.
+/// [`RenderError::Io`] si la página del operador existe y no se puede leer
+/// (solo en [`Format::Html`]), o si la serialización del cuerpo generado falla.
 pub fn render_body(
     code: u16,
     default_code: u16,
@@ -207,13 +199,16 @@ pub fn render_page(
 /// el estado y las cabeceras de `code`.
 ///
 /// Es **infalible**: genera el cuerpo, así que no lee ningún fichero. Se sirve
-/// cuando el HTML del código —y el del código por defecto— no existe, para no
-/// responder `500` por esa causa: el estado sigue siendo el código resuelto
-/// (spec `error-page`, "Un fallo al leer el HTML no cambia el estado").
+/// cuando una página del operador **existe y no se puede leer** (`RenderError::Io`),
+/// para no responder `500` por esa causa: el estado sigue siendo el código
+/// resuelto (spec `error-page`, "Un fallo al leer el HTML no cambia el estado").
+/// La **ausencia** de fichero ya no llega aquí: la plantilla embebida cubre
+/// cualquier código, así que el respaldo queda reservado al fallo de E/S.
 ///
 /// `retry_after` es el valor configurado ([`Config::retry_after`]): el respaldo
-/// lleva las mismas cabeceras que [`render_page`], así que un `503` sin HTML no
-/// pierde su `Retry-After` ni lo sirve con un valor distinto al configurado.
+/// lleva las mismas cabeceras que [`render_page`], así que un `503` sin página
+/// legible no pierde su `Retry-After` ni lo sirve con un valor distinto al
+/// configurado.
 pub fn render_text_fallback(code: u16, retry_after: u32) -> RenderedPage {
     RenderedPage {
         status: status_of(code),
@@ -258,25 +253,27 @@ fn content_type_for(format: Format) -> &'static str {
     }
 }
 
-/// Cuerpo HTML: la capa del operador **entera** y, solo si no da nada, la capa
-/// embebida (D1).
+/// Cuerpo HTML: la capa del operador **entera** y, solo si no da nada, la
+/// **plantilla embebida**.
 ///
-/// El orden es el de siempre —el fichero del código pedido y, si no existe, el
-/// del código por defecto— sobre el disco y, **después**, la misma cascada sobre
-/// la tabla embebida. Las dos capas no se intercalan por código: lo que hay en
-/// `CONTENT_DIR` es lo que se sirve, y lo que no está, se respalda. Una página
-/// que existe y no se puede leer sale como [`RenderError::Io`] y **no** cae a la
-/// copia embebida (Opción A de `design.md`): es un error de configuración que el
-/// registro delata, y la copia embebida lo taparía en silencio.
+/// Los **dos primeros** pasos de la cascada son del **operador** —el fichero del
+/// código pedido y, si no existe, el del código por defecto, en `CONTENT_DIR`—;
+/// el **tercero** —la plantilla embebida— es del **proyecto**, y cubre cualquier
+/// código de `400..=599` rellenada con el código resuelto. Una página que existe
+/// y no se puede leer sale como [`RenderError::Io`] y **no** cae a la plantilla
+/// (Opción A de `design.md`): es un error de configuración que el registro
+/// delata, y la plantilla lo taparía en silencio.
 ///
-/// La asimetría con la hoja es deliberada: **la hoja hace lo contrario** —un
-/// `warn!` y la copia embebida, nunca un error— porque la página es
-/// **contenido** y la hoja **adorno**; degradar un `503` a texto plano porque un
-/// CSS no se pudo leer empeoraría el síntoma que el servicio existe para
+/// La asimetría con la hoja sigue siendo deliberada: **la hoja hace lo
+/// contrario** —un `warn!` y la copia embebida, nunca un error— porque la página
+/// es **contenido** y la hoja **adorno**; degradar un `503` a texto plano porque
+/// un CSS no se pudo leer empeoraría el síntoma que el servicio existe para
 /// aliviar. El detalle está en [`Theme::sheet`].
 ///
 /// Sea cual sea la capa que aporte la página, el resultado pasa por
-/// [`autocontenido`]: el marcador se sustituye al servir, no en el fichero.
+/// [`plantilla`] —los marcadores `{{code}}`/`{{reason}}`/`{{description}}`— y por
+/// [`autocontenido`] —el marcador de la hoja—: las dos sustituciones se hacen al
+/// servir, no en el fichero.
 fn html_body(
     code: u16,
     default_code: u16,
@@ -284,12 +281,148 @@ fn html_body(
     theme: &Theme,
 ) -> Result<Vec<u8>, RenderError> {
     let body = raw_html(code, default_code, content_dir)?;
+    let body = plantilla(&body, code);
 
     Ok(autocontenido(&body, content_dir, theme))
 }
 
-/// La cascada del HTML **sin** tocar: el fichero del código, el del defecto, y
-/// los mismos dos sobre la tabla embebida.
+/// La página con sus tres marcadores —`{{code}}`, `{{reason}}` y
+/// `{{description}}`— rellenos con el código resuelto y con la razón canónica y
+/// la descripción que devuelve [`resolve`].
+///
+/// Es la costura cómoda para producción: junta los datos que salen de las tablas
+/// de [`resolve`] con la sustitución que hace [`rellena`]. Las reglas —y, sobre
+/// todo, el **escape**— viven en [`rellena`]; esta función solo aporta los
+/// valores crudos.
+///
+/// Es `pub(crate)` para que las pruebas del router puedan calcular el cuerpo
+/// esperado de una página del operador con la **misma** lógica que producción, en
+/// vez de reimplementarla.
+pub(crate) fn plantilla(body: &[u8], code: u16) -> Vec<u8> {
+    rellena(
+        body,
+        code,
+        resolve::canonical_reason(code),
+        resolve::description(code),
+    )
+}
+
+/// Rellena los tres marcadores con el código y con esos valores, **escapados**
+/// para HTML: los escribe el servidor, no un humano dentro del fichero.
+///
+/// Son **tres** agujeros, y las reglas son las del marcador de la hoja
+/// ([`autocontenido`]): una página **sin** marcadores se sirve **byte a byte**
+/// —sin tocar el disco—, se sustituye **cada** aparición y no solo la primera, y
+/// el escaneo es **por bytes**, para no romper una página del operador que no
+/// esté en UTF-8. Lo que se inserta se escapa con [`escape_html`]: la razón y la
+/// descripción las escribe el servidor, no un humano dentro del fichero.
+///
+/// Cada reemplazo avanza por su **entrada** (ver [`reemplaza_todos`]), así que el
+/// valor recién insertado no se vuelve a escanear; los valores son prosa del
+/// proyecto y no pueden traer el marcador de otro —es una **suposición
+/// declarada**, fijada en `un_valor_con_otro_marcador_sale_literal`—.
+fn rellena(body: &[u8], code: u16, razon: &str, descripcion: &str) -> Vec<u8> {
+    if !lleva_marcadores(body) {
+        return body.to_vec();
+    }
+
+    let codigo = code.to_string();
+    let razon = escape_html(razon);
+    let descripcion = escape_html(descripcion);
+
+    let cuerpo = reemplaza_todos(body, b"{{code}}", codigo.as_bytes());
+    let cuerpo = reemplaza_todos(&cuerpo, b"{{reason}}", razon.as_bytes());
+
+    reemplaza_todos(&cuerpo, b"{{description}}", descripcion.as_bytes())
+}
+
+/// ¿Lleva la página alguno de los tres marcadores de la plantilla?
+fn lleva_marcadores(body: &[u8]) -> bool {
+    [
+        b"{{code}}".as_slice(),
+        b"{{reason}}".as_slice(),
+        b"{{description}}".as_slice(),
+    ]
+    .iter()
+    .any(|marcador| busca(body, marcador).is_some())
+}
+
+/// Sustituye **todas** las apariciones de `aguja` por `valor`, por bytes.
+///
+/// Se avanza por el **documento de entrada** —nunca por la salida—: así el valor
+/// recién insertado no se vuelve a escanear, aunque contuviera la aguja. El
+/// escaneo es por bytes (ver [`plantilla`]) y no toca el disco.
+fn reemplaza_todos(pajar: &[u8], aguja: &[u8], valor: &[u8]) -> Vec<u8> {
+    debug_assert!(
+        !aguja.is_empty(),
+        "la aguja no puede estar vacía: el bucle no terminaría"
+    );
+
+    let mut salida = Vec::with_capacity(pajar.len());
+    let mut resto = pajar;
+
+    while let Some(inicio) = busca(resto, aguja) {
+        salida.extend_from_slice(&resto[..inicio]);
+        salida.extend_from_slice(valor);
+        resto = &resto[inicio + aguja.len()..];
+    }
+
+    salida.extend_from_slice(resto);
+
+    salida
+}
+
+/// Busca `aguja` en `pajar` y devuelve la posición de su primera aparición.
+///
+/// Es `pub(crate)` para que [`crate::theme`] use **esta** implementación —con
+/// sus guardas para la aguja vacía y más larga que el pajar— en vez de mantener
+/// una copia de prueba que podía divergir de la de producción.
+pub(crate) fn busca(pajar: &[u8], aguja: &[u8]) -> Option<usize> {
+    if aguja.is_empty() || aguja.len() > pajar.len() {
+        return None;
+    }
+
+    pajar
+        .windows(aguja.len())
+        .position(|ventana| ventana == aguja)
+}
+
+/// Escapa `&`, `<` y `>` para insertar texto en HTML.
+///
+/// Son **esas tres** y no cinco. La decisión de **no** escapar la comilla sigue
+/// siendo correcta, pero por otro motivo del que decía antes este comentario: el
+/// único valor que se inserta **dentro de un atributo** es el **código**
+/// (`content/404.html` pone `{{code}}` en `class="c{{code}}"`), y el código es un
+/// `u16` re-serializado a decimal, así que solo puede producir dígitos.
+///
+/// Un marcador **no numérico** dentro de un atributo sí exigiría escapar también
+/// `"` y `'`: sin eso, una comilla del valor ahogaría el atributo y podría
+/// cerrarlo antes de tiempo. Y escapar de más tampoco es gratis en contenido de
+/// texto: convertiría en `&quot;` una comilla que el usuario debería leer tal
+/// cual.
+fn escape_html(texto: &str) -> String {
+    let mut escapado = String::with_capacity(texto.len());
+
+    for caracter in texto.chars() {
+        match caracter {
+            '&' => escapado.push_str("&amp;"),
+            '<' => escapado.push_str("&lt;"),
+            '>' => escapado.push_str("&gt;"),
+            _ => escapado.push(caracter),
+        }
+    }
+
+    escapado
+}
+
+/// La cascada del HTML: `CONTENT_DIR/<código>.html` → `CONTENT_DIR/<código por
+/// defecto>.html` → la **plantilla embebida**.
+///
+/// Los dos primeros pasos son del **operador** (su `CONTENT_DIR`); el tercero es
+/// del **proyecto** y no puede fallar: la plantilla está en el binario y cubre
+/// cualquier código, así que la cascada nunca se queda sin página. Por eso el
+/// único error posible es de E/S —una página del operador que existe y no se
+/// puede leer—.
 fn raw_html(code: u16, default_code: u16, content_dir: &Path) -> Result<Vec<u8>, RenderError> {
     if let Some(body) = read_html(content_dir, code).map_err(RenderError::Io)? {
         return Ok(body);
@@ -301,20 +434,10 @@ fn raw_html(code: u16, default_code: u16, content_dir: &Path) -> Result<Vec<u8>,
         return Ok(body);
     }
 
-    // Agotado el disco, la misma cascada sobre la tabla embebida. Un fichero
-    // embebido no puede fallar al leerse: los bytes ya están en el binario, así
-    // que esta capa no aporta una variante nueva a `RenderError`.
-    if let Some(body) = embedded::page(code) {
-        return Ok(body.as_bytes().to_vec());
-    }
-
-    if code != default_code
-        && let Some(body) = embedded::page(default_code)
-    {
-        return Ok(body.as_bytes().to_vec());
-    }
-
-    Err(RenderError::MissingHtml { code, default_code })
+    // Agotado el disco, la plantilla del proyecto. Un `&'static str` embebido no
+    // puede fallar al leerse: los bytes ya están en el binario, así que esta capa
+    // no aporta una variante nueva a `RenderError`.
+    Ok(embedded::PAGE.as_bytes().to_vec())
 }
 
 /// Sirve la página **autocontenida**: el marcador `<link rel="stylesheet"
@@ -603,17 +726,17 @@ mod tests {
     use serde_json::Value;
     use std::path::{Path, PathBuf};
 
-    /// Fichero de fixture que representa `content/404.html`.
+    /// Fichero de fixture que representa `content/404.html` del **operador**: la
+    /// página propia de `tests/fixtures/content/`, sin marcadores de plantilla ni
+    /// de hoja, que se sirve **byte a byte**.
     const FIXTURE_404_HTML: &str = include_str!("../tests/fixtures/content/404.html");
 
-    /// Página **embebida** del `404`: es `content/404.html` del repositorio, que
-    /// la fase GREEN embebe y que **difiere** del fixture de 271 bytes
-    /// (`FIXTURE_404_HTML`). No las mezcles: son ficheros distintos a propósito,
-    /// y esa diferencia es la que impide invertir la precedencia.
+    /// La **plantilla** embebida del proyecto: es `content/404.html` del
+    /// repositorio, con los marcadores `{{code}}`/`{{reason}}`/`{{description}}`,
+    /// que la fase GREEN embebe. **Difiere** del fixture de arriba a propósito, y
+    /// esa diferencia es la que impide invertir la precedencia: el del operador
+    /// gana cuando existe.
     const EMBEDDED_404_HTML: &str = include_str!("../content/404.html");
-
-    /// Página **embebida** del `503`: es `content/503.html` del repositorio.
-    const EMBEDDED_503_HTML: &str = include_str!("../content/503.html");
 
     /// Hoja de estilos **embebida** del tema `default`: es
     /// `content/css/error.css`, la misma constante que alimenta el asset
@@ -640,6 +763,30 @@ mod tests {
     /// válido, donde `String::from_utf8` no sirve.
     fn contiene(pajar: &[u8], aguja: &[u8]) -> bool {
         pajar.windows(aguja.len()).any(|ventana| ventana == aguja)
+    }
+
+    /// La página del operador de `tests/fixtures/content/404.html` tal como se
+    /// **sirve** para `code`: su plantilla rellenada. El fixture no lleva el
+    /// marcador de la hoja, así que [`autocontenido`] no añade nada.
+    fn servida_del_fixture(code: u16) -> String {
+        let rellena = plantilla(FIXTURE_404_HTML.as_bytes(), code);
+        let rellena =
+            String::from_utf8(rellena).expect("la plantilla del fixture, rellenada, es UTF-8");
+
+        // Red de la sustitución: si `plantilla` dejara de sustituir —o de usar el
+        // escape—, **todas** las pruebas que pasan por este ayudante caerían de
+        // golpe, en vez de quedarse verdes comparando la salida consigo misma.
+        assert!(
+            rellena.contains(&code.to_string()),
+            "red de la sustitución: el cuerpo servido del fixture tiene que \
+             **nombrar** su código (`{code}`), fue: {rellena}"
+        );
+        assert!(
+            !rellena.contains("{{"),
+            "red de la sustitución: no puede quedar ningún marcador sin rellenar, fue: {rellena}"
+        );
+
+        rellena
     }
 
     /// El tema por defecto, para las llamadas que no se ocupan del tema.
@@ -764,6 +911,10 @@ mod tests {
 
     #[test]
     fn el_cuerpo_html_sale_del_fichero_del_codigo() {
+        // El fichero del operador (`tests/fixtures/content/404.html`) es una
+        // plantilla: su cuerpo servido son sus marcadores rellenados con el
+        // código. La prueba fija las dos cosas: que sale **de ese fichero** —y no
+        // de la plantilla embebida— y que la plantilla lo rellena.
         let body = render_body(
             404,
             404,
@@ -774,12 +925,27 @@ mod tests {
         .unwrap();
         let html = String::from_utf8(body).unwrap();
 
-        assert_eq!(html.trim(), FIXTURE_404_HTML.trim());
+        assert_eq!(html.trim(), servida_del_fixture(404).trim());
+        // Anclajes **independientes**: el cuerpo servido nombra su propio código
+        // y no deja ningún marcador. El `assert_ne!` que había aquí (comparar
+        // contra la constante cruda `EMBEDDED_404_HTML`) se cumplía **siempre**
+        // —el HTML servido va relleno y la constante lleva los marcadores—, así
+        // que no distinguía que la página saliera del fixture y no de la
+        // plantilla embebida.
+        assert!(
+            html.contains("404"),
+            "el cuerpo tiene que nombrar su propio código (`404`): {html}"
+        );
+        assert!(
+            !html.contains("{{"),
+            "no puede quedar ningún marcador sin rellenar en el cuerpo: {html}"
+        );
     }
 
     #[test]
     fn el_cuerpo_html_cae_al_fichero_del_codigo_por_defecto() {
-        // No hay `content/418.html`; el cuerpo debe ser el de `content/404.html`.
+        // No hay `418.html`; el cuerpo sale del `404.html` del operador —su
+        // plantilla—, rellenado con **418**.
         let body = render_body(
             418,
             404,
@@ -790,7 +956,11 @@ mod tests {
         .unwrap();
         let html = String::from_utf8(body).unwrap();
 
-        assert_eq!(html.trim(), FIXTURE_404_HTML.trim());
+        assert_eq!(html.trim(), servida_del_fixture(418).trim());
+        assert!(
+            html.contains("418"),
+            "la plantilla del operador se rellena con el código pedido (`418`): {html}"
+        );
     }
 
     #[test]
@@ -861,8 +1031,11 @@ mod tests {
 
     #[test]
     fn el_respaldo_de_texto_conserva_el_codigo_y_sus_cabeceras() {
-        // Auditoría I-2: sin fichero HTML, el estado sigue siendo el código
-        // resuelto (nunca `500`) y la página no pierde `X-Robots-Tag`.
+        // Auditoría I-2: el respaldo de texto es lo que se sirve cuando la
+        // página del operador **existe y no se puede leer** (fallo de E/S); la
+        // **falta** de fichero ya no llega aquí —la cubre la plantilla embebida—.
+        // Aquí se fija lo suyo: el estado sigue siendo el código resuelto (nunca
+        // `500`) y la página no pierde `X-Robots-Tag`.
         let page = render_text_fallback(418, 120);
 
         assert_eq!(page.status, StatusCode::IM_A_TEAPOT);
@@ -991,71 +1164,109 @@ mod tests {
         assert_eq!(page.status, StatusCode::SERVICE_UNAVAILABLE);
     }
 
-    // --- Página embebida sin ficheros de datos (change `embedded-error-pages`,
-    //     tasks.md 1.1-1.2, 1.14) --------------------------------------------
+    // --- Plantilla embebida sin ficheros de datos (change `error-page-template`,
+    //     tasks.md 2.3-2.5) --------------------------------------------------
     //
-    // La fase GREEN embebe los once códigos (y su hoja) con
-    // `include_str!`/`include_bytes!`, así que un `CONTENT_DIR` que no existe
-    // deja de ser un `MissingHtml`: la cascada del disco se agota **entera**
-    // (D1) y entonces entra la copia embebida. Estas pruebas fijan el orden y el
-    // caso límite que el camino del respaldo conserva (D4).
+    // La fase GREEN embebe **una** plantilla (y su hoja) con
+    // `include_str!`/`include_bytes!`, así que un `CONTENT_DIR` que no existe ya
+    // no deja la cascada sin página: la del disco se agota **entera**
+    // (`CONTENT_DIR/<código>.html` y `CONTENT_DIR/<defecto>.html`) y entonces
+    // entra la plantilla del proyecto, rellenada con el código resuelto. Estas
+    // pruebas fijan el orden y el caso límite que el respaldo de texto conserva
+    // (ahora reservado al fallo de E/S).
 
     #[test]
-    fn sin_directorio_el_cuerpo_html_sale_de_la_copia_embebida_del_codigo() {
-        // tasks.md 1.1: sin directorio de contenido, el cuerpo sale de la página
-        // embebida del `503`. Desde `self-contained-themes` la página se sirve
+    fn sin_directorio_el_cuerpo_html_sale_de_la_plantilla_embebida() {
+        // Sin directorio de contenido, el cuerpo sale de la plantilla embebida
+        // rellenada con `503`. Desde `self-contained-themes` la página se sirve
         // **autocontenida**: lleva la hoja del tema en un `<style>` donde estaba
-        // el marcador, así que el cuerpo es la página con el marcador sustituido.
+        // el marcador, así que el cuerpo es la plantilla con el marcador
+        // sustituido.
         let body = render_body(503, 404, Format::Html, &sin_contenido_dir(), tema_default())
-            .expect("la página embebida del `503` debe existir aunque no haya directorio");
+            .expect("la plantilla embebida está siempre");
+
+        let rellenada = plantilla(EMBEDDED_404_HTML.as_bytes(), 503);
+        let rellenada = String::from_utf8(rellenada).expect("la plantilla rellenada es UTF-8");
 
         assert_eq!(
             body,
-            servida_autocontenida(EMBEDDED_503_HTML, EMBEDDED_CSS),
-            "sin directorio, el cuerpo tiene que ser la copia embebida de `content/503.html`, \
+            servida_autocontenida(&rellenada, EMBEDDED_CSS),
+            "sin directorio, el cuerpo tiene que ser la plantilla embebida rellenada con `503`, \
              autocontenida con la hoja `default`"
+        );
+        assert!(
+            String::from_utf8(body).unwrap().contains("503"),
+            "la plantilla rellenada tiene que nombrar su código"
         );
     }
 
     #[test]
-    fn sin_directorio_el_cuerpo_cae_a_la_copia_embebida_del_defecto_conservando_el_codigo() {
-        // tasks.md 1.2: no hay página embebida del `418`, así que el cuerpo es
-        // la copia embebida del código por defecto (`404`), y `render_page`
-        // conserva el estado `418`.
+    fn sin_directorio_un_codigo_sin_pagina_propia_recibe_la_plantilla_con_su_codigo() {
+        // No hay página propia del `418` en ninguna capa, así que el cuerpo es
+        // la plantilla embebida rellenada con **418** —no con el defecto—, y
+        // `render_page` conserva el estado `418`.
         let body = render_body(418, 404, Format::Html, &sin_contenido_dir(), tema_default())
-            .expect("la página embebida del defecto debe existir aunque no haya directorio");
+            .expect("la plantilla embebida está siempre");
+
+        let rellenada = plantilla(EMBEDDED_404_HTML.as_bytes(), 418);
+        let rellenada = String::from_utf8(rellenada).expect("la plantilla rellenada es UTF-8");
+
+        // Anclajes **independientes** de `plantilla`: el cuerpo servido nombra su
+        // propio código y no deja ningún marcador. Sin ellos esta prueba era
+        // vacua —comparaba el cuerpo con una salida calculada por la misma
+        // `plantilla` de producción, así que una sustitución que dejara de
+        // sustituir la habría dejado verde—.
+        let texto = String::from_utf8(body.clone()).expect("el cuerpo servido es UTF-8");
+        assert!(
+            texto.contains("418"),
+            "el cuerpo tiene que nombrar su propio código (`418`), no el defecto: {texto}"
+        );
+        assert!(
+            !texto.contains("{{"),
+            "no puede quedar ningún marcador sin rellenar en el cuerpo servido: {texto}"
+        );
+
         assert_eq!(
             body,
-            servida_autocontenida(EMBEDDED_404_HTML, EMBEDDED_CSS),
-            "no hay `418` embebida: el cuerpo tiene que ser la del defecto (`404`), autocontenida"
+            servida_autocontenida(&rellenada, EMBEDDED_CSS),
+            "un código sin fichero propio recibe la plantilla rellenada con **su** código (`418`)"
         );
 
         let page = render_page(&sin_contenido_config(), 418, Format::Html, tema_default())
-            .expect("la página embebida del defecto debe existir");
+            .expect("la plantilla embebida está siempre");
         assert_eq!(
             page.status,
             StatusCode::IM_A_TEAPOT,
-            "el estado sigue siendo el código resuelto (`418`), nunca el del cuerpo"
+            "el estado sigue siendo el código resuelto (`418`)"
         );
         assert_eq!(
             page.body,
-            servida_autocontenida(EMBEDDED_404_HTML, EMBEDDED_CSS),
-            "el cuerpo es la copia embebida del defecto (`404`), autocontenida"
+            servida_autocontenida(&rellenada, EMBEDDED_CSS),
+            "el cuerpo es la plantilla rellenada con `418`, autocontenida"
         );
     }
 
     #[test]
-    fn sin_pagina_en_ninguna_capa_sigue_dando_missing_html() {
-        // tasks.md 1.14 / D4: la cascada no se revoca. Con un código que no está
-        // en la tabla embebida (`599`) y un defecto que tampoco (`418`), no hay
-        // página en ninguna capa y el resultado sigue siendo `MissingHtml`, que
-        // es lo que mantiene vivo el respaldo de texto. Es una guarda: pasa en
-        // RED y tiene que seguir pasando en GREEN.
-        match render_body(599, 418, Format::Html, &sin_contenido_dir(), tema_default()) {
-            Err(RenderError::MissingHtml { .. }) => {}
-            other => {
-                panic!("sin página ni en el disco ni embebida debe ser `MissingHtml`: {other:?}")
-            }
+    fn la_cascada_ya_no_se_queda_sin_pagina_y_el_unico_fallo_es_la_ilegibilidad() {
+        // Ausencia de fichero: nunca falta página —la plantilla cubre cualquier
+        // código—. Con un código que no tiene fichero en ninguna capa (`599` con
+        // defecto `418`), el resultado es la plantilla rellenada con `599`, no un
+        // error.
+        let body = render_body(599, 418, Format::Html, &sin_contenido_dir(), tema_default())
+            .expect("la plantilla cubre cualquier código: nunca falta la página");
+        let texto = String::from_utf8(body).expect("la página servida es UTF-8");
+        assert!(
+            texto.contains("599"),
+            "un `599` sin fichero propio recibe la plantilla rellenada con `599`: {texto}"
+        );
+
+        // El único fallo posible es de **E/S**: una página del operador que existe
+        // y no se puede leer (`tests/fixtures/pagina-ilegible/404.html` es un
+        // directorio). Sigue siendo `Io`, y el respaldo de texto lo cubre.
+        let ilegible = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pagina-ilegible");
+        match render_body(404, 404, Format::Html, &ilegible, tema_default()) {
+            Err(RenderError::Io(_)) => {}
+            other => panic!("una página ilegible tiene que ser `Io`: {other:?}"),
         }
     }
 
@@ -1188,6 +1399,140 @@ mod tests {
         assert!(
             contiene(&salida, b"\xE9\xF1"),
             "los bytes no-UTF-8 (`\\xE9\\xF1`) tienen que seguir intactos en la salida"
+        );
+    }
+
+    // --- Plantilla del cuerpo HTML (change `error-page-template`,
+    //     tasks.md de la fase RED) -------------------------------------------
+    //
+    // El cuerpo HTML deja de ser once ficheros con los valores a mano y pasa a
+    // ser **una** plantilla rellenada al servir: `{{code}}`, `{{reason}}` y
+    // `{{description}}` los sustituye el render por el código resuelto y por la
+    // razón canónica y la descripción. Estas pruebas fijan la costura en
+    // aislado; en RED fallan por aserción (la costura todavía devuelve el cuerpo
+    // tal cual), y la fase GREEN es la que rellena.
+
+    /// Una plantilla mínima con los tres marcadores, uno de ellos repetido: el
+    /// `{{code}}` del título y el del `h1` son **dos apariciones** del mismo
+    /// marcador.
+    const PLANTILLA: &str =
+        "<title>{{code}}</title><h1>{{code}}</h1><h2>{{reason}}</h2><p>{{description}}</p>";
+
+    #[test]
+    fn la_plantilla_rellena_el_codigo_la_razon_y_la_descripcion() {
+        let rellena = plantilla(PLANTILLA.as_bytes(), 404);
+        let rellena = String::from_utf8(rellena).expect("la plantilla de prueba es UTF-8");
+
+        assert!(
+            !rellena.contains("{{"),
+            "no puede quedar ningún marcador sin rellenar: {rellena}"
+        );
+        assert!(
+            rellena.contains(resolve::canonical_reason(404)),
+            "la razón canónica tiene que estar en el cuerpo: {rellena}"
+        );
+        assert!(
+            rellena.contains(resolve::description(404)),
+            "la descripción tiene que estar en el cuerpo: {rellena}"
+        );
+    }
+
+    #[test]
+    fn la_plantilla_rellena_cada_aparicion() {
+        let rellena = plantilla(PLANTILLA.as_bytes(), 503);
+        let rellena = String::from_utf8(rellena).expect("la plantilla de prueba es UTF-8");
+
+        assert_eq!(
+            rellena.matches("503").count(),
+            2,
+            "las **dos** apariciones de `{{code}}` tienen que rellenarse, no solo la primera: \
+             {rellena}"
+        );
+    }
+
+    #[test]
+    fn una_pagina_sin_marcadores_se_sirve_byte_a_byte() {
+        let original = b"<p>esta pagina es mia y no lleva marcadores</p>";
+
+        assert_eq!(
+            plantilla(original, 404),
+            original.to_vec(),
+            "una pagina sin marcadores no se toca"
+        );
+    }
+
+    #[test]
+    fn escape_html_escapa_lo_que_se_inserta() {
+        assert_eq!(
+            escape_html("a & b < c > d"),
+            "a &amp; b &lt; c &gt; d",
+            "el `&`, el `<` y el `>` tienen que salir escapados: los inserta el servidor"
+        );
+    }
+
+    #[test]
+    fn la_sustitucion_escapa_lo_que_inserta() {
+        // La red que faltaba para el `SHALL` del escape (auditoría I2): la tabla
+        // de `resolve` no tiene hoy ningún `&`, `<` ni `>` —medido—, así que
+        // ninguna prueba con un código real demuestra que `rellena` escape lo que
+        // inserta. La costura se prueba con un valor **adversario**: es lo único
+        // que demuestra que la sustitución **usa** el escape que tiene al lado.
+        let rellena = rellena(
+            b"<h2>{{reason}}</h2><p>{{description}}</p>",
+            404,
+            "a & b",
+            "c < d > e",
+        );
+        let rellena = String::from_utf8(rellena).expect("la plantilla de prueba es UTF-8");
+
+        assert!(
+            rellena.contains("a &amp; b"),
+            "la razón tiene que salir escapada: {rellena}"
+        );
+        assert!(
+            rellena.contains("c &lt; d &gt; e"),
+            "la descripción tiene que salir escapada: {rellena}"
+        );
+        assert!(
+            !rellena.contains('&') || !rellena.contains("< d"),
+            "no puede quedar ningún metacarácter sin escapar: {rellena}"
+        );
+    }
+
+    #[test]
+    fn un_valor_con_otro_marcador_sale_literal() {
+        // Es una **suposición declarada**, no un deseo: `rellena` avanza por la
+        // entrada y no reescanea lo insertado, así que un valor que contuviera
+        // `{{code}}` sale **literal**. Hoy es inalcanzable —el código es un `u16`
+        // re-serializado y las tablas de `resolve` son literales fijos sin
+        // llaves—, pero la prueba lo deja escrito: cambiar esa garantía
+        // (reescanear la salida) sería una decisión consciente, no un efecto
+        // colateral.
+        let rellena = rellena(b"<p>{{reason}}</p>", 404, "x {{code}} y", "z");
+        let rellena = String::from_utf8(rellena).expect("la plantilla de prueba es UTF-8");
+
+        assert!(
+            rellena.contains("x {{code}} y"),
+            "el valor insertado no se reescanea: `{{code}}` tiene que quedar literal, \
+             fue: {rellena}"
+        );
+    }
+
+    #[test]
+    fn un_codigo_sin_fichero_propio_no_recibe_el_cuerpo_de_otro() {
+        // El caso que da nombre al change: hoy el `451` recibe el fichero del
+        // `404`, y el cuerpo miente sobre el estado.
+        let pagina = render_page(&fixtures_config(), 451, Format::Html, tema_default())
+            .expect("la plantilla siempre está");
+        let cuerpo = String::from_utf8(pagina.body).expect("el HTML es UTF-8");
+
+        assert!(
+            cuerpo.contains("451"),
+            "el cuerpo tiene que nombrar su propio código: {cuerpo}"
+        );
+        assert!(
+            !cuerpo.contains("404"),
+            "el cuerpo no puede nombrar el `404`: es el defecto que este change corrige: {cuerpo}"
         );
     }
 }
