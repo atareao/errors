@@ -3,6 +3,90 @@
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el
 versionado, [SemVer](https://semver.org/lang/es/).
 
+## [0.8.0](https://github.com/atareao/errserve/compare/v0.7.0..v0.8.0) - 2026-10-26
+
+**Ruptura**: un tema deja de ser una **hoja de estilos** y pasa a ser una **página**, con
+el nombre del tema como **ruta del fichero** (`content/<nombre>.html`). Con la hoja se van su
+marcador `<link rel="stylesheet" href="/css/error.css" />`, su sustitución al servir y el
+asset público `/css/error.css`; las reglas de cada tema viven ahora en el `<style>` de su
+propia página, y la cascada del cuerpo HTML queda en un solo paso.
+
+### Añadido
+
+- **El séptimo tema, `matrix`**: un documento propio —lluvia digital en un `<canvas>`, glitch
+  del código, scanlines, un terminal con su prompt, una pastilla roja y otra azul, un minijuego
+  de teclado y un aviso—, autocontenido y con la animación **apagable de verdad**: su script
+  consulta `prefers-reduced-motion` con `matchMedia` y **escucha sus cambios**, así que para y
+  reanuda la lluvia y el glitch **sin recargar** —deja de pedir fotogramas de verdad—. Es la
+  prueba de que un tema no cabe en una hoja.
+- **Las siete páginas van embebidas en el binario** con `include_str!`: un `cargo install
+  errserve` —un ejecutable y ningún fichero de datos— sirve los **siete** diseños, y borrar una
+  página es un **error de compilación**, no un respaldo silencioso.
+- **`/default.html` y `/default.htm` son el alias del código por defecto**:
+  se resuelven después de la normalización del path y responden el código por defecto
+  (`DEFAULT_ERROR_PAGE`), **nunca `200`**.
+
+### Cambiado
+
+- **Un tema es una página y el nombre es la ruta**: la página de cada tema vive en
+  la **raíz** de `CONTENT_DIR`, como `CONTENT_DIR/<nombre>.html`. La ruta se **deriva** del
+  nombre, así que no hay tabla que pueda divergir de él.
+- **El cuerpo HTML se resuelve en un solo paso**: la página del tema (la del operador si se
+  puede leer, y si no su copia embebida). Se retira la capa por código
+  —`CONTENT_DIR/<código>.html` y `CONTENT_DIR/<código por defecto>.html`—: con las siete
+  páginas que entrega el repositorio, esa capa quedaría siempre sombreada.
+  `DEFAULT_ERROR_PAGE` **conserva** su significado —el código que se sirve cuando ninguna
+  fuente aporta uno utilizable— pero **ya no nombra ningún fichero**; el diseño por código se
+  expresa con la clase `c{{code}}` del `body`, que no puede discrepar del estado.
+- **`content/404.html` → `content/default.html`**: es la página del tema `default` y el punto
+  de personalización del operador.
+- **`THEME` y `X-Theme` enumeran ahora siete nombres** (`default`, `minimal`, `terminal`,
+  `paper`, `amber`, `compact` y `matrix`), con la misma semántica: `THEME` es una lista
+  cerrada que aborta el arranque si el valor no es uno de los siete, y un `X-Theme` conocido
+  gana al configurado.
+- **El HTML servido es la página del tema**, con su `<style>` **dentro**: el cuerpo servido
+  deja de enlazar ninguna hoja.
+
+### Eliminado
+
+- **El asset `/css/error.css` deja de existir**: `GET /css/error.css` responde `404` como
+  cualquier path inexistente. Con él se van `content/css/error.css`, `content/themes/*.css`
+  y el respaldo de assets embebidos del servidor de ficheros, que se quedó sin tabla.
+- El marcador `<link rel="stylesheet" href="/css/error.css" />` y su sustitución al servir
+  (`autocontenido()`, `marcador()`, `MARCADOR_ETIQUETA`, `MARCADOR_HREF`), junto con la
+  cascada por código (`read_html()`).
+
+### Corregido
+
+- **Un `HEAD` sobre una página de error ya no lleva cuerpo.** El middleware componía el
+  cuerpo igual que para un `GET`; ahora responde el mismo estado y las mismas cabeceras
+  —`Content-Type`, `X-Robots-Tag`, `Retry-After`— pero **sin cuerpo**, como `ServeDir` y como
+  las rutas de axum. Lo destapó la prueba que repuso la cobertura de `HEAD`, que se había
+  quedado sin una.
+
+### Pruebas
+
+- Las **tres guardas** se retargetizan de hojas a **páginas** y viven en el `#[cfg(test)]` de
+  `src/theme.rs`: la de **red** escanea la página entera —incluido su `<script>`—; la de
+  **movimiento** el CSS y el guion, con la neutralización **por familia** y su límite
+  escrito; y la de **cobertura de marcado** solo las seis sobrias, con `matrix` fuera.
+- **222 pruebas** en verde (eran 207).
+
+### Documentación
+
+- El `README`, `AGENTS.md`, el `Dockerfile` y el contrato con Traefik describen el
+  modelo «el tema es una página»: siete nombres, la estructura plana `content/<nombre>.html`,
+  el alias `/default.html` y el leak de las seis páginas, que se bloquea en el proxy.
+
+### Actualización desde la 0.7.0
+
+Si tienes un `content/404.html`, un `content/css/error.css` o un
+`content/themes/*.css`, ya no se consultan: tu punto de personalización pasa a ser la
+**página de tu tema** (`content/<tu tema>.html`), y lo que **pierdes** es la granularidad
+por código —con `THEME=matrix` verás la página de `matrix`, no la tuya—. Precio ya
+documentado: las páginas llevan su `<style>` (y `matrix` su `<script>`) **en línea**, así
+que una `Content-Security-Policy` estricta puesta en el proxy las deja sin estilo.
+
 ## [0.7.0](https://github.com/atareao/errserve/compare/v0.6.0..v0.7.0) - 2026-10-25
 
 ### Cambiado

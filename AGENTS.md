@@ -6,15 +6,16 @@
 
 ## Estado real del repositorio (verificado)
 
-Implementado, verificado y versionado. Trece changes están **archivados** en
+Implementado, verificado y versionado. Catorce changes están **archivados** en
 `openspec/changes/archive/` —cinco con fecha `2026-10-24` (`error-pages-parity`, `error-page-coverage`,
-`release-hardening`, `security-hardening` y `retry-after-configurable`) y ocho con `2026-10-25`
+`release-hardening`, `security-hardening` y `retry-after-configurable`), ocho con `2026-10-25`
 (`embedded-error-pages`, `error-page-template`, `self-contained-themes`, `theme-sheet-contracts`,
-`theme-visual-review`, `catchall-metrics-exclusion`, `fix-image-build` y `publish-crate-on-tag`)— y sus
-requisitos viven fusionados en los cuatro specs de `openspec/specs/`: `error-page`, `http-server`,
-`observability` y `response-extras`. El change `themes-as-pages` —el tema deja de ser **una hoja** y
-pasa a ser **una página**, con la cascada del cuerpo HTML en un solo paso— está **en curso** en
-`openspec/changes/themes-as-pages/`, todavía sin archivar.
+`theme-visual-review`, `catchall-metrics-exclusion`, `fix-image-build` y `publish-crate-on-tag`) y uno
+con `2026-10-26` (`themes-as-pages`)— y sus requisitos viven fusionados en los cuatro specs de
+`openspec/specs/`: `error-page`, `http-server`, `observability` y `response-extras`. **No hay ningún
+change en curso**: `openspec/changes/` solo tiene `archive/`. El último, `themes-as-pages` —el tema deja
+de ser **una hoja** y pasa a ser **una página**, con la cascada del cuerpo HTML en un solo paso—, entró
+en `error-page` y `http-server` (+6 requisitos añadidos, ~8 modificados, -5 retirados).
 
 - `src/main.rs` — arranque, router, middleware de páginas de error, la lista `SERVICE_ENDPOINTS` que acota ese middleware, el clasificador `is_error_page_path` (con el alias `/default.html`/`/default.htm`) y los tests de router.
 - `src/config.rs` — configuración desde el entorno (`Config`, `ConfigError`, `from_env_iter`).
