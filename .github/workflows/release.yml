@@ -283,7 +283,34 @@ jobs:
           comprobar /404.json 404                              # el formato no cambia el código
           comprobar /healthz 200                               # endpoint de servicio
           comprobar /metrics 200                               # contador Prometheus
-          comprobar /css/error.css 200                         # un asset existente gana al error
+          # La garantía 4, con una página de tema que no es el alias: un asset existente gana a
+          # la página de error, y hoy ese asset es una de las seis páginas de tema que NO son
+          # `/default.html`. El `200` es CRUDO —el fichero tal cual, con sus marcadores
+          # `{{code}}`/`{{reason}}`/`{{description}}` a la vista—, que es justo lo que la
+          # garantía promete; el bloqueo de ese leak va en el proxy, no en el servicio.
+          comprobar /minimal.html 200
+          # La excepción de la garantía 4, nueva de este release: `/default.html` (y `/default.htm`)
+          # es el **alias del código por defecto**, se intercepta y responde el código resuelto
+          # (`DEFAULT_ERROR_PAGE`, `404` de fábrica) — **nunca `200`**.
+          comprobar /default.html 404
+
+          # El cuerpo HTML servido, que es el corazón de esta entrega: la página del tema lleva su
+          # `<style>` **incrustado** y **no** enlaza ninguna hoja. Ojo al detalle que este
+          # repositorio documenta: un `curl` sin `Accept` cae en **texto plano** por defecto, así
+          # que una comprobación de cuerpo TIENE que mandar `-H 'Accept: text/html'` o está
+          # midiendo el formato equivocado. El helper devuelve el cuerpo con ese `Accept`.
+          cuerpo() {
+            curl -s -H 'Accept: text/html' "$base$1"
+          }
+
+          cuerpo /404 | grep -q '<style' \
+            || fallo "el cuerpo de /404 en HTML no lleva su <style> incrustado"
+          echo "ok   GET /404 (Accept: text/html) -> lleva <style> incrustado"
+
+          if cuerpo /404 | grep -q '<link'; then
+            fallo "el cuerpo de /404 en HTML lleva un <link>: no es autocontenido"
+          fi
+          echo "ok   GET /404 (Accept: text/html) -> sin <link>"
 
           # 3) Cabeceras que la documentación promete.
           cabecera() {
