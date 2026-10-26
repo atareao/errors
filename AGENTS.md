@@ -114,12 +114,18 @@ defecto `app-down`); su rotación (`--rotation-mode`) **no** existe aquí, y es 
    embebida). **La hoja y su asset ya no existen**: `content/css/error.css`, `themes/*.css` y
    `GET /css/error.css` se retiraron en la `0.8.0`; la hoja de cada tema vive en el `<style>` de su
    propia página.
-   `CONTENT_DIR` es solo el *override* de la página del tema. Y lo que gana es **un fichero que se
+   `CONTENT_DIR` es el *override* de la página de un incorporado **y la fuente de temas nuevos**: los
+   siete se quedan y su **raíz** **añade** —un `*.html` de más **es** un tema, y su tallo es su nombre—
+   a un **registro** que se construye **al arrancar** (los siete incorporados **más** los descubiertos;
+   las reglas del barrido y la trampa del montaje están en el *quirk* del barrido). El precio, escrito:
+   **añadir** un tema exige **reiniciar**, mientras que los **bytes** de la página se leen al servir,
+   así que **editar** uno que ya estaba se ve **sin** reiniciar. Y lo que gana es **un fichero que se
    pueda leer**, no «siempre»: una página que existe y no se puede abrir responde el respaldo de texto
    con el código resuelto —el `warn` la delata—, en vez de que la copia embebida tape en silencio un
-   directorio del operador roto (Opción A de `design.md`). Las dos copias **no pueden divergir**: una
-   prueba de paridad compara sus bytes, **página a página** y en los **dos sentidos** (D5). Nada de
-   esto toca la garantía 1: el estado sigue siendo el código resuelto, nunca `200`.
+   directorio del operador roto (Opción A de `design.md`). Las dos copias **no pueden divergir** —y eso
+   es de las páginas **incorporadas**, que son las que tienen copia embebida—: una prueba de paridad
+   compara sus bytes, **página a página** y en los **dos sentidos** (D5). Nada de esto toca la
+   garantía 1: el estado sigue siendo el código resuelto, nunca `200`.
 8. **El respaldo que este repositorio entrega no publica las páginas de tema crudas.** El nombre
    del tema **es** la ruta de su página (`content/<nombre>.html`), y las **seis** páginas que no
    son el alias se sirven como assets **crudos**, con los marcadores
@@ -162,11 +168,11 @@ defecto `app-down`); su rotación (`--rotation-mode`) **no** existe aquí, y es 
 |---|---|---|
 | `PORT` | `8080` | Puerto de escucha (bind `0.0.0.0`). |
 | `LOG_LEVEL` | `info` | Filtro de registro. |
-| `CONTENT_DIR` | `content` | *Override* de las siete **páginas de tema** embebidas en el binario. |
+| `CONTENT_DIR` | `content` | El directorio del operador: *override* de la página de un tema incorporado **y** fuente de temas nuevos (los `*.html` de su **raíz** **añaden** al registro). |
 | `DEFAULT_ERROR_PAGE` | `404` | Código por defecto; fuera de `400..=599` es error de arranque. |
 | `LOG_FORMAT` | `text` | `text` o `json`; cualquier otro valor, o vacía, es error de arranque. |
 | `RETRY_AFTER` | `120` | Segundos de la cabecera `Retry-After` (solo `429` y `503`); no numérica, o vacía, es error de arranque. |
-| `THEME` | `default` | Tema de las páginas **HTML**: `default`, `minimal`, `terminal`, `paper`, `amber`, `compact` o `matrix`; cualquier otro valor, o vacía, es error de arranque. |
+| `THEME` | `default` | Tema de las páginas **HTML**: uno de los siete **incorporados** (`default`, `minimal`, `terminal`, `paper`, `amber`, `compact`, `matrix`) **o** un tema descubierto en `CONTENT_DIR`; un nombre que no esté en el **registro** de ese arranque, o vacía, es error de arranque. |
 
 `GET /metrics` es un endpoint de servicio (siempre `200`, fuera de la resolución de páginas de
 error) que expone el contador Prometheus de páginas servidas **por código y por el origen de ese
@@ -560,6 +566,28 @@ tampoco reproduce el del runner: la imagen etiquetada `v0.8.0` construida en est
   render lo convierte en el **respaldo de texto** con el estado intacto —la página es *contenido*, no
   adorno: tapar en silencio con la copia embebida un directorio del operador roto lo escondería—. Es la
   Opción A de `design.md` (garantía 7), sin cambios para las páginas.
+- **El registro de temas se construye al arrancar, y su barrido tiene reglas exactas.** El registro
+  efectivo es los **siete incorporados** **más** los temas descubiertos en la **raíz** de
+  `CONTENT_DIR`: un `*.html` de más **es** un tema, y su **tallo** es su nombre (`neon.html` → `neon`).
+  Las reglas, una a una: **solo la raíz** —un `temas/neon.html` no es un tema—; la extensión tiene que
+  ser **exactamente** `html` (`neon.htm`, `neon.HTML` y `neon.css` **no** lo son); el **tallo de un
+  incorporado** no añade un tema (`content/default.html` es la página del `default` incorporado, no un
+  `default` de más); y un **tallo que reclama la resolución de códigos** queda **fuera** —el criterio
+  **no** es el rango utilizable y está medido: `code_from_path` **parsea** el número y
+  `is_error_page_path` decide **sin** filtrar `400..=599`, así que **cualquier** tallo que se lea como
+  un `u16` (`404`, `999`, `200`…) reclama el path, que responde **otra** página de error—. Los
+  descubiertos van **ordenados por nombre** detrás de los siete (`read_dir` no promete ningún orden).
+  El barrido es **al arrancar**: **añadir** un tema exige **reiniciar**, mientras que los **bytes** de
+  la página se leen **al servir**, así que **editar** uno ya descubierto se ve **sin** reiniciar. Un
+  directorio que **no existe** deja los siete **sin** `warn` (es lo normal en un binario sin ficheros
+  de datos); uno que existe y **no se puede listar** deja los siete **con** un `warn` que **nombra el
+  directorio y su causa**. Y la **trampa del montaje** (D7): un `THEME` **correcto** cuyo fichero
+  **todavía** no esté en `CONTENT_DIR` —un volumen que aún no se ha montado cuando el contenedor
+  arranca— **aborta** el arranque, porque `THEME` se valida contra el registro de **ese** arranque; la
+  mitigación es del operador —declarar la dependencia del volumen, o arrancar sin `THEME`—. Y la
+  página del operador **no se inspecciona**: los tres contratos (red, movimiento, cobertura de marcado)
+  siguen midiendo **solo** las páginas incorporadas, así que un tema descubierto puede incumplirlos y
+  **ninguna guarda lo verá** (decisión explícita del usuario, D9).
 - **El `Dockerfile` copia `content/` dos veces, y la primera no es un «por si acaso»: es una entrada de
   la compilación.** El stage `builder` necesita las **siete páginas** para compilar —las macros
   resuelven la ruta en tiempo de compilación—, así que su `COPY content ./content` es **obligatorio**:
@@ -591,13 +619,23 @@ tampoco reproduce el del runner: la imagen etiquetada `v0.8.0` construida en est
   contra una imagen de verdad—, y la lista de ayudantes es **cerrada** a propósito (un `curl` suelto,
   como el que el release usa contra la API de GHCR, no es incumplimiento). El script recibe `IMAGE`
   (obligatoria), el motor por `ENGINE` (`docker` por defecto; aquí `podman`) y el puerto de loopback
-  por `PORT`; arranca el contenedor solo en loopback, espera a `/healthz` y lo retira **siempre**,
-  también al fallar. El `HEALTHCHECK` solo se puede **exigir** cuando la imagen lo declara —`podman`
-  construye en formato OCI y lo descarta, así que el script lo dice en voz alta y no lo cuenta como
-  fallo—. En esta máquina el paso de smoke añade **~10,4 s**, con un `docker build` en frío
-  (`--no-cache`) de **29,7 s**; en el runner de Actions ese número solo se mide en el CI. Para
-  correrlo a mano aquí: `just smoke` (construye y lo corre con el motor de esta máquina), y
-  `PORT=9090 just smoke` cambia el puerto de loopback.
+  por `PORT`; arranca los contenedores solo en loopback, espera a `/healthz` y los retira **siempre**,
+  también al fallar. Arranca **dos**: el de siempre —la imagen tal cual, el que prueba el leak
+  (`/minimal.html -> 200`, la garantía 4)— y un **segundo** con un `CONTENT_DIR` **montado** y un tema
+  de más, en su propio puerto de loopback (`PORT_VOLUMEN`, por defecto `PORT` + 1). Ese segundo existe
+  porque el barrido del directorio del operador (change `themes-from-content-dir`) depende de que el
+  montaje sea legible por el uid **10001** con el que corre la imagen: medido, un directorio en `0700`
+  responde `404` y con `chmod 755` responde `200`, algo que `cargo test` **no puede ver** porque lee el
+  directorio con el uid de quien compila. El `HEALTHCHECK` solo se puede **exigir** cuando la imagen lo
+  declara: `podman build` **sin** `--format docker` construye en formato OCI, que lo descarta —esta
+  casa sí pasa ese flag (`.justfile`), así que aquí sí se declara y sí se comprueba—, y eso es un hecho
+  sobre la construcción de quien lo corre, no sobre el servicio; si la imagen no lo declara, el script
+  lo dice en voz alta y **no** lo cuenta como fallo. En esta máquina el paso de smoke añade **~20,6 s**
+  con los **dos** contenedores, con un `docker build` en frío (`--no-cache`) de **29,7 s**; en el
+  runner de Actions ese número solo se mide en el CI. Para
+  correrlo a mano aquí: `just smoke` (construye y lo corre con el motor de esta máquina), `PORT=9090
+  just smoke` cambia el puerto de loopback y `PORT_VOLUMEN=9091` el del segundo contenedor. Sigue sin
+  construir ni publicar nada y sigue siendo el **único** sitio con las aserciones.
 - **La conjunción del leak no depende de `sanitizePath`, y la trampa del escalar entrecomillado es
   del despliegue.** Medido: la tabla de 41 paths con la regla final es **idéntica** con el
   *entrypoint* en su defecto y con `sanitizePath=false`, mientras que la forma que solo hace opcional
