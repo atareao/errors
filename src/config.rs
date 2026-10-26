@@ -1,7 +1,7 @@
 //! Configuración de la aplicación, leída **solo** del entorno.
 //!
 //! ---------------------------------------------------------------------------
-//! API que asume la fase RED (la fase GREEN debe implementarla tal cual):
+//! API pública del módulo:
 //!
 //! ```ignore
 //! #[derive(Debug, Clone, Copy, Default)]
@@ -19,6 +19,11 @@
 //!     pub content_dir: PathBuf,
 //!     pub default_error_page: u16,
 //!     pub retry_after: u32,
+//!     /// El registro efectivo de temas: los siete incorporados más los
+//!     /// descubiertos en `content_dir` **al arrancar**.
+//!     pub themes: Themes,
+//!     /// El tema del servicio, **ya validado** contra `themes`.
+//!     pub theme: Theme,
 //! }
 //!
 //! #[derive(Debug)]
@@ -27,6 +32,7 @@
 //!     UnknownLogFormat(String),
 //!     DefaultErrorPageOutOfRange(String),
 //!     InvalidRetryAfter(String),
+//!     UnknownTheme { value: String, validos: String },
 //! }
 //! impl std::fmt::Display for ConfigError { /* ... */ }
 //! impl std::error::Error for ConfigError {}
@@ -59,16 +65,25 @@
 //!
 //! No se lee ningún fichero de configuración (`config.yml` ni similar).
 //!
-//! `THEME` (change `themes-as-pages`, spec `error-page`) elige la **página** del
-//! tema que se sirve, entre los temas **incorporados al binario**
-//! ([`crate::theme::THEMES`]). Un valor que no sea uno de los **siete** —**o la
-//! cadena vacía**— es un error de arranque, con el mismo criterio que
-//! `LOG_FORMAT` y `DEFAULT_ERROR_PAGE`: la variable la escribe el **operador** y
-//! quien la escribe cree que está configurando algo, así que un `default`
-//! silencioso le ocultaría el error. La cabecera `X-Theme` **no** sigue esa
-//! regla, y la asimetría es deliberada: esa la elige **quien llama**, y un
-//! cliente no puede romper el servicio, así que un `X-Theme` desconocido cae al
-//! tema configurado sin error (ver [`crate::theme::resolve`]).
+//! `THEME` (spec `error-page`) elige la **página** del tema que se sirve, entre
+//! los nombres del **registro** del arranque: los siete incorporados al binario
+//! **más** los descubiertos en la raíz de `CONTENT_DIR` ([`crate::theme::Themes`]).
+//! Un valor que no sea uno de esos nombres —**o la cadena vacía**— es un error de
+//! arranque, con el mismo criterio que `LOG_FORMAT` y `DEFAULT_ERROR_PAGE`: la
+//! variable la escribe el **operador** y quien la escribe cree que está
+//! configurando algo, así que un `default` silencioso le ocultaría el error. La
+//! cabecera `X-Theme` **no** sigue esa regla, y la asimetría es deliberada: esa la
+//! elige **quien llama**, y un cliente no puede romper el servicio, así que un
+//! `X-Theme` desconocido cae al tema configurado sin error (ver
+//! [`crate::theme::resolve`]).
+//!
+//! **El precio, escrito**: como la lista es el registro de **ese** arranque, un
+//! `THEME` **correcto** cuyo fichero **todavía** no esté en `CONTENT_DIR` —un
+//! volumen que aún no se ha montado cuando el contenedor arranca— **aborta** el
+//! arranque. Es la contrapartida de mantener el aborto: la variable la escribe el
+//! operador, y un arranque con un tema que no existe es peor que un arranque que
+//! falla diciendo por qué. La mitigación es del operador: declarar la dependencia
+//! del volumen, o arrancar sin `THEME` y con el defecto.
 //!
 //! `LOG_FORMAT` (change `release-hardening`, spec `observability`) decide el
 //! formato de los registros: `text`, el de siempre, por defecto, y `json` para
@@ -96,7 +111,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use crate::resolve::{MAX_ERROR_CODE, MIN_ERROR_CODE, is_usable_code};
-use crate::theme::{self, DEFAULT_THEME_NAME, THEME_NAMES, Theme};
+use crate::theme::{self, DEFAULT_THEME_NAME, Theme, Themes};
 
 /// Puerto de escucha por defecto (el que asume la guía de Traefik).
 const DEFAULT_PORT: u16 = 8080;
@@ -167,9 +182,17 @@ pub struct Config {
     /// Segundos de la cabecera `Retry-After` de los códigos que la llevan
     /// (`429` y `503`). `0` es válido («reintenta ya»).
     pub retry_after: u32,
-    /// Tema del servicio: la página del tema que se sirve en el HTML. Es uno de
-    /// los **siete** incorporados al binario ([`crate::theme::THEMES`]).
-    pub theme: &'static Theme,
+    /// El **registro efectivo** de temas: los siete incorporados al binario más
+    /// los descubiertos en la raíz de `content_dir` **al arrancar**.
+    ///
+    /// La `Config` **posee** el registro (no es una tabla estática) porque un tema
+    /// descubierto lleva un nombre que solo se conoce en ejecución, y ya viaja por
+    /// referencia a cada petición dentro del estado del router.
+    pub themes: Themes,
+    /// El tema del servicio, **ya validado** contra `themes`: la página del tema
+    /// que se sirve en el HTML. Es por **valor** (una copia corta) y no un
+    /// `&'static`, porque un tema descubierto no vive en el binario.
+    pub theme: Theme,
 }
 
 /// Error de arranque por una variable de entorno presente pero inválida.
@@ -190,9 +213,15 @@ pub enum ConfigError {
     /// `RETRY_AFTER` no es un entero sin signo de 32 bits (la cadena vacía
     /// incluida).
     InvalidRetryAfter(String),
-    /// `THEME` está presente pero no es uno de los temas incorporados (la
-    /// cadena vacía incluida).
-    UnknownTheme(String),
+    /// `THEME` está presente pero no es un nombre del **registro** del arranque
+    /// (la cadena vacía incluida). Lleva el valor ofensor y los nombres del
+    /// registro, para que el mensaje enumere lo que sí vale **en ese arranque**.
+    UnknownTheme {
+        /// El valor tal cual llegó —la cadena vacía incluida—.
+        value: String,
+        /// Los nombres del registro del arranque, ya unidos por `", "`.
+        validos: String,
+    },
 }
 
 impl fmt::Debug for ConfigError {
@@ -236,10 +265,10 @@ impl fmt::Display for ConfigError {
                  Se espera un entero de segundos (¿una variable vacía?). Omitir la variable \
                  usa {DEFAULT_RETRY_AFTER}."
             ),
-            ConfigError::UnknownTheme(value) => write!(
+            ConfigError::UnknownTheme { value, validos } => write!(
                 f,
                 "`{THEME_VAR}` está presente pero no es un tema válido: {value:?}. \
-                 Se espera uno de {THEME_NAMES} (¿una variable vacía?). Omitir la variable \
+                 Se espera uno de {validos} (¿una variable vacía?). Omitir la variable \
                  usa `{DEFAULT_THEME_NAME}`."
             ),
         }
@@ -257,10 +286,14 @@ impl Config {
     /// están presentes: una variable presente pero vacía no cae al defecto,
     /// es un [`ConfigError`]. `DEFAULT_ERROR_PAGE` tiene que estar además en el
     /// rango utilizable `400..=599`. `LOG_FORMAT` tiene que ser `text` o `json`
-    /// con el mismo criterio, y `THEME` uno de los **siete** temas incorporados
-    /// —incluida la cadena vacía en el rechazo—. `RETRY_AFTER` también es
-    /// obligatoriamente numérica cuando está presente, pero **sin** rango: `0`
-    /// es válido. Las claves desconocidas se ignoran.
+    /// con el mismo criterio, y `THEME` un nombre del **registro** —los siete
+    /// incorporados **más** los descubiertos en `content_dir`—, incluida la
+    /// cadena vacía en el rechazo. `RETRY_AFTER` también es obligatoriamente
+    /// numérica cuando está presente, pero **sin** rango: `0` es válido. Las
+    /// claves desconocidas se ignoran.
+    ///
+    /// El **orden importa**: `CONTENT_DIR` se parsea **antes** del bloque del
+    /// tema, porque el registro se construye a partir de él.
     ///
     /// # Errors
     ///
@@ -271,8 +304,8 @@ impl Config {
     /// presente y su valor no es un entero de `400` a `599`,
     /// [`ConfigError::InvalidRetryAfter`] si `RETRY_AFTER` está presente y su
     /// valor no se puede interpretar como `u32`, y [`ConfigError::UnknownTheme`]
-    /// si `THEME` está presente y su valor no es uno de los **siete** temas
-    /// incorporados.
+    /// si `THEME` está presente y su valor no es un nombre del **registro** del
+    /// arranque.
     pub fn from_env_iter<I>(iter: I) -> Result<Config, ConfigError>
     where
         I: IntoIterator<Item = (String, String)>,
@@ -332,21 +365,6 @@ impl Config {
             None => DEFAULT_LOG_FORMAT,
         };
 
-        // `THEME` la escribe el operador y selecciona de una lista **cerrada**
-        // —los temas incorporados al binario—, así que un valor que no esté en
-        // ella (la cadena vacía incluida) aborta el arranque: quien la escribe
-        // cree que está configurando algo, y un `default` silencioso le ocultaría
-        // el error. El canal de la cabecera `X-Theme` es el otro carril, y ahí
-        // un valor desconocido cae al configurado sin error (ver
-        // [`crate::theme::resolve`]). Sin la variable, el tema es el de siempre:
-        // `default`, la página del tema que el proyecto ya trae.
-        let theme = match vars.get(THEME_VAR) {
-            Some(raw) => {
-                theme::theme_by_name(raw).ok_or_else(|| ConfigError::UnknownTheme(raw.clone()))?
-            }
-            None => theme::default_theme(),
-        };
-
         // Estas dos son cadenas: no hay valor inválido que rechazar, pero
         // también se respetan tal cual cuando llegan vacías (nunca se
         // sustituyen por el defecto).
@@ -355,9 +373,43 @@ impl Config {
             None => DEFAULT_LOG_LEVEL.to_string(),
         };
 
+        // `CONTENT_DIR` se parsea **antes** del tema: el registro se construye a
+        // partir de él, así que el barrido de temas lo necesita primero.
         let content_dir = match vars.get(CONTENT_DIR_VAR) {
             Some(value) => PathBuf::from(value),
             None => PathBuf::from(DEFAULT_CONTENT_DIR),
+        };
+
+        // El registro se construye **una vez**, al arrancar: los siete
+        // incorporados más los descubiertos en la raíz de `content_dir`. El
+        // barrido es al arrancar (no por petición), así que **añadir** un tema
+        // exige reiniciar; los **bytes** de la página se leen al servir, así que
+        // **editar** uno que ya estaba se ve sin reiniciar.
+        let themes = Themes::descubrir(&content_dir);
+
+        // `THEME` la escribe el operador y selecciona de los nombres del
+        // **registro** —los siete incorporados más los descubiertos en
+        // `content_dir`—, así que un valor que no esté en él (la cadena vacía
+        // incluida) aborta el arranque: quien la escribe cree que está
+        // configurando algo, y un `default` silencioso le ocultaría el error. El
+        // canal de la cabecera `X-Theme` es el otro carril, y ahí un valor
+        // desconocido cae al configurado sin error (ver [`crate::theme::resolve`]).
+        // Sin la variable, el tema es el de siempre: `default`.
+        //
+        // **El precio**: el error enumera los nombres del registro **de ese
+        // arranque**, así que un `THEME` correcto cuyo fichero todavía no esté en
+        // `content_dir` —un volumen sin montar— aborta el arranque. Es la
+        // contrapartida de mantener el aborto, y está escrita para que no
+        // sorprenda.
+        let theme = match vars.get(THEME_VAR) {
+            Some(raw) => themes
+                .by_name(raw)
+                .ok_or_else(|| ConfigError::UnknownTheme {
+                    value: raw.clone(),
+                    validos: themes.names(),
+                })?
+                .clone(),
+            None => theme::default_theme().clone(),
         };
 
         Ok(Config {
@@ -367,6 +419,7 @@ impl Config {
             content_dir,
             default_error_page,
             retry_after,
+            themes,
             theme,
         })
     }
@@ -401,6 +454,27 @@ mod tests {
             .iter()
             .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
             .collect()
+    }
+
+    /// Un `CONTENT_DIR` que **no existe**: el registro son los siete incorporados y
+    /// nada más (el caso del binario instalado sin ficheros de datos).
+    fn sin_contenido_dir() -> String {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/inexistente-y-ademas-inexistente");
+        assert!(
+            !dir.exists(),
+            "el fixture `sin contenido` no puede existir: {}",
+            dir.display()
+        );
+        dir.to_string_lossy().into_owned()
+    }
+
+    /// El `CONTENT_DIR` de los fixtures con un tema de más (`neon.html`).
+    fn temas_extras_dir() -> String {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/temas-extras")
+            .to_string_lossy()
+            .into_owned()
     }
 
     #[test]
@@ -660,7 +734,10 @@ mod tests {
 
     #[test]
     fn un_theme_desconocido_no_arranca() {
-        let err = Config::from_env_iter(env(&[("THEME", "neon")]))
+        // El registro de este arranque son los siete incorporados y nada más
+        // (`CONTENT_DIR` no existe), así que `THEME=neon` no es un nombre válido.
+        let dir = sin_contenido_dir();
+        let err = Config::from_env_iter(env(&[("CONTENT_DIR", dir.as_str()), ("THEME", "neon")]))
             .expect_err("`THEME=neon` debe ser un error de arranque, no un `Ok`");
         let message = err.to_string();
 
@@ -671,7 +748,7 @@ mod tests {
 
         // La comprobación de la lista es **a propósito**: quien escribe `THEME`
         // cree que está configurando algo, así que el error tiene que decirle
-        // qué puede escribir en su lugar —los siete temas incorporados—, no solo
+        // qué puede escribir en su lugar —los nombres del registro—, no solo
         // que se equivocó.
         for nombre in [
             "default", "minimal", "terminal", "paper", "amber", "compact", "matrix",
@@ -687,8 +764,10 @@ mod tests {
     fn el_theme_matrix_es_valido() {
         // `matrix` es el séptimo tema: `THEME=matrix` tiene que arrancar, no ser
         // un valor desconocido.
-        let config = Config::from_env_iter(env(&[("THEME", "matrix")]))
-            .expect("`THEME=matrix` es uno de los siete temas válidos");
+        let dir = sin_contenido_dir();
+        let config =
+            Config::from_env_iter(env(&[("CONTENT_DIR", dir.as_str()), ("THEME", "matrix")]))
+                .expect("`THEME=matrix` es uno de los siete temas válidos");
         assert_eq!(
             config.theme.name, "matrix",
             "`THEME=matrix` tiene que elegir el tema `matrix`"
@@ -700,7 +779,8 @@ mod tests {
         // Misma decisión que con las demás variables: una variable presente
         // pero vacía no es una variable ausente. Un `THEME=""` es un error que
         // nombra la variable, no un `default` silencioso.
-        let err = Config::from_env_iter(env(&[("THEME", "")]))
+        let dir = sin_contenido_dir();
+        let err = Config::from_env_iter(env(&[("CONTENT_DIR", dir.as_str()), ("THEME", "")]))
             .expect_err("un `THEME` vacío debe ser un error de arranque, no `default`");
         let message = err.to_string();
 
@@ -708,5 +788,112 @@ mod tests {
             message.contains("THEME"),
             "el error de `THEME` vacío debe nombrar la variable: {message}"
         );
+    }
+
+    // --- THEME contra el registro efectivo (change `themes-from-content-dir`) ---
+    //
+    // El registro deja de ser una tabla cerrada: son los siete incorporados
+    // **más** los `*.html` de la raíz de `CONTENT_DIR`, descubiertos al arrancar.
+    // `THEME` valida contra ese registro —y sigue abortando el arranque si su
+    // valor no está en él—, y el error enumera los nombres **de ese arranque**.
+
+    #[test]
+    fn un_theme_descubierto_arranca() {
+        // Escenario «un THEME descubierto arranca»: con un `CONTENT_DIR` que trae
+        // `neon.html`, `THEME=neon` es un nombre del registro —los siete
+        // incorporados **más** lo descubierto— y el arranque no aborta.
+        let dir = temas_extras_dir();
+        let config =
+            Config::from_env_iter(env(&[("CONTENT_DIR", dir.as_str()), ("THEME", "neon")]))
+                .expect("un tema descubierto en CONTENT_DIR tiene que ser un `THEME` válido");
+
+        assert_eq!(
+            config.theme.name, "neon",
+            "`THEME=neon` tiene que elegir el tema descubierto `neon`"
+        );
+        assert!(
+            config.theme.embedded.is_none(),
+            "un tema descubierto **no** tiene copia embebida: su fichero es su única copia"
+        );
+        assert!(
+            config.themes.by_name("neon").is_some(),
+            "el tema descubierto tiene que estar en el registro efectivo"
+        );
+    }
+
+    #[test]
+    fn un_theme_correcto_con_el_volumen_sin_montar_no_arranca() {
+        // El **precio** de mantener el aborto: el error enumera los nombres que el
+        // registro tenga **en ese arranque**, así que un `THEME` **correcto** cuyo
+        // fichero **todavía** no esté en `CONTENT_DIR` —un volumen que aún no se ha
+        // montado cuando el contenedor arranca— **aborta** el arranque. Es la
+        // contrapartida de la validación estricta: la variable la escribe el
+        // operador, y un arranque con un tema que no existe es peor que un arranque
+        // que falla diciendo por qué. La mitigación es del operador: declarar la
+        // dependencia del volumen, o arrancar sin `THEME` y con el defecto.
+        let dir = sin_contenido_dir();
+        let err = Config::from_env_iter(env(&[("CONTENT_DIR", dir.as_str()), ("THEME", "neon")]))
+            .expect_err("`THEME=neon` sin `neon.html` en CONTENT_DIR tiene que abortar");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("THEME"),
+            "el error debe nombrar la variable: {message}"
+        );
+
+        // Enumera los siete del registro **de ese arranque**, y **no** `neon`, que
+        // es justo lo que el operador cree que ha configurado.
+        for nombre in [
+            "default", "minimal", "terminal", "paper", "amber", "compact", "matrix",
+        ] {
+            assert!(
+                message.contains(nombre),
+                "el error tiene que enumerar los temas del registro: falta `{nombre}` en {message}"
+            );
+        }
+        // El mensaje **cita** el valor ofensor, como los otros cuatro errores de
+        // configuración, que citan el suyo: el operador tiene que ver qué escribió.
+        // La comprobación de que `neon` **no** está entre los válidos es entonces
+        // sobre la **enumeración**, no sobre el mensaje entero.
+        assert!(
+            message.contains("\"neon\""),
+            "el error tiene que citar el valor ofensor, como los demás errores de \
+             configuración: {message}"
+        );
+
+        let enumeracion = "default, minimal, terminal, paper, amber, compact, matrix";
+        assert!(
+            message.contains(enumeracion),
+            "el error tiene que enumerar los nombres del registro de ese arranque, en orden: \
+             {message}"
+        );
+        assert!(
+            !message.contains(&format!("{enumeracion}, neon")),
+            "sin el fichero, `neon` no está en el registro y no puede aparecer en la \
+             enumeración: {message}"
+        );
+    }
+
+    #[test]
+    fn el_error_enumera_los_nombres_del_registro() {
+        // Lo que distingue el **registro efectivo** de la constante de antes: con
+        // un `CONTENT_DIR` con temas propios, el error enumera los que **ese
+        // arranque** tiene —los siete incorporados **y** `neon`—, no una lista
+        // fija.
+        let dir = temas_extras_dir();
+        let err =
+            Config::from_env_iter(env(&[("CONTENT_DIR", dir.as_str()), ("THEME", "noexiste")]))
+                .expect_err("`THEME=noexiste` no es un nombre del registro: tiene que abortar");
+        let message = err.to_string();
+
+        for nombre in [
+            "default", "minimal", "terminal", "paper", "amber", "compact", "matrix", "neon",
+        ] {
+            assert!(
+                message.contains(nombre),
+                "el error tiene que enumerar los nombres del registro de ese arranque: falta \
+                 `{nombre}` en {message}"
+            );
+        }
     }
 }
