@@ -1,0 +1,18 @@
+<!doctype html>
+<!-- Fixture del operador: una página que lleva sus tres marcadores de plantilla y
+     **además** un `<link>` propio. Con el modelo `themes-as-pages` el servicio
+     **no** reescribe ningún `<link>`: la página del operador es suya y se sirve
+     rellenada (sus tres marcadores), con su enlace intacto. Fija que el servicio
+     no toca lo que no es suyo. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>{{code}} — {{reason}}</title>
+    <link rel="stylesheet" href="/css/otra.css" />
+  </head>
+  <body class="c{{code}}">
+    <h1>{{code}}</h1>
+    <h2>{{reason}}</h2>
+    <p>{{description}}</p>
+  </body>
+</html>

@@ -1,22 +1,29 @@
-/* Hoja de estilos de las páginas de error.
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>{{code}} — {{reason}}</title>
+    <style>
+/* Estilo de la página del tema `default`.
  *
- * Es la hoja de la página de error —una sola página sirve cualquier código, y
- * su código, su razón y su descripción los rellena el servidor al servir— y el
- * tema `default` de este servicio. El servidor la incrusta en el HTML al
- * servir, sustituyendo el `<link>` de la página por un bloque de estilo con
- * estas reglas; además se sigue sirviendo como asset estático desde
- * `CONTENT_DIR`, así que la ruta pública `/css/error.css` no cambia.
+ * Vive **dentro** de la página: un tema es una página, así que estas reglas no
+ * vienen de ninguna hoja suelta ni se incrustan al servir —no hay marcador de
+ * hoja que sustituir—. Y por eso la página no puede pedir nada por la red:
+ * nada de importar hojas ni de ficheros remotos.
  *
  * Es el tema sobrio de la casa y el **único** que anima: `<main>` entra con un
  * movimiento de 180 ms que se neutraliza en `prefers-reduced-motion: reduce`,
- * porque el movimiento es adorno y tiene que poder apagarse. Por ese mismo
- * cometido —viajar dentro de la página— no puede referenciar recursos externos:
- * nada de hojas importadas ni de ficheros remotos.
+ * porque el movimiento es adorno y tiene que poder apagarse.
  *
- * Una sola hoja, no una por código: la diferencia de aspecto se expresa con la
+ * Una sola página, no una por código: la diferencia de aspecto se expresa con la
  * clase `c<código>` del `body`, con un acento distinto por código. El `404` —y
  * cualquier código sin regla propia— se queda con el acento por defecto de
  * `:root`; los demás solo lo sobreescriben.
+ *
+ * Contraste medido a mano (objetivo AA): fg/bg 15,80, muted/bg 6,11 y accent/bg
+ * 5,19 en claro; 16,02, 6,50 y 6,11 en oscuro.
  *
  * El `<hr>` es un separador decorativo: la página se entiende igual sin él, y
  * el 3:1 de WCAG 1.4.11 cubre el contenido no textual necesario para entender
@@ -35,8 +42,8 @@
   --rule: #d1d9e0;
 }
 
-/* Un acento por código (tema claro). Discreto: solo cambia el color del título
- * y de los enlaces, que son los que usan `--accent`. */
+/* Un acento por código (tema claro). Discreto: solo cambia el color del título,
+ * que es el único que usa `--accent` —la página no lleva enlaces—. */
 body.c400 {
   --accent: #9a6700;
 }
@@ -177,10 +184,6 @@ footer {
   color: var(--muted);
 }
 
-a {
-  color: var(--accent);
-}
-
 /* El movimiento de entrada: sobrio (180 ms, un fundido con un desplazamiento
  * mínimo) y **neutralizable** —no un bucle—. La página de error no se hace
  * esperar ni se mueve sola. */
@@ -200,3 +203,15 @@ a {
     animation: none;
   }
 }
+    </style>
+  </head>
+  <body class="c{{code}}">
+    <main>
+      <h1>{{code}}</h1>
+      <h2>{{reason}}</h2>
+      <hr />
+      <p>{{description}}</p>
+    </main>
+    <footer>errserve</footer>
+  </body>
+</html>

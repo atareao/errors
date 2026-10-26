@@ -50,7 +50,7 @@ services:
       LOG_FORMAT: "text"        # text | json (json para recolectores)
       CONTENT_DIR: "content"    # relativo a WORKDIR (/app/content en la imagen)
       DEFAULT_ERROR_PAGE: "404" # fuera de 400..=599 es error de arranque
-      THEME: "default"          # default | minimal | terminal | paper | amber | compact
+      THEME: "default"          # default | minimal | terminal | paper | amber | compact | matrix
 
     # --- Puertos --------------------------------------------------------------
     # En producción NO se publica ninguno: Traefik llega al contenedor por la

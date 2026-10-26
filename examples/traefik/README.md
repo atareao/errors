@@ -52,7 +52,7 @@ página autocontenida con el tema por petición, y que el respaldo no publique e
 | `app.localtest.me/boom` | `503` | Idem con un 503, más `Retry-After: 120` y sus cabeceras (`X-Robots-Tag`, `Content-Type`). |
 | `nada.localtest.me/x` | `404` | **Catch-all sin upstream: el código lo decidimos nosotros.** Es la razón del proyecto. |
 | `diverge.localtest.me/boom` | `503` | Backend 503 con el middleware pidiendo `/404`: manda Traefik. |
-| `app.localtest.me/boom` con `Accept: text/html` | `503` | **El `503` llega con la hoja incrustada y sin enlazar `/css/error.css`**, y `X-Theme: terminal` cambia el cuerpo de esa petición. |
+| `app.localtest.me/boom` con `Accept: text/html` | `503` | **El `503` llega con la página del tema —su `<style>` dentro— y sin ningún `<link>`**, y `X-Theme: terminal` cambia el cuerpo de esa petición. |
 | `nada.localtest.me/metrics` | no `200` | El respaldo **no** publica el endpoint de servicio `/metrics`. |
 
 `check.sh` sale con estado 1 si algo no cuadra, así que sirve también en un pipeline.
@@ -62,24 +62,25 @@ página autocontenida con el tema por petición, y que el respaldo no publique e
 Sobre `app.localtest.me/boom` —el **mismo** `503` del backend, no un caso nuevo—, con tres ayudantes
 que afirman y niegan sobre el **cuerpo**:
 
-- `html_body app.localtest.me /boom '<style'` — el `503` del backend llega con la hoja **incrustada**:
-  la página no pide nada para verse.
-- `not_html_body app.localtest.me /boom 'rel="stylesheet"'` — y **no** enlaza `/css/error.css`. Es el
-  bug **medido**: en el host de la aplicación ese path lo contestaba el upstream —`404 text/plain`—,
-  el middleware `errors` interceptaba ese `404` y lo volvía a pedir como página de error con un
-  `Accept` que **no** negocia HTML, la cascada de formato caía al texto plano y el navegador rechazaba
-  la hoja (*«MIME type ('text/plain') is not a supported stylesheet MIME type»*). La página salía
-  **sin estilos**, con el `503` y el cuerpo correctos.
+- `html_body app.localtest.me /boom '<style'` — el `503` del backend llega con la página del tema, que
+  trae su `<style>` **dentro**: la página no pide nada para verse.
+- `not_html_body app.localtest.me /boom 'rel="stylesheet"'` — y **no** enlaza ninguna hoja externa: el
+  enlace a `/css/error.css` **ya no existe**, porque cada página lleva su hoja incrustada. Es el
+  arreglo de un bug **medido**: con el modelo anterior, en el host de la aplicación ese enlace lo
+  contestaba el upstream —`404 text/plain`—, el middleware `errors` interceptaba ese `404` y lo volvía
+  a pedir como página de error con un `Accept` que **no** negocia HTML, la cascada de formato caía al
+  texto plano y el navegador rechazaba la hoja (*«MIME type ('text/plain') is not a supported
+  stylesheet MIME type»*). La página salía **sin estilos**, con el `503` y el cuerpo correctos.
 - `html_differs app.localtest.me /boom 'X-Theme: terminal'` — el tema se elige **por petición**: pide
   el mismo path dos veces, con y sin esa cabecera, y exige que los cuerpos **difieran**. Es lo que
-  demuestra la selección de extremo a extremo, a través de Traefik; `terminal` es uno de los seis
+  demuestra la selección de extremo a extremo, a través de Traefik; `terminal` es uno de los siete
   temas que documenta el [`README.md`](../../README.md) raíz.
 
 Los tres mandan `Accept: text/html` **a propósito**. Sin esa pista, un `curl` manda `*/*`, la cascada
 de formato no elige HTML —cae al **texto plano** por defecto— y el bloque no probaría nada: no habría
-hoja que buscar en el cuerpo. Es también el motivo de que `html_differs` compare **cuerpos** y no
-busque un color en la hoja: un color es un detalle que se puede retocar sin avisar, y «el cuerpo
-cambia con la cabecera» es el contrato.
+página con su `<style>` que buscar en el cuerpo. Es también el motivo de que `html_differs` compare
+**cuerpos** y no busque un color en la hoja: un color es un detalle que se puede retocar sin avisar, y
+«el cuerpo cambia con la cabecera» es el contrato.
 
 ### El respaldo no publica el endpoint de servicio
 
@@ -115,6 +116,29 @@ nada que ver con v2/v3, es la exclusión del endpoint de servicio que el respald
 en «Variante sin socket», abajo, y en «Operación y observabilidad» del `README.md` raíz). La línea
 «BIEN» la lleva puesta a propósito, aunque alargue el ejemplo: es la regla desplegable, y una línea
 «BIEN» a medias es el vector por el que `/metrics` se filtró de verdad.
+
+## El leak de las páginas de tema
+
+Con el modelo actual, **un tema es una página** y el nombre del tema **es** la ruta de su fichero: las
+siete (`default.html`, `minimal.html`, …) viven en la **raíz** de `CONTENT_DIR`. El servicio solo
+intercepta **`/default.html`** (y `/default.htm`), que son el **alias del código por defecto**
+(`DEFAULT_ERROR_PAGE`); las **otras seis** —`/minimal.html`, `/terminal.html`, `/paper.html`,
+`/amber.html`, `/compact.html` y `/matrix.html`— se sirven como **assets crudos** si alguien las pide,
+con sus marcadores `{{code}}`/`{{reason}}`/`{{description}}` a la vista.
+
+Es un leak **cosmético**, y con las páginas en la raíz de `CONTENT_DIR` es **inevitable**: el servicio
+no las oculta. La mitigación es **externa**, en el proxy, y este repositorio **no** entrega un
+respaldo que la implemente (es un no-goal del change `themes-as-pages`). Se expresa añadiendo una
+conjunción a la regla del respaldo, que bloquea `*.html` salvo `/default.html`:
+
+```yaml
+traefik.http.routers.errserve-catchall.rule: HostRegexp(`.+`) && !Path(`/metrics`) && (!PathRegexp(`\.html$`) || Path(`/default.html`))
+```
+
+El precio, escrito: esa conjunción bloquea **también** `/404.html` y `/503.html` por el acceso
+directo. No rompe el flujo real —el middleware `errors` pide `/404`, **sin** extensión
+(`errors.query: /{status}`)—, pero el acceso humano a `/404.html` deja de servirse. Las páginas de
+tema del servicio se deciden **dentro** de este repositorio; el bloqueo, fuera.
 
 ## El socket
 
