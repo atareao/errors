@@ -47,6 +47,15 @@ build:
                                    -t {{image}}:latest \
                                    .
 
+# Smoke test de la imagen, con el motor de esta máquina. La puerta de verdad es el
+# script (`.github/scripts/smoke.sh`), el mismo que corren los dos workflows; esta
+# receta solo le pasa el motor y la imagen ya construida. `podman` necesita el
+# formato `docker` en `build` por el HEALTHCHECK (ver `build_format`).
+smoke: build
+    # Puerto de loopback del contenedor de prueba: el 8080 por defecto. Si está
+    # ocupado en esta máquina, `PORT=9090 just smoke` (el script lo lee del entorno).
+    ENGINE={{engine}} IMAGE={{image}}:{{version}} bash .github/scripts/smoke.sh
+
 # Entra en GHCR. Hace falta una vez por máquina: `push` escribe en el registro
 # y GHCR sí exige autenticación para escribir (para leer un paquete público, no).
 #

@@ -150,7 +150,16 @@ services:
     #  # a quien pregunte por un Host que no exista. Con la exclusión, ese caso
     #  # lo contesta Traefik con su propio 404 en texto plano (19 B) y el
     #  # respaldo sigue sirviendo `404` y `503` reales en el mismo Host.
-    #  traefik.http.routers.errserve-catchall.rule: HostRegexp(`.+`) && !Path(`/metrics`)
+    #  # Y una tercera cierra el **leak de las páginas de tema**: el nombre de cada
+    #  # tema ES la ruta de su página, así que sin ella el respaldo publica las
+    #  # seis páginas crudas —con los marcadores `{{code}}`/`{{reason}}`/
+    #  # `{{description}}` a la vista— a quien pregunte por un Host que no exista.
+    #  # La conjunción cubre las tres formas de alcanzar esa página (fin de
+    #  # cadena, barra final o segmento detrás, y barra percent-encoded `%2F`) y
+    #  # deja fuera a propósito los dos alias `/default.html` y `/default.htm`, que
+    #  # el servicio intercepta y nunca responde `200`. El porqué y el precio de
+    #  # la regla están en «Operación y observabilidad» del README.md.
+    #  traefik.http.routers.errserve-catchall.rule: HostRegexp(`.+`) && !Path(`/metrics`) && (!PathRegexp(`\.html?((%2[fF])|/|$)`) || Path(`/default.html`) || Path(`/default.htm`))
     #  traefik.http.routers.errserve-catchall.entrypoints: web
     #  traefik.http.routers.errserve-catchall.service: errserve
     #  traefik.http.routers.errserve-catchall.middlewares: errpages

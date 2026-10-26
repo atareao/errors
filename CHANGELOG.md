@@ -3,6 +3,37 @@
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el
 versionado, [SemVer](https://semver.org/lang/es/).
 
+## [0.8.1](https://github.com/atareao/errserve/compare/v0.8.0..v0.8.1) - 2026-10-26
+
+Nada del servicio publicado cambia: ni el binario, ni las páginas, ni la imagen, que sale
+byte-idéntica a la de la `0.8.0`. Lo que entra es una puerta que faltaba, una exclusión en la
+configuración que el repositorio entrega y el `502` ejercitado —el código con el que un proxy
+responde a un upstream caído—. Por eso es un parche y no un minor.
+
+### Añadido
+
+- **ci**: El smoke test es un artefacto único que corren las dos puertas —el job `imagen` del CI,
+  que ahora construye la imagen **y** la prueba en cada propuesta de cambio, y el `release.yml`,
+  antes de publicar—. Sus aserciones vivían en un solo `run:` del release, y el fallo de la
+  `v0.8.0` llegó con la etiqueta ya empujada.
+
+### Corregido
+
+- **traefik**: El respaldo no publica las páginas de tema crudas. Cubre las tres formas de
+  alcanzarlas, deja fuera los dos alias a propósito y su precio —lo que manda a la `404` de
+  Traefik— está medido. El ejemplo gana además el `502` de extremo a extremo.
+
+### Documentación
+
+- **openspec**: Propone smoke-test-and-catchall-html-exclusion
+- El smoke test, la exclusión del leak y el 502
+
+**Una nota de alcance**: el rango de esta versión incluye el hotfix del smoke test del
+`release.yml`, que quedó **fuera** de la etiqueta `v0.8.0` porque esta se creó antes de él. La
+imagen de la `0.8.0` **sí** lo lleva —el `release.yml` la construye desde la rama— y el crate no
+se ve afectado (`.github/` va excluido del paquete), así que no es algo que esta versión
+corrija: es un commit del rango que conviene saber leer.
+
 ## [0.8.0](https://github.com/atareao/errserve/compare/v0.7.0..v0.8.0) - 2026-10-26
 
 **Ruptura**: un tema deja de ser una **hoja de estilos** y pasa a ser una **página**, con
