@@ -12,10 +12,13 @@ Implementado, verificado y versionado. Catorce changes están **archivados** en
 (`embedded-error-pages`, `error-page-template`, `self-contained-themes`, `theme-sheet-contracts`,
 `theme-visual-review`, `catchall-metrics-exclusion`, `fix-image-build` y `publish-crate-on-tag`) y uno
 con `2026-10-26` (`themes-as-pages`)— y sus requisitos viven fusionados en los cuatro specs de
-`openspec/specs/`: `error-page`, `http-server`, `observability` y `response-extras`. **No hay ningún
-change en curso**: `openspec/changes/` solo tiene `archive/`. El último, `themes-as-pages` —el tema deja
-de ser **una hoja** y pasa a ser **una página**, con la cascada del cuerpo HTML en un solo paso—, entró
-en `error-page` y `http-server` (+6 requisitos añadidos, ~8 modificados, -5 retirados).
+`openspec/specs/`: `error-page`, `http-server`, `observability` y `response-extras`. El último
+change archivado, `themes-as-pages` —el tema deja de ser **una hoja** y pasa a ser **una página**, con
+la cascada del cuerpo HTML en un solo paso—, entró en `error-page` y `http-server` (+6 requisitos
+añadidos, ~8 modificados, -5 retirados). Y hay **un change en curso**, sin archivar todavía:
+`smoke-test-and-catchall-html-exclusion` —el smoke test pasa a un artefacto único que corren los dos
+workflows, el respaldo gana la exclusión del leak de las páginas de tema y el `502` entra en una
+puerta—, con su delta en `openspec/changes/smoke-test-and-catchall-html-exclusion/`.
 
 - `src/main.rs` — arranque, router, middleware de páginas de error, la lista `SERVICE_ENDPOINTS` que acota ese middleware, el clasificador `is_error_page_path` (con el alias `/default.html`/`/default.htm`) y los tests de router.
 - `src/config.rs` — configuración desde el entorno (`Config`, `ConfigError`, `from_env_iter`).
@@ -28,10 +31,19 @@ en `error-page` y `http-server` (+6 requisitos añadidos, ~8 modificados, -5 ret
 - `content/` — **siete páginas planas y nada más**, una por nombre en la **raíz** (`default.html`, `minimal.html`, `terminal.html`, `paper.html`, `amber.html`, `compact.html` y `matrix.html`), cada una **autocontenida** con su `<style>` dentro (`matrix`, también su `<script>`), con los tres marcadores `{{code}}`/`{{reason}}`/`{{description}}` y el `<main>` —el *landmark* que el tema `default` anima— y el `<footer>errserve</footer>` **sin `href`** de las seis sobrias. Las siete van **embebidas** en el binario. Ya no hay hoja ni `content/css/`.
 - `Dockerfile`, `.dockerignore`, `.justfile`, `compose.yml` — empaquetado (imagen ~13 MB, no-root uid 10001); el `compose.yml` va endurecido: `read_only: true`, `cap_drop: [ALL]`, `no-new-privileges:true` e `init: true`.
 - `README.md` — el contrato con Traefik y los ejemplos.
+- `.github/scripts/smoke.sh` — el **único** sitio donde viven las aserciones sobre la **imagen
+  arrancada** (estado, cabeceras, cuerpo del HTML, `USER` y `HEALTHCHECK`). Lo invocan por su ruta
+  literal los **dos** workflows que necesitan probar la imagen: `ci.yml` (job `imagen`, tras
+  construirla) y `release.yml` (job `imagen`, antes de publicar). No construye ni publica nada.
+- `tests/` — las guardas sobre ficheros versionados: `content_pages.rs` (**7**, la paridad byte a
+  byte de las seis páginas sobrias), `traefik_catchall.rs` (**9**, las **cinco** definiciones de
+  respaldo de los **cuatro** ficheros, con la regresión de la forma anclada al fin de cadena) y
+  `puertas.rs` (**9**, los dos workflows invocan el script, ninguno duplica sus aserciones y
+  `check.sh` conserva el `502`).
 
-Puertas en verde: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` y **222 tests**
-(210 unitarias + 7 de integración sobre el contenido de `content/` + 5 sobre los respaldos de
-Traefik).
+Puertas en verde: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` y **235 tests**
+(**210** unitarias + **7** de integración sobre el contenido de `content/` + **9** sobre los
+respaldos de Traefik + **9** sobre las puertas del CI).
 Verificado además contra el servidor real y contra la imagen.
 
 ## Qué es
@@ -106,6 +118,41 @@ defecto `app-down`); su rotación (`--rotation-mode`) **no** existe aquí, y es 
    directorio del operador roto (Opción A de `design.md`). Las dos copias **no pueden divergir**: una
    prueba de paridad compara sus bytes, **página a página** y en los **dos sentidos** (D5). Nada de
    esto toca la garantía 1: el estado sigue siendo el código resuelto, nunca `200`.
+8. **El respaldo que este repositorio entrega no publica las páginas de tema crudas.** El nombre
+   del tema **es** la ruta de su página (`content/<nombre>.html`), y las **seis** páginas que no
+   son el alias se sirven como assets **crudos**, con los marcadores
+   `{{code}}`/`{{reason}}`/`{{description}}` a la vista: un Host sin router propio las publicaba a
+   cualquiera con `200`. La conjunción que lo cierra es idéntica en los **cinco** sitios
+   desplegables —**cuatro** ficheros: los labels del ejemplo, los de la plantilla de producción,
+   el bloque del `README.md` raíz y las **dos** definiciones de `examples/traefik/README.md`— y
+   cubre las **tres** formas con las que un cliente alcanza esa página cruda, las tres **medidas**
+   con `200` y los marcadores a la vista contra Traefik v3.6.25: el path terminado en `.html`/`.htm`,
+   el mismo con **barra final** o un segmento detrás (`/minimal.html/`, `/matrix.html/`) y el mismo
+   con la barra **percent-encoded**, en las dos cajas (`/minimal.html%2F`, `/matrix.html%2f`). Una
+   exclusión anclada al fin de cadena —``!PathRegexp(`\.html?$`)``— **no** la cierra: medida, dejaba
+   **diecisiete** formas sirviendo el fichero crudo. La rama `%2[fF]` no es adorno: Traefik
+   normaliza los escapes de los caracteres **no reservados** (`/minimal%2Ehtml` queda bloqueado
+   porque lo lee como `minimal.html`) y **no** el de la barra, que sobrevive como `%2F`; y la regla
+   **no depende de `sanitizePath`** —la tabla de 41 paths es **idéntica** con el *entrypoint* en su
+   defecto y con `sanitizePath=false`—, mientras que la forma que solo hace opcional la barra final
+   **sí** filtra con `sanitizePath=false`. Los **dos alias** `/default.html` y `/default.htm` quedan
+   **fuera** de la exclusión **a propósito**: su path se clasifica como el código por defecto, el
+   servicio lo intercepta y responde el código resuelto, **nunca `200`**. El **precio**, medido: la
+   conjunción manda a la `404` de Traefik —sin pasar por el servicio— todo path cuyo `.html`/`.htm`
+   vaya seguido de fin de cadena, de `/` o de `%2F` (`/404.html`, `/503.html`, `/sub/x.html`,
+   `/x.html/y`, `/default.html%2F`); siguen siendo `404` y no rompe el flujo real, porque el
+   middleware `errors` pide `/404` **sin** extensión (`errors.query: /{status}`). Y **dos límites**
+   declarados y medidos: `PathRegexp` distingue mayúsculas, así que `/MINIMAL.HTML` y sus variantes
+   llegan al servicio —pero reciben **su** `404` con `X-Robots-Tag`, nunca el fichero crudo: es una
+   dependencia del sistema de ficheros, no una propiedad del servicio—; y las formas que sobreviven
+   a la normalización de Traefik y no llevan barra (`/minimal.html%3F`, `/minimal.html%23`,
+   `/minimal.html%3B`, `/minimal.html%20`, `/minimal.html%2E`, `/minimal.html.`,
+   `/minimal%252Ehtml`, `/minimal%2Fhtml`) llegan al servicio y reciben **su** `404`, sin
+   marcadores. **Ninguna prueba textual puede demostrar que la regla cierre todas las
+   codificaciones** que un cliente pueda inventar: eso lo mide `examples/traefik/check.sh` con el
+   ejemplo levantado, forma a forma. Lo guarda `tests/traefik_catchall.rs` **sobre los ficheros
+   versionados** —la comprobación de extremo a extremo necesita un motor de contenedores y no corre
+   en el CI—, con la regresión de la forma anclada al fin de cadena entre sus casos.
 
 ## Configuración (solo entorno)
 
@@ -128,11 +175,12 @@ avalancha justo durante una incidencia. El contador vive en el estado del router
 por eso dos routers no se contaminan entre sí. **No se publica en el router de respaldo** —no es una
 página de error y delata el perfil de fallos de la infraestructura—: se deja fuera del *catch-all* o
 se protege con un middleware de Traefik, que es donde va la autenticación. Dejarlo fuera es una
-conjunción en la regla —``HostRegexp(`.+`) && !Path(`/metrics`)``—, y la llevan los tres ficheros que
-entregan un respaldo desplegable (`compose.yml`, `examples/traefik/compose.yml` y el fragmento de
-*provider de fichero* de `examples/traefik/README.md`). La guarda es `tests/traefik_catchall.rs`,
+conjunción en la regla —``HostRegexp(`.+`) && !Path(`/metrics`)``—, y la llevan las **cinco**
+definiciones de respaldo de los **cuatro** ficheros que lo entregan (`compose.yml`,
+`examples/traefik/compose.yml`, el bloque del `README.md` raíz y las **dos** de
+`examples/traefik/README.md`). La guarda es `tests/traefik_catchall.rs` —**nueve** pruebas—,
 porque el CI no puede levantar contenedores y comprobarlo de extremo a extremo: la prueba lee esos
-tres ficheros versionados y falla en cuanto un respaldo pierde la conjunción. Quitarla vuelve a
+cuatro ficheros versionados y falla en cuanto un respaldo pierde la conjunción. Quitarla vuelve a
 publicar el contador a cualquiera —una petición a `/metrics` en un Host sin router propio casa con el
 respaldo y devuelve el perfil de fallos de la infraestructura—; con ella, Traefik responde su propio
 `404` y el servicio ni se entera. `/version` se mantiene a la vista por paridad deliberada con
@@ -203,6 +251,22 @@ traefik.http.middlewares.error-pages-middleware.errors.query: /{status}
 traefik.http.services.error-pages-service.loadbalancer.server.port: 8080
 ```
 
+Y el respaldo que el repositorio entrega —los tres labels y las dos definiciones del README del
+ejemplo— lleva la conjunción completa, con las **dos** exclusiones (la de `/metrics` y la del leak
+de las páginas de tema, garantía 8):
+
+```yaml
+traefik.http.routers.errserve-catchall.rule: HostRegexp(`.+`) && !Path(`/metrics`) && (!PathRegexp(`\.html?((%2[fF])|/|$)`) || Path(`/default.html`) || Path(`/default.htm`))
+```
+
+⚠️ La regla lleva una barra invertida (`\.html?…`), y en un escalar YAML **entrecomillado** esa
+barra va **doblada** (`\\.`): escribirla simple ahí **no** vale —el parser falla con
+`found unknown escape character`, el *provider* **entero** deja de cargar y el contenedor sigue
+arriba **sin ningún router**, en silencio—. Los **cinco** sitios de este repositorio la escriben
+como escalar **plano**, que es donde la barra va simple y donde los **dos** `$` de la regla llegan
+a Traefik **verbatim** (medido). El **precio** de la conjunción y sus **dos límites** están escritos
+en la garantía 8.
+
 Hay un **ejemplo ejecutable** en `examples/traefik/` (Traefik v3 + este servicio + un backend que
 falla, con `check.sh`) y un `compose.yml` de producción en la raíz: no hace falta inventarse los
 labels. ⚠️ ``HostRegexp(`{host:.+}`)`` es sintaxis de Traefik **v2** y en v3 **no casa con nada** —el
@@ -217,7 +281,7 @@ resolución del código. El puerto por defecto del servicio es **8080**, el mism
 
 ```sh
 cargo run                                   # servidor
-cargo test                                  # 222 tests
+cargo test                                  # 235 tests
 cargo test <substring>                      # un test por nombre
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
@@ -225,6 +289,7 @@ cargo check --offline                       # el repo compila SIN RED (caché lo
 cargo deny check -D warnings                # dependencias: avisos, licencias, duplicaciones y fuentes
 just changelog [v0.3.0]                     # antepone al CHANGELOG la sección de lo no etiquetado
 just build | run | dev                      # empaquetado (docker por defecto; just engine=podman ...)
+just smoke                                  # build + smoke test; PORT=… cambia el loopback
 ```
 
 Orden obligatorio antes de commit: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`.
@@ -249,10 +314,11 @@ Se mantiene con [`git-cliff`](https://git-cliff.org) (`cliff.toml`) y la receta 
   activo, así que **tampoco el dueño empuja directo**. El flujo es: rama `feature/...` desde
   `development` → PR a `development` → PR de `development` a `main`.
 - El CI (`.github/workflows/ci.yml`) tiene **tres jobs**: `fmt, clippy y tests` (las tres puertas),
-  `cargo-deny` (la puerta de dependencias, con `deny.toml`) e `imagen`, que **construye la imagen**
-  —la puerta del empaquetado, y la que faltaba: hasta el change `fix-image-build` la imagen solo se
-  construía en `release.yml`, al etiquetar, así que un `Dockerfile` que dejara de compilar se
-  descubría publicando—. **Los tres están marcados como requeridos en `main` y en `development`**, así
+  `cargo-deny` (la puerta de dependencias, con `deny.toml`) e `imagen`, que **construye la imagen y
+  la prueba** (`bash .github/scripts/smoke.sh`, el mismo script que corre el release) —la puerta del
+  empaquetado, y la que faltaba: hasta el change `fix-image-build` la imagen solo se construía en
+  `release.yml`, al etiquetar, así que un `Dockerfile` que dejara de compilar se descubría
+  publicando—. **Los tres están marcados como requeridos en `main` y en `development`**, así
   que el rojo de cualquiera de ellos bloquea el merge (medido con la API: los `contexts` de las dos
   ramas son `["fmt, clippy y tests", "cargo-deny", "imagen"]`). Para volver a medirlo:
   `gh api repos/atareao/errserve/branches/main/protection --jq '.required_status_checks.contexts'`.
@@ -267,9 +333,10 @@ Se mantiene con [`git-cliff`](https://git-cliff.org) (`cliff.toml`) y la receta 
   una versión publicada solo se puede *yank*—. `version` resuelve etiqueta, versión e imagen **una
   sola vez** y comprueba que la versión del `Cargo.toml` **es la de la etiqueta** **antes** de
   publicar nada: un desajuste (`Cargo.toml` en `0.4.0` y etiqueta `v0.4.1`) para el release entero
-  sin dejar **ni** imagen **ni** Release **ni** crate. `imagen` construye, **prueba la imagen con
-  docker real** (el runner sí lo tiene; aquí solo hay podman, que además descarta el `HEALTHCHECK`
-  al construir en formato OCI), publica en GHCR —`latest` solo se mueve en versiones estables— y
+  sin dejar **ni** imagen **ni** Release **ni** crate. `imagen` construye, **prueba** la imagen
+  (`.github/scripts/smoke.sh`, el mismo script que corre el CI; el runner sí tiene `docker` real
+  —aquí solo hay `podman`, que además descarta el `HEALTHCHECK` al construir en formato OCI—),
+  publica en GHCR —`latest` solo se mueve en versiones estables— y
   crea el Release, reutilizándolo si ya existe. `crate` publica con `cargo publish --locked` usando
   el secreto **`CARGO_REGISTRY_TOKEN`** (un token de crates.io; **sin él el job falla nombrando el
   secreto**) y es **idempotente**: si la versión ya está en el registro, no republica y sigue en
@@ -506,6 +573,28 @@ Se mantiene con [`git-cliff`](https://git-cliff.org) (`cliff.toml`) y la receta 
   rojo en la primera republicación legítima. El `ref` del `checkout` va **cualificado a
   `refs/tags/…`**, porque un `ref` sin cualificar se resuelve prefiriendo una **rama** del mismo
   nombre a la etiqueta.
+- **El smoke test es un artefacto único, y su guarda tiene un límite escrito.** La guarda es
+  `tests/puertas.rs` (**nueve** pruebas): que `ci.yml` y `release.yml` invoquen el script por su ruta
+  literal, que **ningún** workflow lleve los ayudantes de aserción (`comprobar(`, `cabecera(`,
+  `fallo `) ni su propio bucle de arranque contra el contenedor, y que `examples/traefik/check.sh`
+  conserve el caso del `502`; **no demuestra** que el script lo compruebe todo —eso lo mide correrlo
+  contra una imagen de verdad—, y la lista de ayudantes es **cerrada** a propósito (un `curl` suelto,
+  como el que el release usa contra la API de GHCR, no es incumplimiento). El script recibe `IMAGE`
+  (obligatoria), el motor por `ENGINE` (`docker` por defecto; aquí `podman`) y el puerto de loopback
+  por `PORT`; arranca el contenedor solo en loopback, espera a `/healthz` y lo retira **siempre**,
+  también al fallar. El `HEALTHCHECK` solo se puede **exigir** cuando la imagen lo declara —`podman`
+  construye en formato OCI y lo descarta, así que el script lo dice en voz alta y no lo cuenta como
+  fallo—. En esta máquina el paso de smoke añade **~10,4 s**, con un `docker build` en frío
+  (`--no-cache`) de **29,7 s**; en el runner de Actions ese número solo se mide en el CI. Para
+  correrlo a mano aquí: `just smoke` (construye y lo corre con el motor de esta máquina), y
+  `PORT=9090 just smoke` cambia el puerto de loopback.
+- **La conjunción del leak no depende de `sanitizePath`, y la trampa del escalar entrecomillado es
+  del despliegue.** Medido: la tabla de 41 paths con la regla final es **idéntica** con el
+  *entrypoint* en su defecto y con `sanitizePath=false`, mientras que la forma que solo hace opcional
+  la barra final (`\.html?/?$`) **sí** filtra con `sanitizePath=false` —ataba el leak a una opción del
+  operador, y por eso no se usa—. Y la regla lleva una barra invertida, que en un escalar YAML
+  **entrecomillado** va doblada (`\\.`): esa trampa y los dos `$` de la regla están en «Integración
+  Traefik», y el **precio** de la conjunción y sus **dos límites** en la garantía 8.
 
 ## Referencia de implementación (qué no repetir)
 

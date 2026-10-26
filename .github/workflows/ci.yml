@@ -37,7 +37,7 @@ jobs:
       # por primera vez al publicar, y menos a mano. `--dry-run` empaqueta, compila el paquete y
       # valida sus metadatos SIN subir nada (lo dice cargo: «aborting upload due to dry run»), así
       # que cabe aquí, en el job que ya tiene toolchain y caché. Y no es teórico: `content/` viaja
-      # dentro del `.crate` —las once páginas y la hoja, medido: 12 de los 39 ficheros del paquete—,
+      # dentro del `.crate` —las siete páginas, medido: 7 de los 40 ficheros del paquete—,
       # y eso es lo único que hace que el binario instalado sirva las páginas de verdad; hasta hoy
       # solo lo comprobaba una medición a mano. No hace falta un check requerido nuevo: va dentro de
       # `puertas`, que ya lo es.
@@ -97,3 +97,11 @@ jobs:
       # falta y que una capa ya construida esquiva—.
       - name: Construir la imagen
         run: docker build --tag errserve:ci .
+
+      # Construir no es probar: una imagen que compila y no responde el contrato del
+      # servicio tiene que poner esta puerta en rojo. El `docker` del runner es el
+      # motor real, así que no hace falta pasar `ENGINE`.
+      - name: Probar la imagen (smoke test)
+        env:
+          IMAGE: errserve:ci
+        run: bash .github/scripts/smoke.sh

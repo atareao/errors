@@ -71,8 +71,8 @@ nada; `ERRSERVE_IMAGE` apunta a otra etiqueta o a una imagen local si hace falta
 Una trampa que conviene conocer antes de copiar una regla de internet: ``HostRegexp(`{host:.+}`)`` es
 sintaxis de Traefik **v2** y en v3 **no casa con nada** —el router aparece `enabled` y Traefik
 responde su propio 404, sin llegar al servicio—. En v3 es ``HostRegexp(`.+`)``. Es el mismo tipo de
-trampa de copia-pega que la del *catch-all*: si copias esa regla, mira el párrafo de `/metrics` en
-«Operación y observabilidad», porque además lleva una exclusión.
+trampa de copia-pega que la del *catch-all*: si copias esa regla, mira «Operación y observabilidad»,
+porque además lleva **dos** exclusiones —la de `/metrics` y la del **leak de las páginas de tema**—.
 
 ## Ejemplos
 
@@ -247,9 +247,12 @@ descargadas—: una página que necesita la red para verse es exactamente el def
 corrige. Las seis sobrias comparten su marcado **palabra por palabra** —quitado el bloque `<style>`—
 y solo cambia su CSS; lo vigila una prueba de `tests/content_pages.rs`, no una guarda —una guarda
 textual no puede demostrar que seis ficheros no diverjan—. Y como viven en la raíz de `CONTENT_DIR`,
-las **otras seis** páginas (todas menos `default.html`) se sirven crudas si alguien las pide: el leak
-cosmético que se mitiga en el **proxy** —bloquear `*.html` salvo `/default.html`—, no aquí. El
-servicio no promete ocultarlas.
+las **otras seis** páginas (todas menos `default.html`) se sirven crudas si alguien las pide: el
+**servicio** sigue sin ocultarlas —es un servidor, no un proxy, y esa mitad se mantiene—, pero este
+repositorio **ya entrega la regla del respaldo que las bloquea**, y una prueba la guarda
+(`tests/traefik_catchall.rs`, porque comprobarlo de extremo a extremo necesita un motor de
+contenedores y no corre en el CI). La regla, su precio y sus límites están en «Operación y
+observabilidad»: aquí, la frase y el puntero.
 
 Una página de tema **puede animar**: el movimiento es una decisión de aspecto, no un defecto de
 autocontención. Ahora bien, lo que anima tiene que poder apagarse: una página que declare una animación
@@ -324,20 +327,26 @@ fuera de la resolución de páginas de error— y no una página de error: expon
 servicio (qué códigos ha servido, que es el perfil de fallos de tu infraestructura), así que déjalo
 fuera del *catch-all* o ponle delante un middleware de Traefik (*basicAuth*, una `IPAllowList`). La
 aplicación **no** autentica nada: el sitio para eso es el proxy. Y dejarlo fuera del *catch-all* no
-es un detalle de la prosa: es una conjunción en la regla, y es lo que llevan **los tres** ficheros
-que entregan un respaldo desplegable —el ejemplo de `examples/traefik/`, la plantilla de producción
-de `compose.yml` y la variante de *provider de fichero* del README del ejemplo—:
+es un detalle de la prosa: son **dos** conjunciones en la regla —la de `/metrics` y la que cierra el
+**leak de las páginas de tema**—, y las llevan las **cinco** definiciones de respaldo desplegable que
+entrega este repositorio, en **cuatro** ficheros: el ejemplo de `examples/traefik/` (sus labels), la
+plantilla de producción de `compose.yml`, este mismo `README.md` y las **dos** del README del ejemplo
+—el bloque de prosa y la variante de *provider de fichero*—. La segunda no es cosmética: el nombre de
+cada tema **es** la ruta de su página, así que sin ella el respaldo publicaba los paths de las seis
+páginas de tema que **no** son el alias del código por defecto, con `200` y los marcadores
+`{{code}}`/`{{reason}}`/`{{description}}` a la vista, a quien preguntara por un Host sin router
+propio.
 
 ```yaml
-traefik.http.routers.errserve-catchall.rule: HostRegexp(`.+`) && !Path(`/metrics`)
+traefik.http.routers.errserve-catchall.rule: HostRegexp(`.+`) && !Path(`/metrics`) && (!PathRegexp(`\.html?((%2[fF])|/|$)`) || Path(`/default.html`) || Path(`/default.htm`))
 ```
 
-`tests/traefik_catchall.rs` la guarda, porque la comprobación de extremo a extremo necesita un motor
+`tests/traefik_catchall.rs` las guarda, porque la comprobación de extremo a extremo necesita un motor
 de contenedores y no corre en el CI: sin esa prueba, la fuga solo se descubriría volviendo a
-desplegar. Y quitarla no rompe el respaldo: una petición a `/metrics` no casa con ningún router,
-Traefik responde su propio `404` —19 B, texto plano, sin `X-Robots-Tag`— y el servicio ni se entera,
-mientras que para cualquier otro path el respaldo sigue sirviendo el código real (`/` → `404` con la
-firma del servicio, `/503` → `503` con su `Retry-After`).
+desplegar. Y quitar la de `/metrics` no rompe el respaldo: una petición a `/metrics` no casa con
+ningún router, Traefik responde su propio `404` —19 B, texto plano, sin `X-Robots-Tag`— y el servicio
+ni se entera, mientras que para cualquier otro path el respaldo sigue sirviendo el código real
+(`/` → `404` con la firma del servicio, `/503` → `503` con su `Retry-After`).
 
 `/version` sí se queda a la vista **a propósito**, por paridad con `error-pages`: publica la versión
 y nada más, y hoy no hay ningún aviso que lo haga explotable.
@@ -394,9 +403,13 @@ Para construirla en local (docker por defecto; `just engine=podman` para podman)
 just build          # imagen, con la versión del último tag de git y `latest`
 just run            # contenedor en 8080
 just dev            # cargo run en el host, leyendo content/
+just smoke          # construye y corre el smoke test contra la imagen, con el motor de esta máquina
 just login          # entra en GHCR (una vez por máquina)
 just push           # publica a mano la versión y `latest`
 ```
+
+`just smoke` invoca el mismo script que los dos workflows (`.github/scripts/smoke.sh`), con el motor
+de esta máquina; `PORT=… just smoke` cambia el puerto de loopback si el `8080` está ocupado.
 
 ## CHANGELOG
 
@@ -428,15 +441,26 @@ git tag v0.2.0 && git push origin v0.2.0
 
 Eso dispara
 [`.github/workflows/release.yml`](https://github.com/atareao/errserve/blob/main/.github/workflows/release.yml),
-que construye la imagen, la **prueba con docker de verdad** —que `/404` devuelva 404, el
-`HEALTHCHECK` del `Dockerfile` y el `USER 10001:10001`; en la máquina de desarrollo no hay docker,
-solo podman, que además descarta el healthcheck al construir en formato OCI—, la empuja a GHCR con
-su versión y `latest` y crea el Release con las notas generadas. Un `workflow_dispatch` republica
-una etiqueta ya existente, pero exige indicarla en el input `tag`: en un dispatch no hay etiqueta y
-`github.ref_name` es la rama.
+que construye la imagen, la **prueba** y la empuja a GHCR con su versión y `latest` y crea el Release
+con las notas generadas. Las aserciones sobre la imagen arrancada viven en **un solo artefacto
+versionado**,
+[`.github/scripts/smoke.sh`](https://github.com/atareao/errserve/blob/main/.github/scripts/smoke.sh),
+y lo invocan **las dos** puertas: el CI en cada propuesta de cambio y el release **antes** de publicar
+nada. El motivo es una lección medida: en la `v0.8.0` la aserción `GET /css/error.css -> 200` vivía en
+un único `run:` del `release.yml`, y **dos copias de la misma lista divergen** —el cambio del contrato
+no pasó por ahí y el fallo apareció al etiquetar—. El `HEALTHCHECK` y el `USER` ya **no** se
+ejercitan solo aquí, y el **`502`** entra en la lista —el caso por el que existe el proyecto, que
+hasta ahora **ninguna** puerta nombraba—. El `HEALTHCHECK` solo se puede **exigir** cuando la imagen
+lo declara: `podman` construye en formato OCI y lo descarta, así que el script lo dice en voz alta y
+**no** lo cuenta como fallo. Un `workflow_dispatch` republica una etiqueta ya existente, pero exige
+indicarla en el input `tag`: en un dispatch no hay etiqueta y `github.ref_name` es la rama.
 
-`main` y `development` están **protegidas**: todo entra por **PR** y ningún PR se fusiona hasta que
-el check **`fmt, clippy y tests`** está en verde. El release no sustituye a ese check.
+`main` y `development` están **protegidas**: todo entra por **PR**, los **tres** checks requeridos
+—**`fmt, clippy y tests`**, **`cargo-deny`** e **`imagen`**— están marcados como requeridos en las
+**dos** ramas con `strict` (la rama ha de estar al día) y `enforce_admins` está activo, así que
+**tampoco el dueño** empuja directo: ningún PR se fusiona hasta que los tres están en verde. Y el job
+`imagen` **construye la imagen y la prueba** (`bash .github/scripts/smoke.sh`), porque construir no es
+probar. El release no sustituye a esos checks.
 
 ### La visibilidad del paquete
 
@@ -457,6 +481,7 @@ visibility* » **Public**.
 cargo run
 cargo test
 cargo fmt --check && cargo clippy -- -D warnings && cargo test   # antes de commitear
+just smoke                                                       # smoke test de la imagen, antes de commitear
 ```
 
 El repositorio compila **sin conexión**: las dependencias se resuelven contra la
