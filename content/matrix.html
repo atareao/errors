@@ -1,0 +1,812 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>{{code}} — {{reason}}</title>
+    <!--
+      Página del tema `matrix`: un documento propio, no una piel de las sobrias.
+
+      No pide nada por la red: su estilo vive en el `<style>` de aquí abajo y su
+      script en un `<script>` en línea; no carga hojas, ni fuentes, ni imágenes
+      remotas, y su script no hace ninguna llamada de red. La lluvia se dibuja en
+      un `<canvas>` y el resto es CSS.
+
+      Anima —la lluvia en el canvas, el glitch del código, el parpadeo del cursor
+      y las transiciones de las pastillas y del aviso— y **puede apagarse**: hay un
+      bloque `@media (prefers-reduced-motion: reduce)` que neutraliza cada familia;
+      el script consulta la preferencia con `matchMedia('(prefers-reduced-motion:
+      reduce)')`, la escucha con un oyente de `change` y, si el usuario pide
+      movimiento reducido, **para** de verdad la lluvia —deja de pedir fotogramas y
+      el bucle puede volver a entrar— y no arranca el glitch. También pausa el
+      dibujo con `visibilitychange` cuando la pestaña se oculta. Límite escrito: la
+      guarda del proyecto comprueba la mención de la preferencia, no que la rama sea
+      correcta; la revisión humana es la que mira si apaga de verdad.
+
+      Accesibilidad: el resultado del juego lo anuncia una sola región viva,
+      `#game-msg`; el aviso (toast) es refuerzo visual y va `aria-hidden`, para no
+      locutar el mismo texto dos veces, y las capas del glitch sólo se generan con
+      la clase `glitch-on`, para no duplicar el código en el árbol de accesibilidad.
+
+      Contraste medido a mano (objetivo AA, fondo #000000): texto #d9ffe2 19,35;
+      código #39ff14 15,49; cian #3fe0ff 13,32; tenue #7ddc9f 12,61; salida del
+      terminal #39ff14 sobre el panel #04140a 13,96 y su texto #d9ffe2 17,44.
+      Panel del juego #0b2214: cabecera y mensaje #7ddc9f 10,06, código y acierto
+      #39ff14 12,36, fallo #ffe9ec 14,46; la tecla #04140a sobre ese panel mide
+      1,13 (separación de superficie, no texto, como el `<hr>` decorativo). El
+      texto de `.boot` va sobre la lluvia, sin fondo: lleva un halo oscuro para
+      que un glifo brillante detrás no lo apague. Pastilla roja: #ffe9ec sobre
+      #b3121f 5,99. Pastilla azul: #e8f1ff sobre #1a4fd6 5,89.
+    -->
+    <style>
+      /* Estilo del tema `matrix`, autocontenido: vive dentro de la página, no se
+       * carga de ningún fichero ni se incrusta al servir. No referencia recursos
+       * externos —el contrato de la página es no pedir nada por la red— y todo lo
+       * que anima está neutralizado en `@media (prefers-reduced-motion: reduce)`,
+       * con la forma canónica de cada familia. Paleta y contraste: ver la
+       * cabecera del documento. */
+
+      :root {
+        color-scheme: dark;
+        --bg: #000000;
+        --fg: #d9ffe2;
+        --verde: #39ff14;
+        --cian: #3fe0ff;
+        --apagado: #7ddc9f;
+        --rojo: #b3121f;
+        --rojo-texto: #ffe9ec;
+        --azul: #1a4fd6;
+        --azul-texto: #e8f1ff;
+        --panel: #04140a;
+        --panel-2: #0b2214;
+        --linea: #123a1d;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        min-height: 100%;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono",
+          monospace;
+        line-height: 1.5;
+        overflow-x: hidden;
+      }
+
+      /* La lluvia digital: un canvas a pantalla completa, dibujado por el script.
+       * Nunca pide una imagen. */
+      #rain {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 0;
+        opacity: 0.5;
+        pointer-events: none;
+      }
+
+      /* Scanlines: la rejilla de un monitor de fósforo, en CSS puro y estática. */
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        z-index: 1;
+        pointer-events: none;
+        background: repeating-linear-gradient(
+          to bottom,
+          rgba(0, 255, 65, 0.07) 0,
+          rgba(0, 255, 65, 0.07) 1px,
+          transparent 1px,
+          transparent 3px
+        );
+      }
+
+      /* Viñeta del CRT: oscurece los bordes para que el texto respire. */
+      body::after {
+        content: "";
+        position: fixed;
+        inset: 0;
+        z-index: 2;
+        pointer-events: none;
+        background: radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, 0.7) 100%);
+      }
+
+      main {
+        position: relative;
+        z-index: 3;
+        max-width: 46rem;
+        margin: 0 auto;
+        padding: 4rem 1.25rem 3rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+      }
+
+      .boot {
+        margin: 0;
+        color: var(--apagado);
+        font-size: 0.85rem;
+        letter-spacing: 0.04em;
+        /* Halo oscuro para que un glifo brillante de la lluvia que pase por
+         * detrás no apague la letra: la lluvia sigue siendo la protagonista del
+         * margen, pero el texto de arranque se lee sobre ella. */
+        text-shadow:
+          0 1px 2px #000000,
+          0 -1px 2px #000000,
+          1px 0 2px #000000,
+          -1px 0 2px #000000;
+      }
+
+      .glitch {
+        position: relative;
+        margin: 0;
+        font-size: clamp(3rem, 16vw, 7rem);
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        color: var(--verde);
+        text-shadow: 0 0 8px rgba(0, 255, 65, 0.55);
+      }
+
+      /* Las dos capas de color del glitch: copian el código con `attr(data-text)`
+       * y se desplazan con clip-path. Existen y animan **sólo** con la clase
+       * `glitch-on` que el script añade —y que no añade si el usuario pide
+       * movimiento reducido—: sin ella no hay capas, así que el código no se
+       * duplica en el árbol de accesibilidad. */
+      .glitch-on::before,
+      .glitch-on::after {
+        content: attr(data-text);
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        overflow: hidden;
+        clip-path: inset(0 0 0 0);
+      }
+
+      .glitch-on::before {
+        color: var(--rojo);
+        animation: glitch-x 1.6s steps(2, end) infinite;
+      }
+
+      .glitch-on::after {
+        color: var(--cian);
+        animation: glitch-y 2.2s steps(2, end) infinite;
+      }
+
+      .terminal {
+        margin: 0;
+        padding: 0.85rem 1rem;
+        border: 1px solid var(--linea);
+        border-radius: 6px;
+        background: var(--panel);
+        font-size: 0.95rem;
+      }
+
+      .line {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .prompt {
+        color: var(--verde);
+      }
+
+      .prompt::before {
+        content: "errserve:~$ ";
+        color: var(--apagado);
+      }
+
+      .out {
+        color: var(--fg);
+      }
+
+      .caret {
+        color: var(--verde);
+        animation: parpadeo 1s step-end infinite;
+      }
+
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+      }
+
+      .pill {
+        font: inherit;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        padding: 0.6rem 1.4rem;
+        border: 0;
+        border-radius: 999px;
+        cursor: pointer;
+        transition: transform 120ms ease, box-shadow 120ms ease;
+      }
+
+      .pill:hover,
+      .pill:focus-visible {
+        transform: translateY(-2px);
+      }
+
+      .pill:focus-visible {
+        outline: 2px solid var(--fg);
+        outline-offset: 2px;
+      }
+
+      .pill-roja {
+        background: var(--rojo);
+        color: var(--rojo-texto);
+        box-shadow:
+          0 0 0 1px rgba(255, 59, 78, 0.45),
+          0 0 12px rgba(255, 59, 78, 0.35);
+      }
+
+      .pill-azul {
+        background: var(--azul);
+        color: var(--azul-texto);
+        box-shadow:
+          0 0 0 1px rgba(77, 157, 255, 0.45),
+          0 0 12px rgba(77, 157, 255, 0.35);
+      }
+
+      .game {
+        margin-top: 0.5rem;
+        padding: 1rem;
+        border: 1px solid var(--linea);
+        border-radius: 6px;
+        /* Panel **opaco**: la caja del minijuego no puede dejar pasar la lluvia
+         * —el texto de aquí hay que leerlo—. Es un tono distinto de `--panel`
+         * (un pelo más claro) para que `.key` siga leyéndose como su propia
+         * superficie sobre él. */
+        background: var(--panel-2);
+      }
+
+      .game h2 {
+        margin: 0 0 0.5rem;
+        font-size: 0.8rem;
+        font-weight: 600;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--apagado);
+      }
+
+      .game-code {
+        margin: 0 0 0.75rem;
+        font-size: 2rem;
+        letter-spacing: 0.5em;
+        color: var(--verde);
+      }
+
+      .keypad {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+
+      .key {
+        font: inherit;
+        width: 2.6rem;
+        height: 2.6rem;
+        border: 1px solid var(--linea);
+        border-radius: 6px;
+        background: var(--panel);
+        color: var(--fg);
+        cursor: pointer;
+      }
+
+      .key:hover,
+      .key:focus-visible {
+        border-color: var(--verde);
+        color: var(--verde);
+      }
+
+      .key:focus-visible {
+        outline: 2px solid var(--verde);
+        outline-offset: 2px;
+      }
+
+      .game-msg {
+        margin: 0.75rem 0 0;
+        min-height: 1.5em;
+        color: var(--apagado);
+      }
+
+      .game-msg.gana {
+        color: var(--verde);
+      }
+
+      .game-msg.pierde {
+        color: var(--rojo-texto);
+      }
+
+      .toast {
+        position: fixed;
+        left: 50%;
+        bottom: 1.5rem;
+        z-index: 4;
+        transform: translate(-50%, 12px);
+        opacity: 0;
+        max-width: 90vw;
+        padding: 0.6rem 1rem;
+        border: 1px solid var(--linea);
+        border-radius: 6px;
+        background: var(--panel);
+        color: var(--verde);
+        font-size: 0.9rem;
+        letter-spacing: 0.04em;
+        pointer-events: none;
+        transition: opacity 300ms ease, transform 300ms ease;
+      }
+
+      .toast.show {
+        opacity: 1;
+        transform: translate(-50%, 0);
+      }
+
+      @keyframes glitch-x {
+        0%,
+        100% {
+          clip-path: inset(0 0 0 0);
+          transform: translateX(0);
+        }
+        20% {
+          clip-path: inset(20% 0 60% 0);
+          transform: translateX(-4px);
+        }
+        40% {
+          clip-path: inset(60% 0 20% 0);
+          transform: translateX(4px);
+        }
+        60% {
+          clip-path: inset(35% 0 45% 0);
+          transform: translateX(-2px);
+        }
+        80% {
+          clip-path: inset(10% 0 70% 0);
+          transform: translateX(2px);
+        }
+      }
+
+      @keyframes glitch-y {
+        0%,
+        100% {
+          clip-path: inset(0 0 0 0);
+          transform: translateX(0);
+        }
+        25% {
+          clip-path: inset(50% 0 30% 0);
+          transform: translateX(3px);
+        }
+        50% {
+          clip-path: inset(15% 0 65% 0);
+          transform: translateX(-3px);
+        }
+        75% {
+          clip-path: inset(70% 0 10% 0);
+          transform: translateX(2px);
+        }
+      }
+
+      @keyframes parpadeo {
+        0%,
+        50% {
+          opacity: 1;
+        }
+        50.01%,
+        100% {
+          opacity: 0;
+        }
+      }
+
+      /* La puerta que el usuario cierra: neutraliza cada familia por su forma. */
+      @media (prefers-reduced-motion: reduce) {
+        .glitch-on::before,
+        .glitch-on::after,
+        .caret {
+          animation: none;
+        }
+
+        .pill,
+        .toast {
+          transition: none;
+        }
+      }
+    </style>
+  </head>
+  <body class="c{{code}}">
+    <canvas id="rain" aria-hidden="true"></canvas>
+    <main>
+      <p class="boot">// errserve — terminal de errores</p>
+      <h1 class="glitch" id="code" data-text="{{code}}">{{code}}</h1>
+      <div class="terminal">
+        <p class="line"><span class="prompt">status</span> <span class="out">{{reason}}</span></p>
+        <p class="line"><span class="prompt">detail</span> <span class="out">{{description}}</span></p>
+        <p class="line">
+          <span class="prompt">system</span> <span class="caret" aria-hidden="true">█</span>
+        </p>
+      </div>
+      <div class="controls">
+        <button type="button" class="pill pill-roja" id="reboot">REBOOT</button>
+        <button type="button" class="pill pill-azul" id="awake">AWAKE</button>
+      </div>
+      <section class="game" aria-labelledby="game-title">
+        <h2 id="game-title">Acceso — teclea el código de 3 dígitos</h2>
+        <p class="game-code" id="game-code" aria-live="polite">_ _ _</p>
+        <div class="keypad" id="keypad" role="group" aria-label="Teclado numérico"></div>
+        <p class="game-msg" id="game-msg" role="status" aria-live="polite"></p>
+      </section>
+    </main>
+    <div class="toast" id="toast" aria-hidden="true"></div>
+    <script>
+      (function () {
+        'use strict';
+
+        var reducido = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+        function pideQuieto() {
+          return reducido.matches;
+        }
+
+        // --- Aviso breve (toast) ---
+        // Refuerzo **visual**: no es región viva. El resultado del juego lo
+        // anuncia `#game-msg`, la única región viva del juego —si el aviso también
+        // lo anunciara, el mismo texto se locutaría dos veces en el lector—.
+        var toastEl = document.getElementById('toast');
+        var toastTemporizador = null;
+
+        function toast(mensaje) {
+          toastEl.textContent = mensaje;
+          toastEl.classList.add('show');
+          if (toastTemporizador) {
+            clearTimeout(toastTemporizador);
+          }
+          toastTemporizador = setTimeout(function () {
+            toastEl.classList.remove('show');
+          }, 2600);
+        }
+
+        // --- Glitch del código ---
+        var codigo = document.getElementById('code');
+
+        function ponGlitch(activo) {
+          if (activo && !pideQuieto()) {
+            codigo.classList.add('glitch-on');
+          } else {
+            codigo.classList.remove('glitch-on');
+          }
+        }
+
+        function reiniciaGlitch() {
+          ponGlitch(false);
+          if (pideQuieto()) {
+            return;
+          }
+          void codigo.offsetWidth;
+          ponGlitch(true);
+        }
+
+        // --- Lluvia digital ---
+        // `getContext('2d')` puede devolver null: si pasa, la lluvia no existe,
+        // pero el script **no** aborta —el minijuego, las pastillas y el aviso
+        // siguen funcionando y la página sigue siendo legible—.
+        var canvas = document.getElementById('rain');
+        var ctx =
+          canvas && typeof canvas.getContext === 'function'
+            ? canvas.getContext('2d')
+            : null;
+        var GLIFOS = 'アイウエオカキクケコサシスセソタチツテト0123456789ABCDEF';
+        var TAM = 16;
+        // Tope de área del backing store. Por encima del máximo del navegador el
+        // canvas deja de rasterizar **en silencio** y solo se ve negro, así que
+        // se limita el DPR usado —nunca por encima del real— y, si hace falta, se
+        // dibuja en un bitmap más pequeño que el CSS estira a pantalla completa.
+        var MAX_PIXELES = 12000000;
+        var gotas = [];
+        var rafId = null;
+        var enMarcha = false;
+        var midePendiente = null;
+
+        function dprUtil() {
+          var dpr = window.devicePixelRatio || 1;
+          var area = Math.max(1, window.innerWidth * window.innerHeight);
+          var tope = Math.sqrt(MAX_PIXELES / area);
+          return Math.max(0.5, Math.min(dpr, tope));
+        }
+
+        function mide() {
+          if (!ctx) {
+            return;
+          }
+          var ancho = window.innerWidth;
+          var alto = window.innerHeight;
+          var dpr = dprUtil();
+          canvas.width = Math.max(1, Math.floor(ancho * dpr));
+          canvas.height = Math.max(1, Math.floor(alto * dpr));
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          var columnas = Math.ceil(ancho / TAM);
+          gotas = [];
+          for (var i = 0; i < columnas; i = i + 1) {
+            gotas[i] = Math.floor(Math.random() * (alto / TAM));
+          }
+        }
+
+        // `resize` se agrupa: una medida por ráfaga, no una por evento.
+        function programaMide() {
+          if (midePendiente) {
+            clearTimeout(midePendiente);
+          }
+          midePendiente = setTimeout(function () {
+            midePendiente = null;
+            mide();
+          }, 150);
+        }
+
+        function fotograma() {
+          rafId = null;
+          if (!enMarcha || !ctx) {
+            return;
+          }
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.08)';
+          ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+          ctx.fillStyle = '#39ff14';
+          ctx.font = TAM + 'px monospace';
+          for (var i = 0; i < gotas.length; i = i + 1) {
+            var glifo = GLIFOS.charAt(Math.floor(Math.random() * GLIFOS.length));
+            ctx.fillText(glifo, i * TAM, gotas[i] * TAM);
+            if (gotas[i] * TAM > window.innerHeight && Math.random() > 0.975) {
+              gotas[i] = 0;
+            } else {
+              gotas[i] = gotas[i] + 1;
+            }
+          }
+          if (enMarcha) {
+            rafId = requestAnimationFrame(fotograma);
+          }
+        }
+
+        // Parar es **dejar de pedir fotogramas**: se cancela el que esté pendiente
+        // y se baja la bandera, así que el bucle sale de verdad y puede volver a
+        // entrar —no es solo «no dibujar»—.
+        function paraLluvia() {
+          enMarcha = false;
+          if (rafId !== null) {
+            cancelAnimationFrame(rafId);
+            rafId = null;
+          }
+        }
+
+        function arrancaLluvia() {
+          if (!ctx || enMarcha || document.hidden || pideQuieto()) {
+            return;
+          }
+          enMarcha = true;
+          rafId = requestAnimationFrame(fotograma);
+        }
+
+        // La preferencia se puede cambiar con la página abierta: hay que escuchar
+        // el `change` de la media query y apagar la lluvia sin recargar.
+        function aplicaPreferencia() {
+          ponGlitch(!pideQuieto());
+          if (pideQuieto()) {
+            paraLluvia();
+          } else {
+            arrancaLluvia();
+          }
+        }
+
+        if (typeof reducido.addEventListener === 'function') {
+          reducido.addEventListener('change', aplicaPreferencia);
+        } else if (typeof reducido.addListener === 'function') {
+          reducido.addListener(aplicaPreferencia);
+        }
+
+        // Pestaña oculta: se pausa el dibujo; al volver, se reanuda.
+        document.addEventListener('visibilitychange', function () {
+          if (document.hidden) {
+            paraLluvia();
+          } else {
+            arrancaLluvia();
+          }
+        });
+
+        // --- Terminal: la pastilla azul la «despierta» escribiendo la salida ---
+        var lineas = Array.prototype.slice.call(document.querySelectorAll('.out'));
+        var originales = lineas.map(function (el) {
+          return el.textContent;
+        });
+        var terminalEscribiendo = false;
+
+        function escribe(el, texto, hecho) {
+          // Reentrante: se cancela cualquier escritura anterior sobre el mismo
+          // elemento antes de reprogramar, como `toast` con su temporizador.
+          el._escribiendo = false;
+          if (el._temporizador) {
+            clearTimeout(el._temporizador);
+            el._temporizador = null;
+          }
+          if (pideQuieto()) {
+            el.textContent = texto;
+            hecho();
+            return;
+          }
+          el._escribiendo = true;
+          el.textContent = '';
+          var i = 0;
+          function paso() {
+            if (!el._escribiendo) {
+              return;
+            }
+            el.textContent = texto.slice(0, i);
+            i = i + 1;
+            if (i <= texto.length) {
+              el._temporizador = setTimeout(paso, 22);
+            } else {
+              el._temporizador = null;
+              el._escribiendo = false;
+              hecho();
+            }
+          }
+          paso();
+        }
+
+        function despiertaTerminal() {
+          if (terminalEscribiendo) {
+            return; // ya se está escribiendo: una sola cadena por vez
+          }
+          terminalEscribiendo = true;
+          var pendientes = lineas.length;
+          lineas.forEach(function (el, indice) {
+            escribe(el, originales[indice], function () {
+              pendientes = pendientes - 1;
+              if (pendientes === 0) {
+                terminalEscribiendo = false;
+                toast('TERMINAL DESPIERTA');
+              }
+            });
+          });
+        }
+
+        // --- Minijuego: acertar el código de tres dígitos ---
+        var juego = document.querySelector('.game');
+        var teclado = document.getElementById('keypad');
+        var pantalla = document.getElementById('game-code');
+        var mensaje = document.getElementById('game-msg');
+        var secreto = [];
+        var intento = [];
+        var fallos = 0;
+        var resuelto = false;
+        var reinicioTemporizador = null;
+
+        function sortea() {
+          secreto = String(100 + Math.floor(Math.random() * 900)).split('');
+        }
+
+        function pintaIntento() {
+          var celdas = ['_', '_', '_'];
+          for (var i = 0; i < intento.length; i = i + 1) {
+            celdas[i] = intento[i];
+          }
+          pantalla.textContent = celdas.join(' ');
+        }
+
+        // El reinicio diferido del intento se cancela en `reiniciaJuego`: si
+        // sobreviviera a un REBOOT, escribiría sobre un estado que ya no es el suyo.
+        function cancelaReinicioIntento() {
+          if (reinicioTemporizador) {
+            clearTimeout(reinicioTemporizador);
+            reinicioTemporizador = null;
+          }
+        }
+
+        function termina(acierto) {
+          if (acierto) {
+            resuelto = true;
+            mensaje.textContent = 'ACCESO CONCEDIDO — la simulación se rinde.';
+            mensaje.className = 'game-msg gana';
+            toast('ACCESO CONCEDIDO');
+            return;
+          }
+          fallos = fallos + 1;
+          mensaje.className = 'game-msg pierde';
+          if (fallos >= 3) {
+            mensaje.textContent = 'ACCESO DENEGADO — pista: empieza por ' + secreto[0];
+          } else {
+            mensaje.textContent = 'ACCESO DENEGADO (' + fallos + ')';
+          }
+          toast('ACCESO DENEGADO');
+        }
+
+        function introduce(digito) {
+          if (resuelto || intento.length >= 3) {
+            return;
+          }
+          intento.push(digito);
+          pintaIntento();
+          if (intento.length === 3) {
+            var acierto = intento.join('') === secreto.join('');
+            termina(acierto);
+            if (!acierto) {
+              cancelaReinicioIntento();
+              reinicioTemporizador = setTimeout(function () {
+                reinicioTemporizador = null;
+                if (!resuelto) {
+                  intento = [];
+                  pintaIntento();
+                }
+              }, 700);
+            }
+          }
+        }
+
+        function reiniciaJuego() {
+          cancelaReinicioIntento();
+          sortea();
+          intento = [];
+          fallos = 0;
+          resuelto = false;
+          mensaje.textContent = '';
+          mensaje.className = 'game-msg';
+          pintaIntento();
+        }
+
+        for (var d = 0; d <= 9; d = d + 1) {
+          (function (digito) {
+            var boton = document.createElement('button');
+            boton.type = 'button';
+            boton.className = 'key';
+            boton.textContent = String(digito);
+            boton.addEventListener('click', function () {
+              introduce(String(digito));
+            });
+            teclado.appendChild(boton);
+          })(d);
+        }
+
+        // El teclado sólo alimenta el juego cuando el foco está **dentro** de la
+        // sección: así el día que una página del operador traiga un `<input>`,
+        // escribir en él no queda secuestrado. `Tab`, `Esc` y las flechas no se
+        // tocan, y Backspace sólo se cancela si el juego lo ha consumido.
+        document.addEventListener('keydown', function (evento) {
+          if (!juego || !juego.contains(evento.target)) {
+            return;
+          }
+          if (evento.key >= '0' && evento.key <= '9') {
+            introduce(evento.key);
+          } else if (evento.key === 'Backspace' && intento.length > 0) {
+            intento = intento.slice(0, -1);
+            pintaIntento();
+            evento.preventDefault();
+          }
+        });
+
+        // --- Pastillas ---
+        document.getElementById('reboot').addEventListener('click', function () {
+          reiniciaGlitch();
+          reiniciaJuego();
+          toast('REBOOT — glitch reiniciado');
+        });
+
+        document.getElementById('awake').addEventListener('click', despiertaTerminal);
+
+        // --- Arranque ---
+        mide();
+        window.addEventListener('resize', programaMide);
+        ponGlitch(!pideQuieto());
+        arrancaLluvia();
+        sortea();
+        pintaIntento();
+        toast(pideQuieto() ? 'MODO QUIETO — respeto tu preferencia' : 'SISTEMA EN LÍNEA — errserve');
+      })();
+    </script>
+  </body>
+</html>

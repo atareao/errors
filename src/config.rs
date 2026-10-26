@@ -59,9 +59,9 @@
 //!
 //! No se lee ningún fichero de configuración (`config.yml` ni similar).
 //!
-//! `THEME` (change `self-contained-themes`, spec `error-page`) elige la hoja que
-//! se incrusta en el HTML servido, entre los temas **incorporados al binario**
-//! ([`crate::theme::THEMES`]). Un valor que no sea uno de los seis —**o la
+//! `THEME` (change `themes-as-pages`, spec `error-page`) elige la **página** del
+//! tema que se sirve, entre los temas **incorporados al binario**
+//! ([`crate::theme::THEMES`]). Un valor que no sea uno de los **siete** —**o la
 //! cadena vacía**— es un error de arranque, con el mismo criterio que
 //! `LOG_FORMAT` y `DEFAULT_ERROR_PAGE`: la variable la escribe el **operador** y
 //! quien la escribe cree que está configurando algo, así que un `default`
@@ -167,8 +167,8 @@ pub struct Config {
     /// Segundos de la cabecera `Retry-After` de los códigos que la llevan
     /// (`429` y `503`). `0` es válido («reintenta ya»).
     pub retry_after: u32,
-    /// Tema del servicio: la hoja que se incrusta en el HTML servido. Es uno de
-    /// los seis incorporados al binario ([`crate::theme::THEMES`]).
+    /// Tema del servicio: la página del tema que se sirve en el HTML. Es uno de
+    /// los **siete** incorporados al binario ([`crate::theme::THEMES`]).
     pub theme: &'static Theme,
 }
 
@@ -257,7 +257,7 @@ impl Config {
     /// están presentes: una variable presente pero vacía no cae al defecto,
     /// es un [`ConfigError`]. `DEFAULT_ERROR_PAGE` tiene que estar además en el
     /// rango utilizable `400..=599`. `LOG_FORMAT` tiene que ser `text` o `json`
-    /// con el mismo criterio, y `THEME` uno de los seis temas incorporados
+    /// con el mismo criterio, y `THEME` uno de los **siete** temas incorporados
     /// —incluida la cadena vacía en el rechazo—. `RETRY_AFTER` también es
     /// obligatoriamente numérica cuando está presente, pero **sin** rango: `0`
     /// es válido. Las claves desconocidas se ignoran.
@@ -271,7 +271,7 @@ impl Config {
     /// presente y su valor no es un entero de `400` a `599`,
     /// [`ConfigError::InvalidRetryAfter`] si `RETRY_AFTER` está presente y su
     /// valor no se puede interpretar como `u32`, y [`ConfigError::UnknownTheme`]
-    /// si `THEME` está presente y su valor no es uno de los seis temas
+    /// si `THEME` está presente y su valor no es uno de los **siete** temas
     /// incorporados.
     pub fn from_env_iter<I>(iter: I) -> Result<Config, ConfigError>
     where
@@ -339,7 +339,7 @@ impl Config {
         // el error. El canal de la cabecera `X-Theme` es el otro carril, y ahí
         // un valor desconocido cae al configurado sin error (ver
         // [`crate::theme::resolve`]). Sin la variable, el tema es el de siempre:
-        // `default`, la hoja que el proyecto ya trae.
+        // `default`, la página del tema que el proyecto ya trae.
         let theme = match vars.get(THEME_VAR) {
             Some(raw) => {
                 theme::theme_by_name(raw).ok_or_else(|| ConfigError::UnknownTheme(raw.clone()))?
@@ -652,13 +652,11 @@ mod tests {
         );
     }
 
-    // --- THEME (change `self-contained-themes`, tasks.md 1.5) --------------
+    // --- THEME (change `themes-as-pages`, tasks.md de la fase GREEN) --------
     //
     // `THEME` la escribe el **operador**, así que se comporta como `LOG_FORMAT`
-    // y `DEFAULT_ERROR_PAGE`: un valor que no sea uno de los temas incorporados
-    // —o la cadena vacía— aborta el arranque. En RED `THEME` es todavía una
-    // clave desconocida para `from_env_iter`, de modo que devuelve `Ok` y la
-    // prueba falla por la aserción (`expect_err`), no por compilación.
+    // y `DEFAULT_ERROR_PAGE`: un valor que no sea uno de los **siete** temas
+    // incorporados —o la cadena vacía— aborta el arranque.
 
     #[test]
     fn un_theme_desconocido_no_arranca() {
@@ -673,14 +671,28 @@ mod tests {
 
         // La comprobación de la lista es **a propósito**: quien escribe `THEME`
         // cree que está configurando algo, así que el error tiene que decirle
-        // qué puede escribir en su lugar —los temas incorporados—, no solo que
-        // se equivocó.
-        for nombre in ["minimal", "terminal", "paper", "amber", "compact"] {
+        // qué puede escribir en su lugar —los siete temas incorporados—, no solo
+        // que se equivocó.
+        for nombre in [
+            "default", "minimal", "terminal", "paper", "amber", "compact", "matrix",
+        ] {
             assert!(
                 message.contains(nombre),
                 "el error tiene que enumerar los temas válidos: falta `{nombre}` en {message}"
             );
         }
+    }
+
+    #[test]
+    fn el_theme_matrix_es_valido() {
+        // `matrix` es el séptimo tema: `THEME=matrix` tiene que arrancar, no ser
+        // un valor desconocido.
+        let config = Config::from_env_iter(env(&[("THEME", "matrix")]))
+            .expect("`THEME=matrix` es uno de los siete temas válidos");
+        assert_eq!(
+            config.theme.name, "matrix",
+            "`THEME=matrix` tiene que elegir el tema `matrix`"
+        );
     }
 
     #[test]

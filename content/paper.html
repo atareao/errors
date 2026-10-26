@@ -1,15 +1,24 @@
-/* Hoja del tema `paper`.
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>{{code}} — {{reason}}</title>
+    <style>
+/* Estilo de la página del tema `paper`.
  *
- * Es la hoja de la página de error: una sola página sirve cualquier código, y
- * su código, su razón y su descripción los rellena el servidor al servir. El
- * servidor la incrusta en el HTML al servir, sustituyendo el `<link>` de la
- * página por un bloque de estilo con estas reglas, así que no puede referenciar
- * recursos externos: nada de hojas importadas ni de ficheros remotos.
- * Si animase, tendría que neutralizarlo en `prefers-reduced-motion: reduce`.
+ * Vive dentro de la página: un tema es una página, así que estas reglas no se
+ * cargan de ningún fichero ni se incrustan al servir, y la página no puede pedir
+ * nada por la red —nada de hojas importadas ni de ficheros remotos—. Si animase,
+ * tendría que neutralizarlo en `prefers-reduced-motion: reduce`.
  *
  * Serif y fondo crema: el aire de un documento impreso. Márgenes generosos y
  * una regla discreta. El marcado lleva la clase `c<código>` en el `body`, pero
  * este tema no la usa.
+ *
+ * Contraste medido a mano (objetivo AA): fg/bg 14,01, accent/bg 6,85 y muted/bg
+ * 5,62.
  *
  * El `<hr>` decorativo —un separador, no información— se queda fuera del 3:1
  * de WCAG 1.4.11, que cubre el contenido no textual necesario para entender el
@@ -82,3 +91,15 @@ footer {
   font-style: italic;
   color: var(--muted);
 }
+    </style>
+  </head>
+  <body class="c{{code}}">
+    <main>
+      <h1>{{code}}</h1>
+      <h2>{{reason}}</h2>
+      <hr />
+      <p>{{description}}</p>
+    </main>
+    <footer>errserve</footer>
+  </body>
+</html>
