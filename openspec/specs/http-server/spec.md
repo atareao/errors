@@ -7,22 +7,11 @@ El contrato de arranque y servicio: qué variables de entorno se leen y con qué
 
 ### Requirement: La configuración se lee solo del entorno
 
-La aplicación SHALL leer su configuración exclusivamente de variables de entorno: `PORT` (puerto de
-escucha, por defecto `8080`), `LOG_LEVEL` (filtro de registro, por defecto `info`), `LOG_FORMAT` (formato
-del registro, `text` o `json`, por defecto `text`), `CONTENT_DIR` (directorio de páginas y assets del
-operador, por defecto `content`; es un *override* de los recursos embebidos en el binario, no la única
-fuente de páginas y hojas), `DEFAULT_ERROR_PAGE` (código por defecto, por defecto `404`), `RETRY_AFTER`
-(segundos de la cabecera `Retry-After` de los códigos que la llevan, por defecto `120`) y `THEME` (tema de
-las páginas HTML, por defecto `default`, uno de los temas incorporados al binario). NO SHALL leer ningún
-fichero de configuración como `config.yml`.
+La aplicación SHALL leer su configuración exclusivamente de variables de entorno: `PORT` (puerto de escucha, por defecto `8080`), `LOG_LEVEL` (filtro de registro, por defecto `info`), `LOG_FORMAT` (formato del registro, `text` o `json`, por defecto `text`), `CONTENT_DIR` (directorio de las páginas y los assets del operador, por defecto `content`; es un *override* de las páginas embebidas en el binario, no la única fuente de páginas), `DEFAULT_ERROR_PAGE` (código por defecto, por defecto `404`; NO SHALL nombrar ningún fichero), `RETRY_AFTER` (segundos de la cabecera `Retry-After` de los códigos que la llevan, por defecto `120`) y `THEME` (tema de las páginas HTML, por defecto `default`, uno de los **siete** temas incorporados al binario). NO SHALL leer ningún fichero de configuración como `config.yml`.
 
-Una variable presente pero vacía NO SHALL confundirse con una ausente. Una variable numérica —`PORT`,
-`DEFAULT_ERROR_PAGE`, `RETRY_AFTER`— presente pero no interpretable SHALL abortar el arranque con un error
-que nombre la variable. Un `THEME` que no sea uno de los temas incorporados —o la cadena vacía— SHALL
-abortar el arranque con un error que nombre `THEME`, en vez de degradar en caliente al tema por defecto.
+Una variable presente pero vacía NO SHALL confundirse con una ausente. Una variable numérica —`PORT`, `DEFAULT_ERROR_PAGE`, `RETRY_AFTER`— presente pero no interpretable SHALL abortar el arranque con un error que nombre la variable. Un `THEME` que no sea uno de los siete nombres —`default`, `minimal`, `terminal`, `paper`, `amber`, `compact` o `matrix`—, o la cadena vacía, SHALL abortar el arranque con un error que nombre `THEME` y enumere los siete, en vez de degradar en caliente al tema por defecto.
 
-Que el directorio de `CONTENT_DIR` no exista NO SHALL impedir el arranque, ni cambiar el `200` de un asset
-embebido, ni degradar ninguna página de error a un `500`: los recursos embebidos cubren ese caso.
+Que el directorio de `CONTENT_DIR` no exista NO SHALL impedir el arranque, ni cambiar el `200` de un asset, ni degradar ninguna página de error a un `500`: las páginas embebidas cubren ese caso.
 
 #### Scenario: Sin PORT escucha en 8080
 - **GIVEN** un entorno sin `PORT`
@@ -63,7 +52,7 @@ embebido, ni degradar ninguna página de error a un `500`: los recursos embebido
 #### Scenario: un THEME desconocido no arranca
 - **GIVEN** `THEME=neon`
 - **WHEN** la aplicación arranca
-- **THEN** el arranque SHALL fallar con un error que nombre `THEME` y enumere los temas válidos
+- **THEN** el arranque SHALL fallar con un error que nombre `THEME` y enumere los siete temas válidos
 
 ### Requirement: Los endpoints de servicio siempre responden 200
 
@@ -81,45 +70,11 @@ Los endpoints `/healthz`, `/health`, `/health/live` y `/live` SHALL responder si
 - **THEN** SHALL responder `200` con `Content-Type` JSON
 - **AND** el cuerpo SHALL incluir la clave `version`
 
-### Requirement: Los assets estáticos se sirven desde CONTENT_DIR
-
-Las peticiones que no son páginas de error ni endpoints de servicio SHALL servirse como ficheros estáticos: el fichero de `CONTENT_DIR` cuando exista y se pueda leer, con su `Content-Type` correspondiente, y, si no, el asset **embebido** equivalente si lo hubiera. Un fichero de `CONTENT_DIR` **que se pueda leer** SHALL ganar al asset embebido del mismo path.
-
-Un asset embebido NO SHALL ser una página de error: una página HTML de error se sirve por la vía de la página de error, con el código resuelto, nunca como asset y nunca con un `200`. La hoja `css/error.css` SHALL estar embebida, de modo que el HTML embebido que la referencia se sirva completo.
-
-#### Scenario: un CSS se sirve desde el directorio de contenido
-- **GIVEN** el fichero `content/css/404.css`
-- **WHEN** se pide `GET /css/404.css`
-- **THEN** SHALL responder `200`
-- **AND** el `Content-Type` SHALL ser `text/css`
-
-#### Scenario: la hoja embebida se sirve sin directorio de contenido
-- **GIVEN** un servicio arrancado sin ningún fichero en `CONTENT_DIR`
-- **WHEN** se pide `GET /css/error.css`
-- **THEN** SHALL responder `200`
-- **AND** el `Content-Type` SHALL ser `text/css`
-- **AND** el cuerpo NO SHALL estar vacío
-- **AND** NO SHALL ser una página de error
-
-#### Scenario: el fichero del directorio gana al asset embebido
-- **GIVEN** un `CONTENT_DIR` con un `css/error.css` propio, distinto del embebido
-- **WHEN** se pide `GET /css/error.css`
-- **THEN** el cuerpo SHALL ser el de ese fichero
-- **AND** NO SHALL ser el asset embebido
-
-#### Scenario: un asset embebido no convierte una página de error en un 200
-- **GIVEN** un servicio arrancado sin ningún fichero en `CONTENT_DIR`
-- **WHEN** se pide `GET /404.html`
-- **THEN** el estado SHALL ser `404`
-- **AND** NO SHALL ser `200`
-
 ### Requirement: La imagen se construye desde el árbol y trae las páginas dentro
 
-La imagen SHALL construirse con `docker build` desde el árbol del repositorio, sin depender de nada
-que no esté versionado. El stage de **compilación** SHALL disponer de `content/` —la página y
-`css/error.css`—, porque el binario las embebe al compilar y `cargo` NO SHALL poder compilar el crate
-sin ellas. Que falten NO SHALL descubrirse por primera vez al publicar una etiqueta: el CI SHALL
-construir la imagen en cada propuesta de cambio.
+La imagen SHALL construirse con `docker build` desde el árbol del repositorio, sin depender de nada que no esté versionado. El stage de **compilación** SHALL disponer de `content/` —las **siete** páginas de tema, `default.html`, `minimal.html`, `terminal.html`, `paper.html`, `amber.html`, `compact.html` y `matrix.html`—, porque el binario las embebe al compilar y `cargo` NO SHALL poder compilar el crate sin ellas. Que falten NO SHALL descubrirse por primera vez al publicar una etiqueta: el CI SHALL construir la imagen en cada propuesta de cambio.
+
+El stage de **runtime** SHALL copiar `content/` solo si la imagen tiene que servir esas páginas y no las del binario. Es una decisión abierta y declarada (`design.md`, preguntas abiertas): `CONTENT_DIR` es la única ruta de estáticos y, como la capa del disco gana a la embebida, esa segunda copia decide **qué bytes se sirven en producción**. Quitarla haría que la imagen sirviese las páginas embebidas.
 
 #### Scenario: la imagen se construye sin caché previa
 - **GIVEN** el árbol del repositorio, sin ningún `target/` ni caché de construcción previa
@@ -129,8 +84,8 @@ construir la imagen en cada propuesta de cambio.
 #### Scenario: el stage de compilación dispone de las páginas
 - **GIVEN** el stage `builder` de la imagen
 - **WHEN** compila el crate
-- **THEN** `content/` SHALL estar disponible en el contexto de compilación, con la página y la hoja `css/error.css`
-- **AND** el binario SHALL quedar con la página embebida
+- **THEN** `content/` SHALL estar disponible en el contexto de compilación, con las siete páginas de tema
+- **AND** el binario SHALL quedar con las siete páginas embebidas
 
 #### Scenario: la imagen sirve las páginas sin ficheros externos
 - **GIVEN** la imagen arrancada sin montar ningún volumen
@@ -250,3 +205,29 @@ comprobación de extremo a extremo necesita un motor de contenedores y NO corre 
 - **WHEN** se inspecciona el **valor** de la regla
 - **THEN** esa definición SHALL considerarse incumplidora
 - **AND** la prueba SHALL fallar nombrándola
+
+### Requirement: Los ficheros de CONTENT_DIR se sirven como assets
+
+Las peticiones que no son páginas de error ni endpoints de servicio SHALL servirse como ficheros estáticos: el fichero de `CONTENT_DIR` cuando exista y se pueda leer, con su `Content-Type` correspondiente. NO SHALL existir una tabla de **assets embebidos**: la única fuente de assets es el disco de `CONTENT_DIR`, porque las páginas del proyecto van embebidas por la vía de la página de error y no por la de los assets.
+
+Las **páginas de tema** SHALL servirse como assets **crudos** si se piden por su path (`GET /minimal.html`, `/terminal.html`, `/paper.html`, `/amber.html`, `/compact.html`, `/matrix.html`): responden `200` con el fichero tal cual y los marcadores a la vista. Es coherente con cómo se servían antes las hojas de `content/themes/`, y no se intercepta porque hacerlo rompería «un asset existente gana» y añadiría casos especiales al middleware. La excepción SHALL ser `/default.html` y `/default.htm`: su path se clasifica como el código por defecto y NO SHALL servirse como asset.
+
+Una página HTML de error NO SHALL servirse por esta vía: una petición cuyo path normalizado resuelva un código de error SHALL pasar por la página de error, con el código resuelto y nunca con un `200`.
+
+#### Scenario: un CSS se sirve desde el directorio de contenido
+- **GIVEN** el fichero `content/css/404.css`
+- **WHEN** se pide `GET /css/404.css`
+- **THEN** SHALL responder `200`
+- **AND** el `Content-Type` SHALL ser `text/css`
+
+#### Scenario: una página de tema se sirve cruda si se pide por su path
+- **GIVEN** un `CONTENT_DIR` con las siete páginas de tema
+- **WHEN** se pide `GET /matrix.html`
+- **THEN** SHALL responder `200`
+- **AND** el cuerpo SHALL ser el fichero tal cual, con los marcadores a la vista
+
+#### Scenario: una página de error no se sirve como asset con un 200
+- **GIVEN** un servicio arrancado con las siete páginas de tema
+- **WHEN** se pide `GET /404.html`
+- **THEN** el estado SHALL ser `404`
+- **AND** NO SHALL ser `200`
