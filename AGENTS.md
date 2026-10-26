@@ -6,28 +6,32 @@
 
 ## Estado real del repositorio (verificado)
 
-Implementado, verificado y versionado. **Quince** changes están **archivados** en
+Implementado, verificado y versionado. **Dieciséis** changes están **archivados** en
 `openspec/changes/archive/` —cinco con fecha `2026-10-24` (`error-pages-parity`, `error-page-coverage`,
 `release-hardening`, `security-hardening` y `retry-after-configurable`), ocho con `2026-10-25`
 (`embedded-error-pages`, `error-page-template`, `self-contained-themes`, `theme-sheet-contracts`,
-`theme-visual-review`, `catchall-metrics-exclusion`, `fix-image-build` y `publish-crate-on-tag`) y dos
-con `2026-10-26` (`themes-as-pages` y `smoke-test-and-catchall-html-exclusion`)— y sus requisitos viven
+`theme-visual-review`, `catchall-metrics-exclusion`, `fix-image-build` y `publish-crate-on-tag`) y tres
+con `2026-10-26` (`themes-as-pages`, `smoke-test-and-catchall-html-exclusion` y
+`themes-from-content-dir`)— y sus requisitos viven
 fusionados en los cuatro specs de `openspec/specs/`: `error-page`, `http-server`, `observability` y
-`response-extras`. Los **dos últimos** changes archivados: `themes-as-pages` —el tema deja de ser
+`response-extras`. Los **tres últimos** changes archivados: `themes-as-pages` —el tema deja de ser
 **una hoja** y pasa a ser **una página**, con la cascada del cuerpo HTML en un solo paso—, que entró en
-`error-page` y `http-server` (+6 requisitos añadidos, ~8 modificados, -5 retirados); y
+`error-page` y `http-server` (+6 requisitos añadidos, ~8 modificados, -5 retirados);
 `smoke-test-and-catchall-html-exclusion` —el smoke test pasa a un artefacto único que corren los dos
 workflows, el respaldo gana la exclusión del leak de las páginas de tema y el `502` entra en una
-puerta—, que entró **solo** en `http-server` (+3 añadidos, ~1 modificado, 0 retirados). **No hay ningún
-change en curso**: `openspec/changes/` solo tiene `archive/`, y `openspec validate --all --strict` da
-**4 passed, 0 failed**.
+puerta—, que entró **solo** en `http-server` (+3 añadidos, ~1 modificado, 0 retirados); y
+`themes-from-content-dir` —la lista de temas deja de ser una tabla cerrada en el binario y
+`CONTENT_DIR` **añade** temas al **registro** construido al arrancar, con la trampa del volumen sin
+montar—, que entró en `error-page` y `http-server` (+1 añadido, ~3 modificados, 0 retirados). **No hay
+ningún change en curso**: `openspec/changes/` solo tiene `archive/`, y `openspec validate --all
+--strict` da **4 passed, 0 failed**.
 
-- `src/main.rs` — arranque, router, middleware de páginas de error, la lista `SERVICE_ENDPOINTS` que acota ese middleware, el clasificador `is_error_page_path` (con el alias `/default.html`/`/default.htm`) y los tests de router.
-- `src/config.rs` — configuración desde el entorno (`Config`, `ConfigError`, `from_env_iter`).
+- `src/main.rs` — arranque, router, middleware de páginas de error, la lista `SERVICE_ENDPOINTS` que acota ese middleware, el clasificador `is_error_page_path` (con el alias `/default.html`/`/default.htm`) y los tests de router; el tema se resuelve **contra el registro** antes del `spawn_blocking`, y `X-Theme` **nunca** compone una ruta.
+- `src/config.rs` — configuración desde el entorno (`Config`, `ConfigError`, `from_env_iter`); `Config` **posee** el registro (`themes: Themes`) y el tema elegido **por valor** (`theme: Theme`, ya no `&'static Theme`), y `ConfigError` gana `UnknownTheme { value, validos }`.
 - `src/path.rs` — normalización del path (percent-decode + plegado de `.`/`..`).
 - `src/resolve.rs` — cascadas de código y formato, rango `400..=599`, y las tablas de razón canónica (`canonical_reason`) y descripción (`description`) —**fuente única** del texto de los cuatro formatos, que el HTML incrusta al servir—.
 - `src/render.rs` — cuerpo por formato y cabeceras; la cascada del HTML tiene **un solo paso** (la página del tema, `Theme::page`), ya **sin capa por código**, y el HTML se sirve **relleno** (`plantilla`: sustituye `{{code}}`/`{{reason}}`/`{{description}}` por el código resuelto y las tablas de `resolve`, escapando lo insertado).
-- `src/theme.rs` — los **siete temas** (`THEMES`, `THEME_NAMES`, `theme_by_name`, `resolve`), la ruta de cada página **derivada del nombre** (`Theme::page_path` → `"<nombre>.html"`) y `Theme::page`, que resuelve la página **como un asset** (disco si se puede leer, embebida si no). Aquí vive el `#[cfg(test)]` con las **tres guardas** sobre las páginas.
+- `src/theme.rs` — el **registro de temas**: los siete incorporados (`INCORPORATED`) más los **descubiertos** en `CONTENT_DIR` (`struct Themes`, con `incorporados`, `descubrir`, `by_name`, `names` e `iter`), y la resolución `resolve(registry, requested, configured)`. La ruta de cada página sigue **derivada del nombre** (`Theme::page_path` → `"<nombre>.html"`) y `Theme::page` resuelve la página **como un asset** (disco si se puede leer; la copia embebida si no, y **solo** un incorporado la tiene: un tema descubierto sin fichero responde el respaldo de texto). Aquí vive el `#[cfg(test)]` con las **tres guardas** sobre las páginas.
 - `src/embedded.rs` — las **siete páginas de tema** embebidas con `include_str!` (`DEFAULT_PAGE`, `MINIMAL_PAGE`, …, `MATRIX_PAGE`), una por nombre; el binario sirve los siete diseños sin ficheros de datos. Aquí vive la prueba de paridad de las dos copias, **página a página** (D5).
 - `src/metrics.rs` — contador de páginas servidas por código **y por origen del código**, y su serialización en texto Prometheus.
 - `content/` — **siete páginas planas y nada más**, una por nombre en la **raíz** (`default.html`, `minimal.html`, `terminal.html`, `paper.html`, `amber.html`, `compact.html` y `matrix.html`), cada una **autocontenida** con su `<style>` dentro (`matrix`, también su `<script>`), con los tres marcadores `{{code}}`/`{{reason}}`/`{{description}}` y el `<main>` —el *landmark* que el tema `default` anima— y el `<footer>errserve</footer>` **sin `href`** de las seis sobrias. Las siete van **embebidas** en el binario. Ya no hay hoja ni `content/css/`.
@@ -37,15 +41,19 @@ change en curso**: `openspec/changes/` solo tiene `archive/`, y `openspec valida
   arrancada** (estado, cabeceras, cuerpo del HTML, `USER` y `HEALTHCHECK`). Lo invocan por su ruta
   literal los **dos** workflows que necesitan probar la imagen: `ci.yml` (job `imagen`, tras
   construirla) y `release.yml` (job `imagen`, antes de publicar). No construye ni publica nada.
+  Arranca **dos** contenedores: el de siempre —la imagen tal cual, que prueba el leak
+  (`/minimal.html` → `200`)— y un **segundo** con un `CONTENT_DIR` **montado** y un tema de más, en su
+  propio puerto de loopback (`PORT_VOLUMEN`, por defecto `PORT` + 1), porque el barrido del directorio
+  del operador depende de que el montaje sea legible por el uid **10001** con el que corre la imagen.
 - `tests/` — las guardas sobre ficheros versionados: `content_pages.rs` (**7**, la paridad byte a
   byte de las seis páginas sobrias), `traefik_catchall.rs` (**9**, las **cinco** definiciones de
   respaldo de los **cuatro** ficheros, con la regresión de la forma anclada al fin de cadena) y
   `puertas.rs` (**9**, los dos workflows invocan el script, ninguno duplica sus aserciones y
-  `check.sh` conserva el `502`).
+  `check.sh` conserva el `502`); y los fixtures del descubrimiento, en `tests/fixtures/temas-extras/`
+  y `tests/fixtures/temas-extension/`.
 
-Puertas en verde: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` y **235 tests**
-(**210** unitarias + **7** de integración sobre el contenido de `content/` + **9** sobre los
-respaldos de Traefik + **9** sobre las puertas del CI).
+Puertas en verde: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` y **256 tests**
+(**231** unitarias + **7** de `content_pages` + **9** de `puertas` + **9** de `traefik_catchall`).
 Verificado además contra el servidor real y contra la imagen.
 
 ## Qué es
@@ -289,7 +297,7 @@ resolución del código. El puerto por defecto del servicio es **8080**, el mism
 
 ```sh
 cargo run                                   # servidor
-cargo test                                  # 235 tests
+cargo test                                  # 256 tests
 cargo test <substring>                      # un test por nombre
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
@@ -297,7 +305,7 @@ cargo check --offline                       # el repo compila SIN RED (caché lo
 cargo deny check -D warnings                # dependencias: avisos, licencias, duplicaciones y fuentes
 just changelog [v0.3.0]                     # antepone al CHANGELOG la sección de lo no etiquetado
 just build | run | dev                      # empaquetado (docker por defecto; just engine=podman ...)
-just smoke                                  # build + smoke test; PORT=… cambia el loopback
+just smoke                                  # build + smoke test; PORT=… y PORT_VOLUMEN=… cambian los dos loopback
 ```
 
 Orden obligatorio antes de commit: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`.
@@ -456,7 +464,7 @@ tampoco reproduce el del runner: la imagen etiquetada `v0.8.0` construida en est
   autocontención—, pero tiene que poder apagarse: una página de error que se mueve mientras el usuario
   intenta leer qué ha pasado es peor página de error. Las guardas **no** miran la página del operador
   en `CONTENT_DIR/<nombre>.html`: cubren las páginas **incorporadas** al binario
-  (`THEMES[i].embedded`), y la del operador es suya —el servicio no la inspecciona al servir—. Escanean
+  (`INCORPORATED[i].embedded`), y la del operador es suya —el servicio no la inspecciona al servir—. Escanean
   la página **sin sus comentarios** —textual sobre bytes, sin `regex` ni parser—, y lo hacen **por
   regiones**: el `<!-- … -->` en todo el documento, el `/* … */` **solo** dentro de `<style>` o
   `<script>` —es la sintaxis de CSS y de JavaScript, no de HTML— y la línea `//` **solo** dentro de
@@ -478,7 +486,7 @@ tampoco reproduce el del runner: la imagen etiquetada `v0.8.0` construida en est
   como `* { animation: none }`—; y **ninguna guarda mide el aspecto** —paleta, escala, jerarquía y
   espaciado se revisan a ojo—. Los contratos se comprueban con fixtures en línea a través de
   `pub fn incumplimientos(pagina: &[u8])` y `pub enum Incumplimiento` —**bajo `#[cfg(test)]`**: el crate
-  es solo binario y el servicio no valida la página—, más las **tres guardas** sobre la tabla `THEMES`.
+  es solo binario y el servicio no valida la página—, más las **tres guardas** sobre la tabla `INCORPORATED`.
 - **El `<hr>` de las seis páginas sobrias es decorativo, y su contraste bajo es una decisión medida.**
   Va entre **1,31 y 1,55** según la página —1,31 `terminal`, 1,39 `paper`, **1,43** claro y **1,55**
   oscuro en `default`/`minimal`/`compact`, 1,48 `amber`—, por debajo del 3:1 de WCAG 1.4.11, y queda

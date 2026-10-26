@@ -7,9 +7,9 @@ El contrato de arranque y servicio: qué variables de entorno se leen y con qué
 
 ### Requirement: La configuración se lee solo del entorno
 
-La aplicación SHALL leer su configuración exclusivamente de variables de entorno: `PORT` (puerto de escucha, por defecto `8080`), `LOG_LEVEL` (filtro de registro, por defecto `info`), `LOG_FORMAT` (formato del registro, `text` o `json`, por defecto `text`), `CONTENT_DIR` (directorio de las páginas y los assets del operador, por defecto `content`; es un *override* de las páginas embebidas en el binario, no la única fuente de páginas), `DEFAULT_ERROR_PAGE` (código por defecto, por defecto `404`; NO SHALL nombrar ningún fichero), `RETRY_AFTER` (segundos de la cabecera `Retry-After` de los códigos que la llevan, por defecto `120`) y `THEME` (tema de las páginas HTML, por defecto `default`, uno de los **siete** temas incorporados al binario). NO SHALL leer ningún fichero de configuración como `config.yml`.
+La aplicación SHALL leer su configuración exclusivamente de variables de entorno: `PORT` (puerto de escucha, por defecto `8080`), `LOG_LEVEL` (filtro de registro, por defecto `info`), `LOG_FORMAT` (formato del registro, `text` o `json`, por defecto `text`), `CONTENT_DIR` (directorio de las páginas y los assets del operador, por defecto `content`; es un *override* de las páginas embebidas en el binario, no la única fuente de páginas), `DEFAULT_ERROR_PAGE` (código por defecto, por defecto `404`; NO SHALL nombrar ningún fichero), `RETRY_AFTER` (segundos de la cabecera `Retry-After` de los códigos que la llevan, por defecto `120`) y `THEME` (tema de las páginas HTML, por defecto `default`: uno de los **siete** incorporados al binario **o un tema descubierto en `CONTENT_DIR`**). NO SHALL leer ningún fichero de configuración como `config.yml`.
 
-Una variable presente pero vacía NO SHALL confundirse con una ausente. Una variable numérica —`PORT`, `DEFAULT_ERROR_PAGE`, `RETRY_AFTER`— presente pero no interpretable SHALL abortar el arranque con un error que nombre la variable. Un `THEME` que no sea uno de los siete nombres —`default`, `minimal`, `terminal`, `paper`, `amber`, `compact` o `matrix`—, o la cadena vacía, SHALL abortar el arranque con un error que nombre `THEME` y enumere los siete, en vez de degradar en caliente al tema por defecto.
+Una variable presente pero vacía NO SHALL confundirse con una ausente. Una variable numérica —`PORT`, `DEFAULT_ERROR_PAGE`, `RETRY_AFTER`— presente pero no interpretable SHALL abortar el arranque con un error que nombre la variable. Un `THEME` que no sea uno de los nombres del **registro** —los siete incorporados más los descubiertos en `CONTENT_DIR`—, o la cadena vacía, SHALL abortar el arranque con un error que nombre `THEME` y **enumere los nombres del registro**, en vez de degradar en caliente al tema por defecto. SHALL quedar escrito el **precio medido**: el error enumera los nombres que el registro **tenga en ese arranque**, así que un `THEME` correcto cuyo fichero **todavía** no esté en `CONTENT_DIR` —un volumen que aún no se ha montado— aborta el arranque; es la contrapartida de mantener el aborto, y va escrito para que no sorprenda.
 
 Que el directorio de `CONTENT_DIR` no exista NO SHALL impedir el arranque, ni cambiar el `200` de un asset, ni degradar ninguna página de error a un `500`: las páginas embebidas cubren ese caso.
 
@@ -52,7 +52,18 @@ Que el directorio de `CONTENT_DIR` no exista NO SHALL impedir el arranque, ni ca
 #### Scenario: un THEME desconocido no arranca
 - **GIVEN** `THEME=neon`
 - **WHEN** la aplicación arranca
-- **THEN** el arranque SHALL fallar con un error que nombre `THEME` y enumere los siete temas válidos
+- **THEN** el arranque SHALL fallar con un error que nombre `THEME` y enumere los nombres del registro
+
+#### Scenario: un THEME descubierto arranca
+- **GIVEN** un `CONTENT_DIR` con `neon.html` y `THEME=neon`
+- **WHEN** la aplicación arranca
+- **THEN** SHALL arrancar
+- **AND** el tema SHALL ser `neon`
+
+#### Scenario: un THEME correcto con el volumen sin montar no arranca
+- **GIVEN** `THEME=neon` y un `CONTENT_DIR` sin `neon.html`
+- **WHEN** la aplicación arranca
+- **THEN** SHALL fallar nombrando `THEME` y enumerando los nombres del registro
 
 ### Requirement: Los endpoints de servicio siempre responden 200
 

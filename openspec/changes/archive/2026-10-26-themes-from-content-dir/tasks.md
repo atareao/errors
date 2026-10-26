@@ -330,6 +330,23 @@
   `Box::leak`—; y la **2** (el coste del barrido al arrancar) sigue **abierta**, sin medir con miles de
   entradas ni con un directorio en red. Las resoluciones están escritas en `design.md`, no aquí.
 
+### Desviaciones del plan (fase 5)
+
+- **La sección del CHANGELOG se regeneró porque los primeros mensajes de commit no llevaban
+  acentos.** Los cuatro commits se rehicieron (`git reset --mixed` al punto de partida de la rama y
+  los cuatro commits otra vez, con su ortografía) y la sección se volvió a generar con
+  `just changelog v0.9.0` desde los commits definitivos, reponiendo después la prosa **literal**.
+  Motivo: el CHANGELOG es la cara pública del release y `anade`/`mas`/`al dia` son erratas.
+- **La sección generada trae una viñeta de más, y se deja a propósito.** `v0.8.1` **no es ancestro de
+  `development`** —el tag vive en `main` y `development` nunca mergeó `main` de vuelta—, así que
+  git-cliff procesa `v0.8.1..HEAD` y le entra el commit `3985680 docs(openspec): archiva el change de
+  la 0.8.1`. Se deja porque es **el patrón histórico del fichero**: ya hay **seis** viñetas
+  `- **openspec**: Archiva el change de la 0.X` en versiones anteriores (líneas 46, 182, 199, 201,
+  221, 225, 306, 307). No es un defecto de esta versión.
+- **El `grep` de erratas que se usó daba falsos positivos** por la subcadena `mas ` dentro de
+  «te**mas** »; comprobado con palabra completa, la sección no tiene ninguna errata. Merece quedar
+  escrito para que nadie «arregle» un problema que no existe.
+
 ## 4. DOCS
 
 - [x] 4.1 `README.md`: el modelo nuevo —la tabla de temas deja de ser cerrada; el directorio **añade**
@@ -416,16 +433,46 @@
 > **No se hace commit, ni PR, ni etiqueta, ni publicación hasta que el usuario lo decida.** Esta fase
 > se queda marcada y **no se ejecuta** en la fase de documentación.
 
-- [ ] 5.1 `Cargo.toml`: bump de versión (minor, permitido en `0.x`). `CHANGELOG.md` con la entrada de
+- [x] 5.1 `Cargo.toml`: bump de versión (minor, permitido en `0.x`). `CHANGELOG.md` con la entrada de
       esa versión: la tabla de temas deja de ser cerrada y el directorio añade temas.
-- [ ] 5.2 `cargo publish --dry-run --locked` y `cargo package --list --offline`: el paquete sigue
+      > **Medido:** `Cargo.toml` pasó de `0.8.1` a **`0.9.0`** (minor) y `Cargo.lock` solo cambió la
+      > versión del paquete (una línea). `CHANGELOG.md` tiene la sección `## [0.9.0]` con **cuatro**
+      > párrafos de prosa escritos a mano —qué cambia; los precios (el barrido al arrancar y la trampa
+      > del volumen sin montar); el eje que no se toca y el leak; y por qué es un minor—, más **tres**
+      > grupos generados por `just changelog v0.9.0`: `### Añadido` (`theme`, `ci`) y
+      > `### Documentación` (`openspec: Archiva el change de la 0.8.1`,
+      > `openspec: Propone themes-from-content-dir` y el `docs` del README/AGENTS). Commit
+      > `ac661f0 chore(release): 0.9.0`.
+- [x] 5.2 `cargo publish --dry-run --locked` y `cargo package --list --offline`: el paquete sigue
       llevando las siete páginas.
-- [ ] 5.3 Commit, PR a `development` y PR de `development` a `main`; etiqueta `v*`; imagen, crate y
+      > **Medido:** `cargo publish --dry-run --locked` → exit 0: empaqueta **49 files, 625.7KiB
+      > (169.5KiB compressed)**, compila el paquete extraído (`target/package/errserve-0.9.0`) y
+      > termina con `aborting upload due to dry run`. `cargo package --list --offline` lleva las
+      > **siete** páginas de tema: `content/amber.html`, `content/compact.html`, `content/default.html`,
+      > `content/matrix.html`, `content/minimal.html`, `content/paper.html` y `content/terminal.html`.
+- [x] 5.3 Commit, PR a `development` y PR de `development` a `main`; etiqueta `v*`; imagen, crate y
       Release.
-- [ ] 5.4 `openspec archive themes-from-content-dir` **después** del OK y con la fase 3 en verde; el
+      > **Medido:** PR **#64** (`feature/themes-from-content-dir` → `development`) y PR **#65**
+      > (`release: 0.9.0`, `development` → `main`), con los **tres** checks en verde en los dos
+      > (`fmt, clippy y tests`, `cargo-deny` e `imagen`). Tag **anotado** `v0.9.0` → `9ec4f84`, sobre
+      > `fad93ab` (el merge del #65 en `main`). El workflow de release (`40390265184`) terminó con sus
+      > **tres** jobs en `success`: `comprobar la etiqueta y la versión`, `construir, probar y
+      > publicar` y `publicar el crate`. **Los tres artefactos, verificados contra los registros**: en
+      > GHCR los tags `0.9.0` y `latest` comparten el **mismo** digest de índice
+      > (`sha256:41ed68c7f9ce8139ac877b103cefcc14bf4bf11ef3975a2d3bf29cddda6fdd19`), distinto del de
+      > la `0.8.1` (`sha256:edf7c8eb…`), y el `tags/list` anónimo ya lista `0.9.0`; en crates.io
+      > `errserve 0.9.0` está publicada (2026-10-26T19:52:29Z) y **no** yanked; y el Release `v0.9.0`
+      > existe, **no** es draft ni prerelease.
+- [x] 5.4 `openspec archive themes-from-content-dir` **después** del OK y con la fase 3 en verde; el
       archivado fusiona las deltas en `openspec/specs/error-page/spec.md` y
       `openspec/specs/http-server/spec.md`.
-- [ ] 5.5 Al archivar, poner al día el «Estado real del repositorio (verificado)» de `AGENTS.md`: (a)
+      > **Medido:** `openspec archive themes-from-content-dir -y` → `Change 'themes-from-content-dir'
+      > archived as '2026-10-26-themes-from-content-dir'`, tras fusionar las deltas
+      > (`error-page`: **+1** añadido y **~2** modificados; `http-server`: **~1** modificado;
+      > totales `+ 1, ~ 3, - 0, → 0`). `openspec validate --all --strict` → `Totals: 4 passed, 0
+      > failed (4 items)`; `openspec/changes/` solo tiene `archive/`, con **16** directorios; y el
+      > `tasks.md` viajó al archive con sus **24** casillas marcadas y **ninguna** sin marcar.
+- [x] 5.5 Al archivar, poner al día el «Estado real del repositorio (verificado)» de `AGENTS.md`: (a)
       los **dos** sitios que dicen «**235 tests**» (la línea de «Puertas en verde» y el comentario de
       `cargo test` del bloque de comandos) pasan a **256** (231 unitarias + 7 de `content_pages` + 9 de
       `puertas` + 9 de `traefik_catchall`); (b) el *bullet* de `src/theme.rs` nombra `THEMES`,
@@ -437,3 +484,23 @@
       de ficheros del «Estado real» tiene que nombrar `src/theme.rs` con el registro y los fixtures
       nuevos (`tests/fixtures/temas-extras/`, `tests/fixtures/temas-extension/`), y
       `.github/scripts/smoke.sh` con su segundo contenedor.
+      > **Medido:** el «Estado real» puesto al día: los **dos** sitios con «**235 tests**» pasaron a
+      > **256** —la línea de «Puertas en verde», cuyo desglose es ahora **231** unitarias + **7** de
+      > `content_pages` + **9** de `puertas` + **9** de `traefik_catchall`, y el comentario de
+      > `cargo test` del bloque de comandos—; el *bullet* de `src/theme.rs` se reescribió al
+      > **registro** (`INCORPORATED`, `struct Themes` con `incorporados`/`descubrir`/`by_name`/`names`/
+      > `iter` y `resolve(registry, requested, configured)`); el inventario pasó de **quince** a
+      > **dieciséis** changes, con `themes-from-content-dir` en el grupo del `2026-10-26` (que pasa de
+      > dos a **tres** entradas) y el párrafo «los **dos últimos**» reescrito como «los **tres
+      > últimos**» con lo que entró este change (en `error-page` y `http-server`, +1 añadido,
+      > ~3 modificados, 0 retirados); los *bullets* de `src/config.rs` (`themes: Themes`, `theme: Theme`
+      > por valor y `ConfigError::UnknownTheme { value, validos }`) y `src/main.rs` (el tema contra el
+      > registro antes del `spawn_blocking`; `X-Theme` nunca compone una ruta); el de
+      > `.github/scripts/smoke.sh` con sus **dos** contenedores (`PORT_VOLUMEN`, por defecto `PORT` + 1,
+      > y el uid 10001); el de `tests/` con los fixtures `tests/fixtures/temas-extras/` y
+      > `tests/fixtures/temas-extension/`; y el bloque de comandos, con la línea de `just smoke`
+      > mencionando también `PORT_VOLUMEN=…`. La frase «No hay ningún change en curso» se mantiene y
+      > `openspec validate --all --strict` sigue dando **4 passed, 0 failed**. Única desviación: las
+      > **dos** referencias a `THEMES[i].embedded` y a la tabla `THEMES` que quedaban en el *quirk* de
+      > las tres guardas se corrigieron a `INCORPORATED`, porque el símbolo ya no existe y esta misma
+      > tarea exige que el fichero no lo nombre.
