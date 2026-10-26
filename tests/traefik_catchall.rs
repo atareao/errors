@@ -1,17 +1,38 @@
 //! Pruebas de integración del **router de respaldo** que este repositorio
-//! entrega (`catchall-metrics-exclusion`, requisito «El respaldo no publica el
-//! endpoint de servicio `/metrics`»).
+//! entrega. La guarda cubre **dos** propiedades, las dos en el mismo router
+//! *catch-all* de Traefik: que no publique el *endpoint de servicio* `/metrics`
+//! (`catchall-metrics-exclusion`) y que no publique las **páginas de tema
+//! crudas** (`themes-as-pages`).
 //!
-//! Qué clase de fallo cierra: el router *catch-all* de Traefik atiende cualquier
-//! Host que no case con otro router, y con él publica también los *endpoints de
-//! servicio* del propio binario —entre ellos `/metrics`, que expone el contador
-//! `errors_pages_total`, o sea el perfil de fallos de la infraestructura—. La
-//! comprobación de extremo a extremo necesita un motor de contenedores y **no**
+//! Qué clase de fallo cierra cada una:
+//!
+//! - El router *catch-all* atiende cualquier Host que no case con otro router, y
+//!   con él publica también los *endpoints de servicio* del propio binario
+//!   —entre ellos `/metrics`, que expone el contador `errors_pages_total`, o sea
+//!   el perfil de fallos de la infraestructura—.
+//! - Y publica, además, la **página de cada tema**: el nombre del tema **es** la
+//!   ruta de su página (`content/<nombre>.html`, siete ficheros), y las seis que
+//!   **no** son el alias del código por defecto se sirven como *assets* crudos,
+//!   con los marcadores `{{code}}`/`{{reason}}`/`{{description}}` a la vista.
+//!   Servirlas a cualquiera es filtrar la plantilla del servicio, así que el
+//!   respaldo las excluye con una segunda conjunción:
+//!   `!PathRegexp(`\.html?((%2[fF])|/|$)`)`.
+//!
+//! La excepción son los **dos alias** `/default.html` y `/default.htm`: su path
+//! se clasifica como el código por defecto, el servicio lo **intercepta** y
+//! responde el código resuelto —**nunca** `200`—, así que no son fuga y la
+//! exclusión los deja fuera a propósito. Excluirlos quitaría del respaldo la
+//! única página de tema que **no** filtra, así que van en el `||` de la
+//! conjunción: `!PathRegexp(`\.html?((%2[fF])|/|$)`) || Path(`/default.html`) ||
+//! Path(`/default.htm`)`.
+//!
+//! La comprobación de extremo a extremo necesita un motor de contenedores y **no**
 //! corre en el CI, así que sin esta guarda la fuga solo se descubriría volviendo
 //! a desplegar. La prueba lee los ficheros versionados y vuelve a fallar en
-//! cuanto una de las definiciones de respaldo pierde la exclusión
-//! `!Path(`/metrics`)` de su regla, o en cuanto desaparece (un renombrado del
-//! router no debe dejar la guarda huérfana y en verde).
+//! cuanto una de las definiciones de respaldo pierde una de las **dos**
+//! conjunciones —`!Path(`/metrics`)` y la exclusión del leak—, o en cuanto
+//! desaparece (un renombrado del router no debe dejar la guarda huérfana y en
+//! verde).
 //!
 //! Por qué se identifica el respaldo **por el nombre del router** y no por la
 //! forma de su regla: `examples/traefik/README.md` ilustra la trampa de
@@ -43,6 +64,29 @@
 //!   que envuelvan el valor (el fragmento de *provider de fichero* del README va
 //!   entrecomillado) antes de exigir las subcadenas. Hay una prueba sintética que
 //!   muerde este caso.
+//! - **La barra de la regex se desdobla solo en un valor entrecomillado.** En un
+//!   escalar YAML **entrecomillado**, `\.` no es un escape válido y el *provider*
+//!   entero deja de cargar (`found unknown escape character`), con el contenedor
+//!   arriba y **cero routers**, en silencio (medido): por eso ahí se escribe la
+//!   barra **doblada** (`\\.`), que YAML lee como `\.`. En un escalar **plano**,
+//!   en cambio, la barra es literal y una barra doblada se queda doblada. La
+//!   guarda lee el valor como lo lee YAML —desdobla `\\.` a `\.` **solo** si el
+//!   valor venía entrecomillado—, de modo que una página que use la forma
+//!   canónica no se lleve un rojo falso. Hay pruebas sintéticas que muerden las
+//!   dos ramas.
+//! - **La conjunción cubre tres formas, y hay que decirlo con las tres**: fin de
+//!   cadena, **barra final** o segmento detrás, y barra **percent-encoded**
+//!   (`%2F`, en las dos cajas) —`!PathRegexp(`\.html?((%2[fF])|/|$)`)`—. Una regla
+//!   anclada solo al fin de cadena (`\.html?$`) deja `/minimal.html/` y
+//!   `/minimal.html%2F` sirviendo el fichero crudo con `200` y sus marcadores:
+//!   **medido** contra Traefik v3.6.25, **17** formas abiertas frente a **0** de
+//!   la final. Traefik decodifica pero **no** normaliza el path —la barra final
+//!   rompe el `$`— y contrasta la regla contra el path con la barra
+//!   **percent-encoded** sin decodificar (`%2F` sobrevive); de ahí la rama
+//!   `%2[fF]`, que cierra esa barra: Traefik normaliza los escapes de los
+//!   caracteres **no reservados** (`%2E`, `%6C`, que por eso lee como
+//!   `minimal.html`) pero **no** el de la barra. Y la forma final **no** depende
+//!   de `sanitizePath`: da la misma tabla con su defecto y en `false`.
 //! - **Una regla con la sintaxis v2 no es un respaldo.** `HostRegexp(`{host:.+}`)`
 //!   —placeholder `{nombre:regexp}` dentro del `HostRegexp`— **no casa con
 //!   ninguna petición** en Traefik v3 (medido): no puede publicar `/metrics` ni
@@ -59,6 +103,19 @@
 //! - **Los fallos se acumulan** en vez de abortar en el primero: cada aserción
 //!   **nombra el fichero y la línea**, y un solo `cargo test` deja la lista
 //!   completa de lo que incumple el contrato.
+//! - **Lo que la guarda NO puede demostrar.** Comprueba que el *texto* de cada
+//!   respaldo lleva las dos conjunciones, **no** que la regex **case** con las
+//!   peticiones que debe bloquear —eso lo mide `check.sh` con el ejemplo
+//!   levantado, y aquí no hay motor de contenedores—. Y **no** es un parser de
+//!   YAML: corta el comentario de cola y desdobla la barra del entrecomillado
+//!   **sin** validar que el entrecomillado sea YAML válido, así que una regla con
+//!   la barra **simple** entre comillas —la que rompe el *provider* en silencio—
+//!   no la caza.
+//! - **Lo que la guarda NO puede demostrar aquí**: que la regex cierre **todas**
+//!   las codificaciones que un cliente pueda inventar —eso lo mide `check.sh` con
+//!   el ejemplo levantado, forma a forma— ni que la tabla que se midió sea
+//!   exhaustiva. La guarda guarda **la subcadena**, que es lo que una prueba
+//!   textual puede guardar.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -97,9 +154,21 @@ const NOMBRE_RESPALDO: &str = "catchall";
 /// Acota la búsqueda al bloque, no recorre el fichero entero.
 const VENTANA_REGLA: usize = 10;
 
-/// Subcadenas que **toda** regla de respaldo debe llevar: casa con cualquier
-/// Host y, a la vez, excluye `/metrics`.
-const DEBE_LLEVAR: [&str; 2] = ["HostRegexp(", "!Path(`/metrics`)"];
+/// Subcadenas que **toda** regla de respaldo debe llevar, **una por conjunción**:
+/// `HostRegexp(` da sentido al respaldo, `!Path(`/metrics`)` excluye el *endpoint
+/// de servicio* y la tercera excluye el **leak de las páginas de tema** —salvo
+/// sus dos alias, que el servicio intercepta y no filtran—. La tercera cubre las
+/// **tres** formas con las que el respaldo servía la página cruda —fin de cadena,
+/// **barra final** o segmento detrás, y barra **percent-encoded** (`%2F`, en las
+/// dos cajas)—, las tres **medidas** abiertas contra Traefik v3.6.25 con la forma
+/// anclada al fin de cadena; y **no** depende de `sanitizePath`. Va con la barra
+/// **simple** porque se compara contra el valor **ya leído**: si el valor venía
+/// entrecomillado, `valor_de_regla` ya desdobló `\\.` a `\.`.
+const DEBE_LLEVAR: [&str; 3] = [
+    "HostRegexp(",
+    "!Path(`/metrics`)",
+    r"(!PathRegexp(`\.html?((%2[fF])|/|$)`) || Path(`/default.html`) || Path(`/default.htm`))",
+];
 
 /// Marca de la sintaxis de Traefik **v2**: un placeholder `{nombre:regexp}`
 /// dentro del `HostRegexp`. Esa regla no casa con ninguna petición en v3, así
@@ -167,18 +236,33 @@ fn recorrer(dir: &Path, raiz: &Path, encontrados: &mut Vec<String>) {
 }
 
 /// El **valor** de una regla, tal como lo lee Traefik: fuera el comentario de
-/// cola de YAML —todo desde el primer ` #`— y las comillas que envuelvan el
-/// valor. Sin este corte, la subcadena `!Path(`/metrics`)` de un comentario haría
-/// pasar como conforme una regla que no lo es.
+/// cola de YAML —todo desde el primer ` #`—, fuera las comillas que envuelvan el
+/// valor y, si venía entrecomillado, la barra **desdoblada** (`\\.` → `\.`). Sin
+/// el corte del comentario, la subcadena `!Path(`/metrics`)` de un comentario
+/// haría pasar como conforme una regla que no lo es.
+///
+/// Por qué el desdoblamiento **solo** en el caso entrecomillado: en un escalar
+/// YAML entrecomillado, `\.` **no** es un escape válido y el *provider* entero
+/// deja de cargar (`found unknown escape character`) —en **silencio**: el
+/// contenedor queda arriba y con **cero routers**—, así que ahí la barra se
+/// escribe doblada (`\\.`) y YAML la lee como `\.`; en un escalar **plano** la
+/// barra es literal y una barra doblada se queda doblada. El límite, declarado:
+/// esta función **no** es un parser de YAML y **no** valida que el
+/// entrecomillado sea YAML válido —solo corta el comentario de cola, quita las
+/// comillas que envuelvan el valor y desdobla la barra del entrecomillado, y nada
+/// más—.
 fn valor_de_regla(cruda: &str) -> String {
-    cruda
-        .split(" #")
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .trim_matches('"')
-        .trim()
-        .to_string()
+    let sin_comentario = cruda.split(" #").next().unwrap_or_default().trim();
+
+    // Tras el `trim()`, unas comillas dobles que **empiecen y terminen** el valor
+    // (y no sean una sola) lo marcan como escalar entrecomillado de YAML; solo
+    // entonces se desdobla la barra.
+    if sin_comentario.len() >= 2 && sin_comentario.starts_with('"') && sin_comentario.ends_with('"')
+    {
+        sin_comentario[1..sin_comentario.len() - 1].replace("\\\\", "\\")
+    } else {
+        sin_comentario.to_string()
+    }
 }
 
 /// Localiza, en el texto de un fichero, cada definición de router de respaldo y
@@ -444,11 +528,12 @@ fn r3_la_cobertura_es_un_suelo_no_un_techo() {
 
 /// **R4** — una definición **conforme** en un fichero que **no** está en el suelo
 /// no genera incumplimiento: la guarda la descubre y la acepta, no la castiga por
-/// no estar en la lista.
+/// no estar en la lista. La regla lleva las **dos** conjunciones y, por ser un
+/// valor **entrecomillado**, la barra **doblada** (`\\.`); que siga siendo
+/// conforme demuestra de paso que el desdoblamiento no se lleva un rojo falso.
 #[test]
 fn r4_un_fichero_conforme_fuera_del_suelo_no_genera_incumplimiento() {
-    let texto = "http:\n  routers:\n    catchall:\n      \
-                 rule: \"HostRegexp(`.+`) && !Path(`/metrics`)\"\n";
+    let texto = "http:\n  routers:\n    catchall:\n      rule: \"HostRegexp(`.+`) && !Path(`/metrics`) && (!PathRegexp(`\\\\.html?((%2[fF])|/|$)`) || Path(`/default.html`) || Path(`/default.htm`))\"\n";
     let respaldos = respaldos_de("examples/traefik/dynamic.yaml", texto);
     assert_eq!(respaldos.len(), 1);
     assert!(
@@ -458,5 +543,142 @@ fn r4_un_fichero_conforme_fuera_del_suelo_no_genera_incumplimiento() {
     assert!(
         !SUELO.contains(&"examples/traefik/dynamic.yaml"),
         "el fichero del caso ha de estar, a propósito, fuera del suelo"
+    );
+}
+
+/// **R5** — un respaldo que excluye `/metrics` pero **no** el leak de las páginas
+/// de tema **incumple**, y el fallo **nombra** el fichero, la línea y la
+/// conjunción que falta. El caso está en las dos formas desplegables.
+#[test]
+fn r5_un_respaldo_sin_la_exclusion_del_leak_incumple() {
+    // Forma de label de Docker, sin la segunda conjunción.
+    let texto = "traefik.http.routers.x-catchall.rule: HostRegexp(`.+`) && !Path(`/metrics`)\n";
+    let respaldos = respaldos_de("sintetico.yml", texto);
+    assert_eq!(
+        respaldos.len(),
+        1,
+        "la línea debe reconocerse como definición de respaldo"
+    );
+    let fallos = incumplimientos(&respaldos[0]);
+    assert!(
+        !fallos.is_empty(),
+        "una definición sin la exclusión del leak debe considerarse incumplidora"
+    );
+    let mensaje = fallos.join("\n");
+    assert!(
+        mensaje.contains("sintetico.yml:1"),
+        "el fallo debe nombrar el fichero y la línea: {mensaje:?}"
+    );
+    assert!(
+        mensaje.contains(DEBE_LLEVAR[2]),
+        "el fallo debe nombrar la conjunción que falta: {mensaje:?}"
+    );
+
+    // Forma de provider de fichero, sin la segunda conjunción.
+    let texto = "catchall:\n      rule: \"HostRegexp(`.+`) && !Path(`/metrics`)\"\n";
+    let respaldos = respaldos_de("sintetico.yaml", texto);
+    assert_eq!(respaldos.len(), 1);
+    let fallos = incumplimientos(&respaldos[0]);
+    assert!(
+        !fallos.is_empty(),
+        "la forma de provider de fichero tampoco lleva la exclusión del leak"
+    );
+    let mensaje = fallos.join("\n");
+    assert!(
+        mensaje.contains("sintetico.yaml:2"),
+        "el fallo debe nombrar el fichero y la línea: {mensaje:?}"
+    );
+    assert!(
+        mensaje.contains(DEBE_LLEVAR[2]),
+        "el fallo debe nombrar la conjunción que falta: {mensaje:?}"
+    );
+}
+
+/// **R6** — la conjunción del leak colocada **solo tras un `#` de cola** no
+/// cuenta —el caso simétrico de R1—: el valor de la regla no la lleva, así que la
+/// definición **incumple** aunque el texto de la línea la contenga.
+#[test]
+fn r6_una_conjuncion_del_leak_tras_comentario_de_cola_no_cuenta() {
+    let texto = "traefik.http.routers.x-catchall.rule: HostRegexp(`.+`) && !Path(`/metrics`) # && (!PathRegexp(`\\.html?((%2[fF])|/|$)`) || Path(`/default.html`) || Path(`/default.htm`))\n";
+    let respaldos = respaldos_de("sintetico.yml", texto);
+    assert_eq!(
+        respaldos.len(),
+        1,
+        "la línea debe reconocerse como definición de respaldo"
+    );
+    let regla = respaldos[0]
+        .regla
+        .as_deref()
+        .expect("la regla se pudo leer");
+    assert!(
+        !regla.contains(DEBE_LLEVAR[2]),
+        "el comentario de cola no forma parte del valor: la conjunción del leak no debe estar en la regla leída, pero la regla es {regla:?}"
+    );
+    assert!(
+        !incumplimientos(&respaldos[0]).is_empty(),
+        "sin la conjunción en el valor, la definición incumple"
+    );
+}
+
+/// **R7** — `valor_de_regla` **desdobla** la barra de un valor **entrecomillado**
+/// —como lo hace YAML— y **no** la de uno **plano**. Y el caso de uso real: un
+/// valor entrecomillado con la barra **doblada** y la conjunción **completa** es
+/// **conforme**.
+///
+/// Límite declarado: el mismo valor con la barra **simple** entre comillas **no**
+/// se mide —ahí el parser de YAML fallaría (`found unknown escape character`) y la
+/// guarda no puede saberlo—; por eso la forma entrecomillada se escribe siempre
+/// con la barra doblada.
+#[test]
+fn r7_valor_de_regla_desdobla_la_barra_solo_si_va_entrecomillado() {
+    assert_eq!(
+        valor_de_regla(r#" "a\\.b" "#),
+        r"a\.b",
+        "un valor entrecomillado se lee con la barra desdoblada, como lo lee YAML"
+    );
+    assert_eq!(
+        valor_de_regla(r" a\\.b "),
+        r"a\\.b",
+        "en un valor plano la barra doblada se queda doblada: no es un escape de YAML"
+    );
+
+    let texto = "catchall:\n      rule: \"HostRegexp(`.+`) && !Path(`/metrics`) && (!PathRegexp(`\\\\.html?((%2[fF])|/|$)`) || Path(`/default.html`) || Path(`/default.htm`))\"\n";
+    let respaldos = respaldos_de("sintetico.yaml", texto);
+    assert_eq!(respaldos.len(), 1);
+    assert!(
+        incumplimientos(&respaldos[0]).is_empty(),
+        "un valor entrecomillado con la barra doblada y la conjunción completa es conforme"
+    );
+}
+
+/// **R8** — la regresión del defecto que este change encontró midiendo: una regla
+/// con la conjunción **vieja**, anclada al **fin de cadena** (`\.html?$`), junto a
+/// los dos alias, **incumple**. Esa forma dejaba las páginas de tema crudas al
+/// alcance del respaldo con `200`: **medido** contra Traefik v3.6.25, **17**
+/// formas abiertas —`/minimal.html/`, `/minimal.html%2F`, `/matrix.html/`,
+/// `/matrix.html%2f`…— frente a **0** con la conjunción final. El fallo **nombra**
+/// el fichero, la línea y la subcadena que falta.
+#[test]
+fn r8_la_forma_anclada_al_fin_de_cadena_incumple() {
+    let texto = "traefik.http.routers.x-catchall.rule: HostRegexp(`.+`) && !Path(`/metrics`) && (!PathRegexp(`\\.html?$`) || Path(`/default.html`) || Path(`/default.htm`))\n";
+    let respaldos = respaldos_de("sintetico.yml", texto);
+    assert_eq!(
+        respaldos.len(),
+        1,
+        "la línea debe reconocerse como definición de respaldo"
+    );
+    let fallos = incumplimientos(&respaldos[0]);
+    assert!(
+        !fallos.is_empty(),
+        "la forma anclada al fin de cadena ha de incumplir"
+    );
+    let mensaje = fallos.join("\n");
+    assert!(
+        mensaje.contains("sintetico.yml:1"),
+        "el fallo debe nombrar el fichero y la línea: {mensaje:?}"
+    );
+    assert!(
+        mensaje.contains(DEBE_LLEVAR[2]),
+        "el fallo debe nombrar la subcadena que falta: {mensaje:?}"
     );
 }

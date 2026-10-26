@@ -42,9 +42,12 @@ en los dos casos.
 
 ## Lo que comprueba `check.sh`
 
-**Seis bloques**: los cuatro estados de la tabla, las cabeceras de la página servida del `503`, la
-página autocontenida con el tema por petición, y que el respaldo no publique el endpoint de servicio
-`/metrics`.
+**Ocho bloques**: los cuatro estados de la tabla, las cabeceras de la página servida del `503`, la
+página autocontenida con el tema por petición, que el respaldo no publique el endpoint de servicio
+`/metrics` y, de este change, cuatro más: que el respaldo no sirva las **páginas de tema crudas**
+—con la barra final y la barra codificada incluidas—, que los **dos alias** del código por defecto
+sigan sirviéndose —nunca el fichero crudo—, que el respaldo **no se rompa** (`/` y `/503` en el mismo
+Host desconocido) y el **`502`** de extremo a extremo, con un upstream que rechaza la conexión.
 
 | Petición | Esperado | Qué demuestra |
 |---|---|---|
@@ -54,6 +57,10 @@ página autocontenida con el tema por petición, y que el respaldo no publique e
 | `diverge.localtest.me/boom` | `503` | Backend 503 con el middleware pidiendo `/404`: manda Traefik. |
 | `app.localtest.me/boom` con `Accept: text/html` | `503` | **El `503` llega con la página del tema —su `<style>` dentro— y sin ningún `<link>`**, y `X-Theme: terminal` cambia el cuerpo de esa petición. |
 | `nada.localtest.me/metrics` | no `200` | El respaldo **no** publica el endpoint de servicio `/metrics`. |
+| `nada.localtest.me/minimal.html` (y `/minimal.html/`, `/minimal.html%2F`, `/matrix.html`) | no `200` | El respaldo **no** sirve las páginas de tema crudas: el nombre del tema **es** la ruta de su página, y el fichero crudo lleva los marcadores a la vista. |
+| `nada.localtest.me/default.html` (y `/default.htm`) | `404` | Los **dos alias** del código por defecto los intercepta el servicio: código resuelto con `X-Robots-Tag`, **nunca `200`** ni el fichero crudo. |
+| `nada.localtest.me/` y `/503` | `404` y `503` | La conjunción **no se lleva por delante el respaldo**: en el mismo Host sigue sirviendo el código real (`/503` con su `Retry-After`). |
+| `caido.localtest.me/x` | `502` | **El upstream rechaza la conexión**, Traefik emite `502` y el middleware `errors` lo traduce a la página del servicio: con `X-Robots-Tag`, **sin** `Retry-After` y con el `<style` de la página, no el error en texto del proxy. |
 
 `check.sh` sale con estado 1 si algo no cuadra, así que sirve también en un pipeline.
 
@@ -117,6 +124,17 @@ en «Variante sin socket», abajo, y en «Operación y observabilidad» del `REA
 «BIEN» la lleva puesta a propósito, aunque alargue el ejemplo: es la regla desplegable, y una línea
 «BIEN» a medias es el vector por el que `/metrics` se filtró de verdad.
 
+### La trampa del escalar entrecomillado
+
+De la misma familia, y **medida**: la conjunción del leak lleva una barra invertida (`\.html?…`), y en
+un escalar YAML **entrecomillado** `\.` no es un escape válido. Escrita
+``rule: "… PathRegexp(`\.html?…`) …"``, el *provider* **entero** deja de cargar
+—`yaml: found unknown escape character`—, y lo peor es cómo se rompe: el contenedor sigue arriba, la
+API responde y no hay **ni un router**, en silencio. Entrecomillada, la barra va **doblada** (`\\.`);
+como escalar **plano**, va **simple** —y así los dos `$` de la regla llegan a Traefik verbatim—. Los
+cinco sitios de este repositorio la escriben **plana**, y por eso el fragmento de *provider de
+fichero* de «Variante sin socket» no va entre comillas.
+
 ## El leak de las páginas de tema
 
 Con el modelo actual, **un tema es una página** y el nombre del tema **es** la ruta de su fichero: las
@@ -127,18 +145,33 @@ intercepta **`/default.html`** (y `/default.htm`), que son el **alias del códig
 con sus marcadores `{{code}}`/`{{reason}}`/`{{description}}` a la vista.
 
 Es un leak **cosmético**, y con las páginas en la raíz de `CONTENT_DIR` es **inevitable**: el servicio
-no las oculta. La mitigación es **externa**, en el proxy, y este repositorio **no** entrega un
-respaldo que la implemente (es un no-goal del change `themes-as-pages`). Se expresa añadiendo una
-conjunción a la regla del respaldo, que bloquea `*.html` salvo `/default.html`:
+no las oculta, así que quien lo tapa es el **proxy**. La conjunción que lo cierra va **dentro** de la
+regla del respaldo, y este repositorio **la entrega** —en los tres labels y en las dos definiciones
+de este README—: `tests/traefik_catchall.rs` la guarda en los cinco sitios, porque comprobarlo de
+extremo a extremo necesita un motor de contenedores y no corre en el CI. Cubre las **tres** formas de
+alcanzar la página cruda, las tres **medidas** abiertas contra Traefik v3.6.25 con una exclusión
+anclada al fin de cadena —que dejaba **17** formas sirviendo el fichero con `200`—: el path terminado
+en `.html`/`.htm`, el mismo con **barra final** o con un segmento detrás, y el mismo con la barra
+**percent-encoded** (`%2F`, en las dos cajas). Los **dos alias** `/default.html` y `/default.htm`
+quedan **fuera** de la exclusión **a propósito**: su path se clasifica como el código por defecto, el
+servicio lo intercepta y responde el código resuelto —**nunca `200`**—, así que excluirlos quitaría la
+única página de tema que no filtra:
 
 ```yaml
-traefik.http.routers.errserve-catchall.rule: HostRegexp(`.+`) && !Path(`/metrics`) && (!PathRegexp(`\.html$`) || Path(`/default.html`))
+traefik.http.routers.errserve-catchall.rule: HostRegexp(`.+`) && !Path(`/metrics`) && (!PathRegexp(`\.html?((%2[fF])|/|$)`) || Path(`/default.html`) || Path(`/default.htm`))
 ```
 
-El precio, escrito: esa conjunción bloquea **también** `/404.html` y `/503.html` por el acceso
-directo. No rompe el flujo real —el middleware `errors` pide `/404`, **sin** extensión
+El precio, escrito y **medido**: la conjunción manda a la `404` de Traefik —su `404 page not found`,
+sin pasar por el servicio— todo path cuyo `.html`/`.htm` vaya seguido de fin de cadena, de `/` o de
+`%2F`: `GET /404.html`, `GET /503.html`, `GET /sub/x.html`, `GET /x.html/y` y `GET /default.html%2F`.
+No rompe el flujo real —el middleware `errors` pide `/404`, **sin** extensión
 (`errors.query: /{status}`)—, pero el acceso humano a `/404.html` deja de servirse. Las páginas de
-tema del servicio se deciden **dentro** de este repositorio; el bloqueo, fuera.
+tema del servicio se deciden **dentro** de este repositorio; el bloqueo, también.
+
+Y un límite declarado, que conviene saber porque lo guarda una prueba **textual**: `PathRegexp`
+distingue mayúsculas, así que `GET /MINIMAL.HTML` no casa con la exclusión y llega al servicio. No es
+un leak: el sistema de ficheros distingue mayúsculas, `ServeDir` no encuentra el fichero y el servicio
+responde **su** página de error —`404` con `X-Robots-Tag`—, nunca el fichero crudo.
 
 ## El socket
 
@@ -173,18 +206,21 @@ http:
         servers: [{url: "http://errserve:8080"}]
   routers:
     catchall:
-      rule: "HostRegexp(`.+`) && !Path(`/metrics`)"
+      rule: HostRegexp(`.+`) && !Path(`/metrics`) && (!PathRegexp(`\.html?((%2[fF])|/|$)`) || Path(`/default.html`) || Path(`/default.htm`))
       entryPoints: [web]
       service: errservice
       priority: 1
 ```
 
-La conjunción `&& !Path(`/metrics`)` es la misma que en los labels, y por el mismo motivo: el respaldo
-atiende cualquier Host, y `/metrics` no es una página de error sino un *endpoint de servicio* del
-binario, así que publicarlo delata el perfil de fallos de la infraestructura. Con la exclusión, una
-petición a `/metrics` en un Host desconocido la contesta Traefik con su propio `404` en texto plano y
-el respaldo sigue sirviendo el código real en todo lo demás. Está explicado, con la medición, en el
-apartado «Operación y observabilidad» del [`README.md`](../../README.md) raíz.
+Las **dos** conjunciones son las mismas que en los labels, y por los mismos motivos. La de
+`/metrics`: el respaldo atiende cualquier Host, y `/metrics` no es una página de error sino un
+*endpoint de servicio* del binario, así que publicarlo delata el perfil de fallos de la
+infraestructura; con la exclusión, una petición a `/metrics` en un Host desconocido la contesta
+Traefik con su propio `404` en texto plano y el respaldo sigue sirviendo el código real en todo lo
+demás. Y la del **leak**: el nombre de cada tema **es** la ruta de su página, así que sin ella el
+respaldo publica las páginas de tema crudas. Está explicado, con la medición, en el apartado
+«Operación y observabilidad» del [`README.md`](../../README.md) raíz y en «El leak de las páginas de
+tema», arriba.
 
 ## Producción
 

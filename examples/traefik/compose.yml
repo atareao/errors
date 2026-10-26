@@ -136,7 +136,18 @@ services:
       # `404` y `503` reales. La coincidencia es exacta, la del endpoint:
       # `/metrics/` y `/METRICS` no lo son y caen en el respaldo como cualquier
       # otro path, sin datos del contador.
-      traefik.http.routers.errserve-catchall.rule: HostRegexp(`.+`) && !Path(`/metrics`)
+      #
+      # Y una tercera conjunción cierra el leak de las páginas de tema: el nombre
+      # de cada tema **es** la ruta de su página, así que sin ella el respaldo
+      # publica las seis páginas crudas —con los marcadores `{{code}}`,
+      # `{{reason}}` y `{{description}}` a la vista— a quien pregunte por un Host
+      # que no exista. Cubre las tres formas de alcanzar esa página (fin de
+      # cadena, barra final o segmento detrás, y barra percent-encoded `%2F`, en
+      # las dos cajas) y deja fuera a propósito los dos alias `/default.html` y
+      # `/default.htm`, que el servicio intercepta y nunca responde `200`. El
+      # porqué y el precio de la regla están en «El leak de las páginas de tema»
+      # del README.md.
+      traefik.http.routers.errserve-catchall.rule: HostRegexp(`.+`) && !Path(`/metrics`) && (!PathRegexp(`\.html?((%2[fF])|/|$)`) || Path(`/default.html`) || Path(`/default.htm`))
       traefik.http.routers.errserve-catchall.entrypoints: web
       traefik.http.routers.errserve-catchall.service: errserve
       traefik.http.routers.errserve-catchall.middlewares: errpages
@@ -185,6 +196,23 @@ services:
       traefik.http.routers.diverge.service: backend
       traefik.http.routers.diverge.middlewares: errfixed
       traefik.http.routers.diverge.priority: "20"
+
+      # Un router de demostración para el `502`, el código con el que un proxy
+      # responde cuando el upstream NO responde. El servicio apunta a un puerto
+      # donde nada escucha **en este mismo contenedor**: la conexión se rechaza y
+      # Traefik emite 502, que el middleware `errpages` traduce a nuestra página.
+      #
+      # NO se construye parando el contenedor del backend: un servicio **sin
+      # servidores** disponibles da 503, no 502 (medido). Lo que separa los dos
+      # códigos es un hecho real, no una casualidad.
+      #
+      # Prioridad alta para que gane al router de la aplicación en este Host.
+      traefik.http.services.caido.loadbalancer.server.port: "9"
+      traefik.http.routers.caido.rule: Host(`caido.localtest.me`)
+      traefik.http.routers.caido.entrypoints: web
+      traefik.http.routers.caido.service: caido
+      traefik.http.routers.caido.middlewares: errpages
+      traefik.http.routers.caido.priority: "10"
 
 networks:
   # Red propia, no la default bridge: en la del compose los contenedores se

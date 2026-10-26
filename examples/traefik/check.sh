@@ -7,9 +7,15 @@
 # Requiere que el ejemplo esté levantado (compose.yml) y curl en el host. Sale
 # con estado 1 si algún caso no cuadra, para que valga también en CI.
 #
-# Comprueba seis bloques: los cuatro estados de la tabla del ejemplo, las
-# cabeceras de la página servida, un bloque nuevo sobre la página del 503 y, como
-# sexto, que el respaldo NO publique el endpoint de servicio `/metrics`.
+# Comprueba ocho bloques: los cuatro estados de la tabla del ejemplo, las
+# cabeceras de la página servida, un bloque nuevo sobre la página del 503, que el
+# respaldo NO publique el endpoint de servicio `/metrics` y, de este change,
+# cuatro más: que el respaldo NO sirva las **páginas de tema crudas** (con la
+# barra final y la barra percent-encoded incluidas), que los **dos alias** del
+# código por defecto sigan sirviéndose —el código resuelto, nunca el fichero
+# crudo—, que el respaldo **no se rompa** (`/` y `/503` en el mismo Host
+# desconocido) y el **`502`** de extremo a extremo, con un upstream que rechaza la
+# conexión.
 #
 # El bloque nuevo va entre las cabeceras y `/metrics`, sobre `app.localtest.me/boom`
 # —el 503 del backend, que es la reproducción local exacta del bug medido en
@@ -18,9 +24,12 @@
 # nada. Comprueba que el cuerpo lleva la hoja INCRUSTADA (`<style`), que NO enlaza
 # `/css/error.css` —la ruta absoluta que en el host de la aplicación no sirve
 # errserve, el `404` con `Content-Type: text/plain` que hacía que el navegador
-# rechazara la hoja— y que el cuerpo cambia al pedir con `X-Theme: terminal`. Con
-# el árbol de hoy los tres casos salen en ROJO: la página enlaza la hoja en vez de
-# incrustarla y no hay ningún tema que elegir.
+# rechazara la hoja— y que el cuerpo cambia al pedir con `X-Theme: terminal`. El
+# bloque se escribió en rojo, con el árbol de entonces: la página enlazaba la hoja
+# en vez de incrustarla y no había ningún tema que elegir. Sigue aquí como
+# regresión de aquel bug: hoy los tres casos están en verde y el bloque se pone en
+# rojo si alguien vuelve a enlazar una hoja o a quitar la selección de tema por
+# petición.
 #
 # Y en el sexto bloque, el de `/metrics`, quien DISCRIMINA entre la fuga y el
 # arreglo es el estado, el `Content-Type` y el cuerpo: en la fuga la respuesta es
@@ -30,6 +39,22 @@
 # discriminante: `/metrics` es un endpoint de servicio del binario, nunca una
 # página de error, así que no lleva esa cabecera ni en la fuga. Se comprueba para
 # que nadie «arregle» la fuga convirtiendo `/metrics` en una página de error.
+#
+# Los cuatro bloques del leak van en el MISMO Host sin router propio
+# (`nada.localtest.me`). El del leak pide las tres formas medidas —el path
+# terminado en `.html`, el mismo con barra final y el mismo con la barra
+# percent-encoded— y niega dos cosas: el `200` del asset crudo y el marcador
+# `{{code}}` a la vista. Las formas con barra van con `--path-as-is` (ayudantes
+# `*_raw`), porque sin ese flag `curl` normaliza el path antes de enviarlo y la
+# comprobación mediría otro path del que se quiere medir. El de los alias espera
+# el código por defecto —`404`— con su `X-Robots-Tag` y sin marcadores: el
+# servicio los intercepta y nunca responde `200`. El del respaldo comprueba que
+# la conjunción no se lleva por delante `/` y `/503`. Y el del `502` va contra
+# `caido.localtest.me`, un router cuyo servicio apunta a un puerto donde nada
+# escucha **en el contenedor del backend**: la conexión se rechaza y Traefik
+# emite `502`, que el middleware `errors` traduce a nuestra página. NO se
+# construye parando el backend: un servicio **sin servidores** da `503`, no `502`
+# (medido).
 #
 # Los nombres de host se mandan en la cabecera `Host`, así que no hace falta DNS
 # (localtest.me y sus subdominios apuntan a 127.0.0.1, pero esto funciona igual
@@ -129,6 +154,42 @@ not_type() {
 # not_body <host> <path> <texto> <qué demuestra>
 not_body() {
     if ! body=$(curl -sS -m 10 -H "Host: $1" "${base}$2"); then
+        printf 'FALLO  %-22s %-6s no respondio el servicio  %s\n' "$1" "$2" "$4"
+        failed=1
+        return
+    fi
+    if printf '%s' "$body" | grep -q -- "$3"; then
+        printf 'FALLO  %-22s %-6s el cuerpo lleva %s  %s\n' "$1" "$2" "$3" "$4"
+        failed=1
+    else
+        printf 'ok     %-22s %-6s el cuerpo no lleva %s  %s\n' "$1" "$2" "$3" "$4"
+    fi
+}
+
+# not_code_raw y not_body_raw son las dos variantes que piden el path con
+# `--path-as-is`: sin ese flag `curl` normaliza el path antes de enviarlo —pliega
+# los segmentos `.` y `..`— y las formas del leak que llevan barra final o barra
+# percent-encoded se medirían sobre otro path del que se quiere medir. Son los dos
+# únicos ayudantes que llevan el flag; los demás piden paths que `curl` no toca.
+
+# not_code_raw <host> <path> <estado prohibido> <qué demuestra>
+not_code_raw() {
+    if ! got=$(curl -sS -m 10 --path-as-is -o /dev/null -w '%{http_code}' -H "Host: $1" "${base}$2"); then
+        printf 'FALLO  %-22s %-6s no respondio el servicio  %s\n' "$1" "$2" "$4"
+        failed=1
+        return
+    fi
+    if [ "$got" != "$3" ]; then
+        printf 'ok     %-22s %-6s %s (no %s)  %s\n' "$1" "$2" "$got" "$3" "$4"
+    else
+        printf 'FALLO  %-22s %-6s %s (prohibido)  %s\n' "$1" "$2" "$got" "$4"
+        failed=1
+    fi
+}
+
+# not_body_raw <host> <path> <texto> <qué demuestra>
+not_body_raw() {
+    if ! body=$(curl -sS -m 10 --path-as-is -H "Host: $1" "${base}$2"); then
         printf 'FALLO  %-22s %-6s no respondio el servicio  %s\n' "$1" "$2" "$4"
         failed=1
         return
@@ -248,6 +309,52 @@ not_header nada.localtest.me /metrics X-Robots-Tag \
     "guarda, y se cumple en los dos estados: /metrics es un endpoint de servicio, no una pagina, asi que no lleva X-Robots-Tag ni en la fuga; impide 'arreglarla' convirtiendolo en pagina"
 not_body nada.localtest.me /metrics errors_pages_total \
     "ni el contador viaja en el cuerpo"
+
+echo
+echo "== el respaldo NO sirve las paginas de tema crudas =="
+not_code nada.localtest.me /minimal.html 200 \
+    "un Host sin router NO recibe el asset crudo: el nombre del tema ES la ruta de su pagina"
+not_body nada.localtest.me /minimal.html '{{code}}' \
+    "ni viaja el marcador sin rellenar: el fichero crudo lleva los tres a la vista"
+not_code nada.localtest.me /matrix.html 200 \
+    "lo mismo con matrix, que es un documento propio y no una de las seis sobrias"
+not_body nada.localtest.me /matrix.html '{{description}}' \
+    "ni su marcador"
+not_code_raw nada.localtest.me /minimal.html/ 200 \
+    "la barra final no reabre el leak: con la exclusion anclada al fin de cadena, este path servia el crudo"
+not_code_raw nada.localtest.me /minimal.html%2F 200 \
+    "ni la barra percent-encoded, que Traefik NO normaliza: para eso esta la rama %2[fF]"
+not_body_raw nada.localtest.me /minimal.html%2F '{{code}}' \
+    "y el cuerpo de esa forma tampoco lleva el marcador a la vista"
+
+echo
+echo "== los dos alias del codigo por defecto siguen vivos =="
+code nada.localtest.me /default.html 404 \
+    "el alias del codigo por defecto lo intercepta el servicio: responde el codigo resuelto, nunca 200"
+header nada.localtest.me /default.html X-Robots-Tag
+not_body nada.localtest.me /default.html '{{code}}' \
+    "el cuerpo es la pagina rellena, no el fichero crudo con sus marcadores"
+code nada.localtest.me /default.htm 404 \
+    "y /default.htm se comporta igual: la conjuncion cubre .html y .htm, asi que los dos alias son simetricos"
+header nada.localtest.me /default.htm X-Robots-Tag
+
+echo
+echo "== el respaldo no se rompe: el mismo Host sigue sirviendo su codigo =="
+code nada.localtest.me / 404 \
+    "la conjuncion NO se lleva por delante el respaldo"
+code nada.localtest.me /503 503 \
+    "ni el 503, que sigue saliendo con su Retry-After"
+header nada.localtest.me /503 Retry-After
+
+echo
+echo "== el 502 de extremo a extremo: el upstream rechaza la conexion =="
+code caido.localtest.me /x 502 \
+    "el upstream rechaza la conexion y Traefik emite 502"
+header caido.localtest.me /x X-Robots-Tag
+not_header caido.localtest.me /x Retry-After \
+    "el 502 NO lleva Retry-After: esa cabecera describe el estado que se sirve y solo la llevan 429 y 503"
+html_body caido.localtest.me /x '<style' \
+    "y el cuerpo es la pagina del servicio, no el error en texto del proxy"
 
 echo
 [ "$failed" -eq 0 ] && echo "todo correcto" || echo "hay fallos"
