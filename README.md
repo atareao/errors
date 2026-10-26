@@ -93,19 +93,23 @@ curl -s  -H 'Accept: text/html' -H 'X-Theme: terminal' localhost:8080/404   # co
 |---|---|---|
 | `PORT` | `8080` | Puerto de escucha (bind `0.0.0.0`). El que asume la guía de Traefik. |
 | `LOG_LEVEL` | `info` | Filtro de `tracing-subscriber`. |
-| `CONTENT_DIR` | `content` | *Override* de las siete **páginas de tema** embebidas en el binario. |
+| `CONTENT_DIR` | `content` | El directorio del operador **y la fuente de temas**: *override* de la página de un tema incorporado, y los `*.html` de su **raíz** **añaden** temas al registro. |
 | `DEFAULT_ERROR_PAGE` | `404` | Código cuando el path y `X-Code` no aportan uno utilizable. |
 | `LOG_FORMAT` | `text` | Formato del registro: `text` o `json`. |
 | `RETRY_AFTER` | `120` | Segundos de la cabecera `Retry-After`. La llevan solo el `429` y el `503`. |
-| `THEME` | `default` | Tema de las páginas **HTML**: `default`, `minimal`, `terminal`, `paper`, `amber`, `compact` o `matrix`. |
+| `THEME` | `default` | Tema de las páginas **HTML**: uno de los siete **incorporados** (`default`, `minimal`, `terminal`, `paper`, `amber`, `compact`, `matrix`) **o** un tema descubierto en `CONTENT_DIR`. |
 
 No se lee ningún fichero de configuración. Una variable **presente pero vacía**
 es un error de arranque, no un valor por defecto. `DEFAULT_ERROR_PAGE` fuera del
-rango `400..=599` también lo es, y un `THEME` que no sea uno de los **siete** temas
-—o que venga vacío— aborta el arranque igual, con un error que **nombra la
-variable** y **enumera los siete nombres**: quien escribe `THEME` cree que está
-configurando algo, así que el error tiene que decirle qué puede escribir en su
-lugar.
+rango `400..=599` también lo es, y un `THEME` que no sea un nombre del **registro
+de ese arranque** —o que venga vacío— aborta el arranque igual, con un error que
+**nombra la variable** y **enumera los nombres del registro**: quien escribe
+`THEME` cree que está configurando algo, así que el error tiene que decirle qué
+puede escribir en su lugar. Y ojo con la contrapartida: como la lista es la de
+**ese** arranque, un `THEME` **correcto** cuyo fichero **todavía** no esté en
+`CONTENT_DIR` —un volumen que aún no se ha montado cuando el contenedor arranca—
+**aborta** el arranque; la mitigación es del operador: declarar la dependencia del
+volumen, o arrancar sin `THEME` y con el defecto.
 
 `RETRY_AFTER` es el único valor de la respuesta que depende de tu infraestructura: la cabecera
 `Retry-After` es lo que se le promete al cliente sobre cuándo volver, así que si tu backend tarda
@@ -114,11 +118,13 @@ segundos —`0` significa «reintenta ya»— y no tiene techo. Una variable vac
 de segundos, es un error de arranque. Lo que **no** se configura es qué códigos la llevan: son el
 `429` y el `503`, y eso lo decide el código.
 
-`CONTENT_DIR` es solo un ***override***. El binario lleva **dentro** las siete páginas de tema, así
-que un `cargo install errserve` —que deja un ejecutable y ningún fichero de datos, con `CONTENT_DIR`
+`CONTENT_DIR` es el directorio del operador: el ***override*** de la página de un tema incorporado
+**y** la fuente de los temas nuevos. El binario lleva **dentro** las siete páginas de tema, así que
+un `cargo install errserve` —que deja un ejecutable y ningún fichero de datos, con `CONTENT_DIR`
 apuntando por defecto a un `content` que no existe— sirve las siete, y no el respaldo de texto. Lo
 que haya en `CONTENT_DIR` gana **cuando se pueda leer**; lo que falte se sirve desde la copia
-embebida.
+embebida. Y los `*.html` de su **raíz** que no sean la página de un incorporado **añaden** temas al
+registro: un fichero de más **es** un tema, y su tallo es su nombre (ver «El tema es una página»).
 
 ## Cómo se resuelve
 
@@ -134,9 +140,10 @@ Código y formato son ortogonales: `/503.xml` es un 503 en XML.
 
 Y hay un **tercer eje**, que no reparte códigos ni formatos sino aspecto, y que solo toca al HTML: **la
 página del tema** que se sirve. La elige `THEME` —el tema de todo el servicio— y, por petición, la
-cabecera `X-Theme`, que gana a `THEME` cuando nombra uno de los **siete** temas; un `X-Theme` ausente,
-desconocido o vacío **no** es un error y cae al tema configurado. En JSON, XML y texto no hay página
-que incrustar, así que ahí el tema se ignora (ver «Páginas autocontenidas y temas»).
+cabecera `X-Theme`, que gana a `THEME` cuando nombra un tema del **registro** —los siete incorporados
+más los descubiertos en `CONTENT_DIR`—; un `X-Theme` ausente, desconocido o vacío **no** es un error y
+cae al tema configurado. En JSON, XML y texto no hay página que incrustar, así que ahí el tema se
+ignora (ver «Páginas autocontenidas y temas»).
 
 Cada página de error lleva `Content-Type`, `Content-Length`,
 `X-Robots-Tag: noindex, nofollow, nosnippet, noarchive` y, en `429` y `503`,
@@ -216,14 +223,30 @@ adorno.
 
 ### El tema es una página
 
-Un tema **es** su página, y el nombre del tema **es** el de su fichero: las siete viven en la **raíz**
-de `CONTENT_DIR` —`content/<nombre>.html`— y todas van embebidas en el binario. Elegir un tema no
-duplica nada: elige **qué página** se sirve. Tu página gana a la embebida y se lee **al servir**, así
-que la ves cambiar sin reiniciar; una página **sin** marcadores se sirve **byte a byte**; y una que
-existe y no se puede leer responde el **respaldo de texto** con el código resuelto —el `warn` la
-delata—, sin cambiar el estado.
+Un tema **es** su página, y el nombre del tema **es** el de su fichero: viven en la **raíz** de
+`CONTENT_DIR` —`content/<nombre>.html`—. Las **siete** incorporadas van dentro del binario y la raíz
+del directorio **añade** temas: un `*.html` de más **es** un tema, y su **tallo** es su nombre
+(`neon.html` → `neon`). El barrido del directorio es **al arrancar**, así que **añadir** un tema exige
+**reiniciar**: un fichero añadido con el servicio en marcha **no** es un tema hasta el siguiente
+arranque —se sigue sirviendo como **asset crudo**—. Los **bytes** de la página, en cambio, se leen **al
+servir**, así que **editar** un tema que ya estaba se ve **sin** reiniciar. Elegir un tema no duplica
+nada: elige **qué página** se sirve. Tu página gana a la embebida; una página **sin** marcadores se
+sirve **byte a byte**; y una que existe y no se puede leer responde el **respaldo de texto** con el
+código resuelto —el `warn` la delata—, sin cambiar el estado. Un tema **descubierto** no tiene copia
+embebida: su fichero es su **única** copia, así que si se esfuma responde el respaldo de texto con el
+estado intacto.
+
+Las reglas del barrido, para no esperar lo que no es: solo la **raíz** (un `temas/neon.html` no es un
+tema); la extensión tiene que ser **exactamente** `html` (`neon.htm`, `neon.HTML` y `neon.css` **no**
+son temas); el nombre es el **tallo**; el tallo de un **incorporado** no añade un tema
+(`content/default.html` es la página del `default` incorporado, no un `default` de más); y un tallo
+que **reclame la resolución de códigos** (`404`, `999`, `200`…) **no** es un tema, porque ese path
+responde **otra** página de error. Los descubiertos van **ordenados por nombre** detrás de los siete.
 
 ### Los siete temas
+
+Los siete **incorporados** al binario son la **base** del registro, y un directorio puede **añadir**
+más (ver «El tema es una página»). Estos siete son:
 
 | Tema | Página en `CONTENT_DIR` | Aspecto |
 |---|---|---|
@@ -237,10 +260,11 @@ delata—, sin cambiar el estado.
 
 `THEME` (entorno, al arrancar) elige el tema de **todo el servicio**, y `X-Theme` (cabecera de la
 petición) elige el de **esa** petición, con el primer-origen-que-haga-match de siempre: un `X-Theme`
-conocido gana a `THEME`. Un `X-Theme` desconocido **no** es un error —cae al tema configurado—,
-porque esa cabecera la elige quien llama y un cliente no puede romper el servicio; la comparación es
-**exacta**, así que `X-Theme: Terminal` no es el tema `terminal` y cae al configurado. `X-Theme` solo
-afecta al **HTML**: un JSON o un XML no tienen página que incrustar, así que ahí el tema se ignora.
+**conocido** —un tema del registro— gana a `THEME`. Un `X-Theme` desconocido **no** es un error —cae al
+tema configurado—, porque esa cabecera la elige quien llama y un cliente no puede romper el servicio;
+la comparación es **exacta**, así que `X-Theme: Terminal` no es el tema `terminal` y cae al
+configurado. `X-Theme` solo afecta al **HTML**: un JSON o un XML no tienen página que incrustar, así
+que ahí el tema se ignora.
 
 Ninguna de las siete referencia recursos externos —ni `@import`, ni `url(...)` remotos, ni fuentes
 descargadas—: una página que necesita la red para verse es exactamente el defecto que este apartado
@@ -249,9 +273,10 @@ y solo cambia su CSS; lo vigila una prueba de `tests/content_pages.rs`, no una g
 textual no puede demostrar que seis ficheros no diverjan—. Y como viven en la raíz de `CONTENT_DIR`,
 las **otras seis** páginas (todas menos `default.html`) se sirven crudas si alguien las pide: el
 **servicio** sigue sin ocultarlas —es un servidor, no un proxy, y esa mitad se mantiene—, pero este
-repositorio **ya entrega la regla del respaldo que las bloquea**, y una prueba la guarda
-(`tests/traefik_catchall.rs`, porque comprobarlo de extremo a extremo necesita un motor de
-contenedores y no corre en el CI). La regla, su precio y sus límites están en «Operación y
+repositorio **ya entrega la regla del respaldo que las bloquea** —y un tema **descubierto** nuevo queda
+protegido **sin añadirlo a ninguna lista**, porque la regla bloquea **por forma**, no por nombre—, y
+una prueba la guarda (`tests/traefik_catchall.rs`, porque comprobarlo de extremo a extremo necesita un
+motor de contenedores y no corre en el CI). La regla, su precio y sus límites están en «Operación y
 observabilidad»: aquí, la frase y el puntero.
 
 Una página de tema **puede animar**: el movimiento es una decisión de aspecto, no un defecto de
@@ -495,11 +520,13 @@ Se copian **solo** las cuatro cabeceras de correlación, no el conjunto completo
 `--proxy-headers`, y la compresión se limita a gzip.
 
 Tampoco hay rotación de temas: `error-pages` tiene `--rotation-mode` (aleatorio
-al arrancar, horario, diario) y aquí no existe —un tema, y ya—. Y los **siete** temas
-están **incorporados al binario**, así que `THEME` no admite un nombre que no sea
-uno de ellos: un `content/<nombre>.html` propio **reemplaza** la página de un
-tema que ya existe, pero no **añade** un octavo nombre, porque eso haría que
-`THEME` dependiera del sistema de ficheros al arrancar.
+al arrancar, horario, diario) y aquí no existe —un tema, y ya—. Los **siete** temas
+siguen **incorporados al binario** —un `cargo install` sirve los siete sin ficheros de datos—, **y**
+el directorio `CONTENT_DIR` **añade** nombres: un `*.html` de más en su raíz **es** un tema nuevo (ver
+«El tema es una página»). `THEME` **sí** depende del sistema de ficheros al arrancar: se valida contra
+el registro de **ese** arranque, y un `THEME` correcto cuyo fichero todavía no esté montado **aborta**.
+Es una decisión declarada, con su precio: el barrido es al arrancar, así que **añadir** un tema exige
+**reiniciar**.
 
 ## Licencia
 

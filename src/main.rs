@@ -38,11 +38,13 @@
 //! de la spec `observability`: `GET /metrics` expone el contador de páginas
 //! servidas por código en texto Prometheus.
 //!
-//! Contrato de la spec `error-page` (change `themes-as-pages`): el cuerpo HTML es
-//! **la página del tema** elegido —su `<style>` dentro, autocontenida—, el tema
-//! del servicio lo elige `THEME` y, por petición, `X-Theme`, que además se declara
-//! en `Vary`. `/default.html` y `/default.htm` son el **alias del código por
-//! defecto** y las otras seis páginas de tema se sirven como **assets crudos**.
+//! Contrato de la spec `error-page`: el cuerpo HTML es **la página del tema**
+//! elegido —su `<style>` dentro, autocontenida—, el tema del servicio lo elige
+//! `THEME` y, por petición, `X-Theme`, que además se declara en `Vary`. El tema
+//! se resuelve contra el **registro** del arranque —los siete incorporados al
+//! binario más los descubiertos en la raíz de `CONTENT_DIR` (ver [`theme`])—.
+//! `/default.html` y `/default.htm` son el **alias del código por defecto** y las
+//! otras seis páginas de tema se sirven como **assets crudos**.
 //!
 //! El path se normaliza (percent-decode + plegado de `.` y `..`, ver
 //! [`path`]) **antes** de clasificarlo, y la misma cadena normalizada se
@@ -571,18 +573,26 @@ async fn error_response(
         hints.accept.as_deref(),
     );
 
-    // El tema se resuelve por petición: un `X-Theme` **conocido** gana al tema
-    // configurado y un valor ausente o desconocido cae a él (ver
-    // [`theme::resolve`]). Es lo mismo que hacen las cascadas de código y de
-    // formato, y por eso el tema viaja hasta el render: sin `X-Theme` la página
-    // servida es siempre la del tema del servicio.
-    let theme = theme::resolve(hints.x_theme.as_deref(), config.theme);
+    // El tema se resuelve por petición **contra el registro** del arranque: un
+    // `X-Theme` **conocido** gana al tema configurado y un valor ausente o
+    // desconocido cae a él (ver [`theme::resolve`]). Es lo mismo que hacen las
+    // cascadas de código y de formato, y por eso el tema viaja hasta el render:
+    // sin `X-Theme` la página servida es siempre la del tema del servicio.
+    //
+    // El valor de `X-Theme` **nunca** compone una ruta: la ruta sale del
+    // **registro**, que se construyó con el barrido del directorio al arrancar.
+    //
+    // Se resuelve **antes** del `spawn_blocking` y se mueve una **copia en
+    // propiedad**: `theme` sale de `state.config` (un préstamo) y el cierre exige
+    // `'static`, así que no se puede mover el préstamo dentro. El `clone` es
+    // gratis para un nombre `Borrowed` y una asignación corta para uno `Owned`.
+    let theme = theme::resolve(&config.themes, hints.x_theme.as_deref(), &config.theme).clone();
 
     state.counters.record(code, source);
 
     let rendered = tokio::task::spawn_blocking({
         let config = config.clone();
-        move || render_page(&config, code, format, theme)
+        move || render_page(&config, code, format, &theme)
     })
     .await;
 
@@ -774,15 +784,48 @@ mod tests {
     /// marcadores), distinta del fixture del operador de [`fixture_default_html`].
     const EMBEDDED_DEFAULT_PAGE: &str = include_str!("../content/default.html");
 
-    /// La página embebida del tema `nombre` tal como se **sirve** para `code`: la
-    /// misma que sirve el router con un `CONTENT_DIR` sin ficheros. Usa la
-    /// constante embebida del tema, así que no depende de `content/` en el disco.
+    /// La página **incorporada** del tema `nombre` tal como se **sirve** para `code`.
+    /// Usa `INCORPORATED`, así que no depende de `content/` en el disco.
     fn pagina_del_tema(nombre: &str, code: u16) -> String {
-        let theme = crate::theme::theme_by_name(nombre)
-            .unwrap_or_else(|| panic!("el tema `{nombre}` tiene que existir"));
-        let rellena = crate::render::plantilla(theme.embedded.as_bytes(), code);
+        let theme = crate::theme::INCORPORATED
+            .iter()
+            .find(|theme| theme.name == nombre)
+            .unwrap_or_else(|| panic!("el tema incorporado `{nombre}` tiene que existir"));
+        let pagina = theme
+            .embedded
+            .expect("un tema incorporado siempre tiene copia embebida");
+        let rellena = crate::render::plantilla(pagina.as_bytes(), code);
 
         String::from_utf8(rellena).expect("la página del tema, rellenada, es UTF-8")
+    }
+
+    /// El `CONTENT_DIR` de los fixtures con un tema de más: `neon.html` (un tema
+    /// descubierto), `default.html` (la página del operador para el incorporado
+    /// `default`), `404.html`/`999.html`/`200.html` (tallos que reclama la
+    /// resolución de códigos) y `temas/profundo.html` (un subdirectorio).
+    fn temas_extras_dir() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/temas-extras")
+    }
+
+    /// La página `neon.html` del fixture de temas de más, tal como se **sirve** para
+    /// `code` (leída del disco y rellenada con la misma `plantilla` que el router).
+    fn neon_servida(code: u16) -> String {
+        let bytes = std::fs::read(temas_extras_dir().join("neon.html"))
+            .expect("el fixture `neon.html` tiene que poder leerse");
+        let rellena = crate::render::plantilla(&bytes, code);
+
+        String::from_utf8(rellena).expect("la página del fixture, rellenada, es UTF-8")
+    }
+
+    /// Un directorio temporal **vacío**, único por prueba, para los casos que
+    /// necesitan crear y borrar un fichero con el servicio ya construido.
+    fn dir_temporal(nombre: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("errserve-main-{}-{nombre}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("el directorio temporal tiene que poder crearse");
+
+        dir
     }
 
     /// La página **embebida** del tema `default` tal como se **sirve** para `code`.
@@ -2485,6 +2528,194 @@ mod tests {
             body,
             pagina_del_tema("terminal", 404),
             "un `X-Theme` desconocido no puede elegir la página de otro tema"
+        );
+    }
+
+    // --- Un fichero de más en CONTENT_DIR es un tema (change
+    // `themes-from-content-dir`) ---------------------------------------------
+    //
+    // El registro deja de ser una tabla cerrada: los siete incorporados se quedan
+    // como base y un `*.html` de la **raíz** de `CONTENT_DIR` es un tema nuevo. El
+    // barrido es **al arrancar** y el tema descubierto **no** tiene copia embebida:
+    // su fichero es su única copia.
+
+    #[tokio::test]
+    async fn un_fichero_de_mas_en_content_dir_es_un_tema() {
+        // Escenario «un fichero de más en CONTENT_DIR es un tema»: `neon.html` en
+        // la raíz de `CONTENT_DIR` es un tema descubierto, así que `THEME=neon`
+        // sirve **su** página —la del disco— y no la del tema por defecto.
+        let config = config_con(&temas_extras_dir(), &[("THEME", "neon")]);
+
+        let response = build_router(&config)
+            .oneshot(get_with_headers("/404", &[("Accept", "text/html")]))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body = String::from_utf8(body_bytes(response).await).unwrap();
+        assert_eq!(
+            body,
+            neon_servida(404),
+            "`THEME=neon` tiene que servir la página `neon.html` del CONTENT_DIR"
+        );
+        assert!(
+            body.contains("NEON-FIXTURE"),
+            "el cuerpo tiene que ser la página del tema descubierto: {body}"
+        );
+        assert_ne!(
+            body,
+            pagina_del_tema("default", 404),
+            "el tema descubierto no puede servir la página del tema por defecto"
+        );
+    }
+
+    #[tokio::test]
+    async fn un_tema_descubierto_se_elige_por_x_theme() {
+        // Escenario «un tema descubierto se elige por X-Theme»: sin `THEME` el
+        // configurado es `default` —cuya página en el disco es la del fixture—,
+        // pero un `X-Theme: neon` **conocido** gana y sirve la página del tema
+        // descubierto.
+        let config = config_con(&temas_extras_dir(), &[]);
+
+        let response = build_router(&config)
+            .oneshot(get_with_headers(
+                "/404",
+                &[("Accept", "text/html"), ("X-Theme", "neon")],
+            ))
+            .await
+            .unwrap();
+
+        let body = String::from_utf8(body_bytes(response).await).unwrap();
+        assert_eq!(
+            body,
+            neon_servida(404),
+            "`X-Theme: neon` tiene que servir la página del tema descubierto `neon`"
+        );
+    }
+
+    #[tokio::test]
+    async fn el_fichero_de_un_tema_descubierto_desaparecido_responde_el_respaldo() {
+        // Un tema descubierto **no** tiene copia embebida a la que caer: su
+        // fichero es su única copia. Si se esfuma entre el arranque y la petición,
+        // la respuesta es el **respaldo de texto** con el estado intacto (`404`,
+        // nunca `500`): sin copia a la que caer, el silencio escondería un fichero
+        // que se ha esfumado.
+        let dir = dir_temporal("desaparecido");
+        std::fs::copy(temas_extras_dir().join("neon.html"), dir.join("neon.html"))
+            .expect("el fixture `neon.html` tiene que poder copiarse");
+
+        let config = config_con(&dir, &[("THEME", "neon")]);
+        let router = build_router(&config);
+
+        let response = router
+            .clone()
+            .oneshot(get_with_headers("/404", &[("Accept", "text/html")]))
+            .await
+            .unwrap();
+        let body = String::from_utf8(body_bytes(response).await).unwrap();
+        assert!(
+            body.contains("NEON-FIXTURE"),
+            "con el fichero presente, la página es la del tema descubierto: {body}"
+        );
+
+        std::fs::remove_file(dir.join("neon.html")).expect("el fichero tiene que poder borrarse");
+
+        let response = router
+            .oneshot(get_with_headers("/404", &[("Accept", "text/html")]))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "el estado sigue siendo el código resuelto, no 500"
+        );
+        assert_ne!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            content_type(&response).starts_with("text/plain"),
+            "sin copia embebida, el cuerpo tiene que ser el respaldo de texto, fue: {}",
+            content_type(&response)
+        );
+
+        let body = String::from_utf8(body_bytes(response).await).unwrap();
+        assert!(
+            body.contains("404"),
+            "el respaldo de texto tiene que llevar el código resuelto: {body}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn el_nombre_de_x_theme_no_compone_ninguna_ruta() {
+        // Invariante: el nombre que llega en `X-Theme` **nunca** se usa para
+        // componer una ruta; la ruta sale del **registro**, que se construyó con
+        // el barrido del directorio. Si se implementara como
+        // `content_dir.join(format!("{}.html", x_theme))`, un
+        // `X-Theme: ../../etc/passwd` sería una lectura arbitraria de ficheros.
+        // Aquí cada intento es un nombre que **no** está en el registro, así que
+        // cae al tema configurado (`neon`) y su cuerpo es el de `neon`.
+        let config = config_con(&temas_extras_dir(), &[("THEME", "neon")]);
+        let router = build_router(&config);
+
+        for intento in ["../../etc/passwd", "/etc/passwd", "neon/../../x", ".."] {
+            let response = router
+                .clone()
+                .oneshot(get_with_headers(
+                    "/404",
+                    &[("Accept", "text/html"), ("X-Theme", intento)],
+                ))
+                .await
+                .unwrap();
+
+            assert_eq!(
+                response.status(),
+                StatusCode::NOT_FOUND,
+                "`X-Theme: {intento}` no puede fabricar otro estado: {:?}",
+                response.status()
+            );
+            assert_ne!(
+                response.status(),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "`X-Theme: {intento}` no puede fabricar un 500"
+            );
+
+            let body = String::from_utf8(body_bytes(response).await).unwrap();
+            assert_eq!(
+                body,
+                neon_servida(404),
+                "`X-Theme: {intento}` no es un nombre del registro: tiene que caer al tema \
+                 configurado (`neon`), nunca leer una ruta"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn x_theme_no_cambia_los_formatos_que_no_tienen_pagina() {
+        // En JSON, XML y texto plano no hay página que incrustar, así que el tema
+        // se ignora: un `X-Theme: neon` no puede colar la página del tema
+        // descubierto en un formato que no la lleva.
+        let config = config_con(&temas_extras_dir(), &[("THEME", "neon")]);
+
+        let response = build_router(&config)
+            .oneshot(get_with_headers(
+                "/404",
+                &[("Accept", "application/json"), ("X-Theme", "neon")],
+            ))
+            .await
+            .unwrap();
+
+        assert!(
+            content_type(&response).starts_with("application/json"),
+            "Content-Type inesperado: {}",
+            content_type(&response)
+        );
+
+        let body = String::from_utf8(body_bytes(response).await).unwrap();
+        assert!(
+            !body.contains("NEON-FIXTURE"),
+            "en JSON no hay página que incrustar: el tema se ignora, fue: {body}"
         );
     }
 

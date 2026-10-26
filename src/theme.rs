@@ -12,26 +12,54 @@
 //! API pública del módulo:
 //!
 //! ```ignore
-//! #[derive(Debug)]
+//! use std::borrow::Cow;
+//!
+//! #[derive(Debug, Clone)]
 //! pub struct Theme {
-//!     pub name: &'static str,
-//!     pub embedded: &'static str,   // la página del tema, embebida con include_str!
+//!     pub name: Cow<'static, str>,
+//!     pub embedded: Option<&'static str>,   // la página embebida, si es incorporado
 //! }
 //!
-//! pub static THEMES: [Theme; 7];
+//! pub static INCORPORATED: [Theme; 7];
 //! pub const DEFAULT_THEME_NAME: &str = "default";
-//! pub const THEME_NAMES: &str =
-//!     "default, minimal, terminal, paper, amber, compact, matrix";
 //!
-//! pub fn theme_by_name(name: &str) -> Option<&'static Theme>;
+//! #[derive(Debug, Clone)]
+//! pub struct Themes { /* el registro efectivo, en orden */ }
+//!
+//! impl Themes {
+//!     pub fn incorporados() -> Self;
+//!     pub fn descubrir(content_dir: &Path) -> Self;
+//!     pub fn by_name(&self, name: &str) -> Option<&Theme>;
+//!     pub fn names(&self) -> String;
+//!     pub fn iter(&self) -> std::slice::Iter<'_, Theme>;
+//! }
+//!
 //! pub fn default_theme() -> &'static Theme;
-//! pub fn resolve(requested: Option<&str>, configured: &'static Theme) -> &'static Theme;
+//! pub fn resolve<'a>(
+//!     registry: &'a Themes,
+//!     requested: Option<&str>,
+//!     configured: &'a Theme,
+//! ) -> &'a Theme;
 //!
 //! impl Theme {
 //!     pub fn page_path(&self) -> String;
 //!     pub fn page(&self, content_dir: &Path) -> Result<Vec<u8>, std::io::Error>;
 //! }
 //! ```
+//!
+//! # El registro: incorporados **más** descubiertos, al arrancar
+//!
+//! El **registro efectivo** de temas es [`INCORPORATED`] —los siete que van
+//! dentro del binario— **más** los **descubiertos** en la raíz de `CONTENT_DIR`
+//! al arrancar ([`Themes::descubrir`]). Los siete se **quedan**: un binario
+//! instalado sin ficheros de datos sigue sirviendo los siete diseños, y el
+//! directorio del operador **añade**, no sustituye.
+//!
+//! **El precio, escrito**: el barrido es **al arrancar**, así que **añadir** un
+//! tema exige reiniciar; los **bytes** de la página se leen **al servir**, así que
+//! **editar** un tema que ya estaba se ve sin reiniciar. La página del operador
+//! **no se inspecciona**: los tres contratos de abajo cubren **solo** las páginas
+//! incorporadas al binario.
 //!
 //! # Por qué un tema es una página y no una hoja
 //!
@@ -103,30 +131,38 @@
 //! decisiones medidas y declaradas, no descuidos.
 
 use crate::embedded;
+use std::borrow::Cow;
 use std::io::ErrorKind;
 use std::path::Path;
 
-/// Un tema: su nombre y la página que lo define, embebida en el binario.
+/// Un tema: su **nombre** y, si es incorporado, la página embebida que lo define.
 ///
-/// Los dos campos van en la tabla del binario porque el tema tiene que estar
-/// disponible en un servicio arrancado **sin ficheros de datos**: un binario
-/// instalado con `cargo install` sirve la página de su tema aunque no haya
-/// `content/`. La ruta de esa página **no** es un campo —se **deriva** del
-/// nombre—, así que no puede divergir de él.
-#[derive(Debug)]
+/// El **nombre** es lo que se escribe en `THEME` y en `X-Theme`, y de él se
+/// **deriva** la ruta de su página (`<nombre>.html`): la ruta **no** es un campo,
+/// así que no puede divergir del nombre. Es un [`Cow`] porque un tema
+/// **incorporado** tiene un nombre de cadena literal ([`Cow::Borrowed`]) y uno
+/// **descubierto** en `CONTENT_DIR` tiene un nombre que solo se conoce al arrancar
+/// ([`Cow::Owned`]).
+///
+/// `embedded` es la copia de respaldo de [`Theme::page`]: `Some` para los
+/// incorporados —que van dentro del binario, así que un servicio sin ficheros de
+/// datos sirve los siete— y `None` para los descubiertos, cuya **única** copia es
+/// su fichero.
+#[derive(Debug, Clone)]
 pub struct Theme {
     /// Nombre público del tema, el que se escribe en `THEME` y en `X-Theme`, y
     /// del que se deriva la ruta de su página (`<nombre>.html`).
-    pub name: &'static str,
-    /// La página del tema, embebida en el binario: la copia de respaldo de
-    /// [`Theme::page`].
-    pub embedded: &'static str,
+    pub name: Cow<'static, str>,
+    /// La página del tema embebida en el binario, si es un **incorporado**; `None`
+    /// para un tema descubierto, cuya única copia es su fichero.
+    pub embedded: Option<&'static str>,
 }
 
-/// Los **siete** temas incorporados, y la **única** fuente de verdad de qué temas
-/// hay.
+/// Los **siete** temas incorporados al binario, y su **orden canónico**.
 ///
-/// `default` es el tema por defecto (`THEMES[0]`) y el único de las **seis
+/// Es la **base** del registro efectivo —los siete se quedan siempre— y el orden
+/// en el que [`Themes::names`] los enumera. `default` es el primero y el tema por
+/// defecto ([`default_theme`]). `default` es además el único de las **seis
 /// sobrias** que **anima** —su `<main>` entra con un movimiento que neutraliza en
 /// `prefers-reduced-motion: reduce`—; los cinco sobrios siguientes comparten una
 /// **decisión de diseño**, no un contrato: son deliberadamente sobrios porque son
@@ -134,75 +170,250 @@ pub struct Theme {
 /// **documento propio** —canvas de lluvia, glitch, terminal, minijuego, y también
 /// anima— y su marcado puede diferir del de las seis sobrias.
 ///
-/// Es un `static` y no una `const`: se recorre con `THEMES.iter()`, nunca por
-/// valor —mover de un `static` no está permitido—, y da una única dirección a lo
-/// largo del binario.
-pub static THEMES: [Theme; 7] = [
+/// Es un `static` y no una `const`: se recorre con `INCORPORATED.iter()`, nunca
+/// por valor —mover de un `static` no está permitido—, y da una única dirección a
+/// lo largo del binario. Un [`Cow::Borrowed`] es una expresión constante, así que
+/// no hace falta ningún `Box::leak` ni ningún array intermedio.
+pub static INCORPORATED: [Theme; 7] = [
     Theme {
-        name: DEFAULT_THEME_NAME,
-        embedded: embedded::DEFAULT_PAGE,
+        name: Cow::Borrowed(DEFAULT_THEME_NAME),
+        embedded: Some(embedded::DEFAULT_PAGE),
     },
     Theme {
-        name: "minimal",
-        embedded: embedded::MINIMAL_PAGE,
+        name: Cow::Borrowed("minimal"),
+        embedded: Some(embedded::MINIMAL_PAGE),
     },
     Theme {
-        name: "terminal",
-        embedded: embedded::TERMINAL_PAGE,
+        name: Cow::Borrowed("terminal"),
+        embedded: Some(embedded::TERMINAL_PAGE),
     },
     Theme {
-        name: "paper",
-        embedded: embedded::PAPER_PAGE,
+        name: Cow::Borrowed("paper"),
+        embedded: Some(embedded::PAPER_PAGE),
     },
     Theme {
-        name: "amber",
-        embedded: embedded::AMBER_PAGE,
+        name: Cow::Borrowed("amber"),
+        embedded: Some(embedded::AMBER_PAGE),
     },
     Theme {
-        name: "compact",
-        embedded: embedded::COMPACT_PAGE,
+        name: Cow::Borrowed("compact"),
+        embedded: Some(embedded::COMPACT_PAGE),
     },
     Theme {
-        name: "matrix",
-        embedded: embedded::MATRIX_PAGE,
+        name: Cow::Borrowed("matrix"),
+        embedded: Some(embedded::MATRIX_PAGE),
     },
 ];
 
-/// Nombre del tema por defecto, que es también el de `THEMES[0]`.
+/// Nombre del tema por defecto, que es también el de `INCORPORATED[0]`.
 pub const DEFAULT_THEME_NAME: &str = "default";
 
-/// Los nombres válidos, en el orden de [`THEMES`], para los mensajes de error.
+/// El **registro efectivo** de temas: los siete incorporados **más** los
+/// descubiertos en la raíz de `CONTENT_DIR` **al arrancar**.
 ///
-/// Es la lista que el error de `THEME` enumera: quien escribe la variable cree
-/// que está configurando algo, así que el error tiene que decirle qué puede
-/// escribir en su lugar, no solo que se equivocó. Una prueba comprueba que
-/// enumera los siete y solo los siete.
-pub const THEME_NAMES: &str = "default, minimal, terminal, paper, amber, compact, matrix";
-
-/// El tema incorporado con ese nombre, si lo hay.
+/// Es un valor **con dueño** (no una tabla estática) porque un tema descubierto
+/// lleva un nombre que solo se conoce en ejecución. El registro vive en la
+/// [`crate::config::Config`], que ya viaja por referencia a cada petición, así que
+/// no se filtra ni se copia por petición.
 ///
-/// La comparación es **exacta**, sensible a mayúsculas: `Terminal` no es el tema
-/// `terminal`. Adivinar la intención de quien escribe la cabecera sería peor que
-/// no aceptarla.
-pub fn theme_by_name(name: &str) -> Option<&'static Theme> {
-    THEMES.iter().find(|theme| theme.name == name)
+/// **El precio, escrito**: el barrido es **al arrancar**, así que **añadir** un
+/// tema exige reiniciar. Los **bytes** de la página se leen **al servir**, así que
+/// **editar** un tema que ya estaba se ve sin reiniciar.
+#[derive(Debug, Clone)]
+pub struct Themes {
+    /// Los temas en orden: los siete incorporados primero y los descubiertos
+    /// detrás, ordenados por nombre.
+    temas: Vec<Theme>,
 }
 
-/// El tema por defecto (`default`), que es el de `THEMES[0]`.
+impl Themes {
+    /// El registro de solo los **siete incorporados**, sin barrer ningún
+    /// directorio.
+    ///
+    /// Es lo que ve un binario instalado sin ficheros de datos y lo que usan las
+    /// pruebas que no se ocupan del descubrimiento.
+    pub fn incorporados() -> Self {
+        Self {
+            temas: INCORPORATED.to_vec(),
+        }
+    }
+
+    /// El **registro efectivo**: los siete incorporados **más** los descubiertos
+    /// en la **raíz** de `content_dir`.
+    ///
+    /// Las reglas del barrido, una a una:
+    ///
+    /// - **Solo la raíz**: un `temas/neon.html` no es un tema. Un tema es **una
+    ///   página** con un nombre, y admitir rutas convertiría el nombre en una ruta
+    ///   que el registro tendría que validar.
+    /// - **Un fichero regular, siguiendo enlaces simbólicos**:
+    ///   `entrada.path().is_file()` —**no** `file_type()`—, para que un enlace a un
+    ///   fichero legible sí sea un tema y un enlace roto o a un directorio no.
+    /// - **Extensión exactamente `html`**, en minúsculas: `neon.htm`, `neon.HTML`
+    ///   y `neon.css` no son temas.
+    /// - **El nombre es el tallo**, UTF-8 y no vacío.
+    /// - **El tallo de un incorporado no añade un tema**: `default.html` es la
+    ///   página del `default` incorporado en el disco, no un `default` de más.
+    /// - **Un tallo que reclama la resolución de códigos no es un tema**: se
+    ///   pregunta a la propia resolución ([`crate::resolve::code_from_path`]) en vez
+    ///   de comparar el rango, porque es el clasificador el que decide —`/999.html`
+    ///   y `/200.html` responden el **código por defecto**, que es otra página—.
+    /// - **El orden es determinista**: los incorporados primero y los descubiertos
+    ///   ordenados por nombre detrás (`read_dir` no promete ningún orden).
+    ///
+    /// Un directorio que **no existe** deja los siete y **no** falla, **sin**
+    /// `warn!` (es lo normal en un binario sin ficheros de datos). Uno que existe y
+    /// **no se puede listar** deja los siete y **no** falla, con un `warn!` que
+    /// **nombra el directorio y la causa** (el caso medido es un fichero regular
+    /// donde se espera un directorio, `NotADirectory`, que **no** es `NotFound`).
+    /// Las entradas que no se pueden leer se **ignoran** (`filter_map(Result::ok)`).
+    pub fn descubrir(content_dir: &Path) -> Self {
+        let mut registro = Self::incorporados();
+        let mut descubiertos: Vec<Theme> = Vec::new();
+
+        match std::fs::read_dir(content_dir) {
+            Ok(entradas) => {
+                for entrada in entradas.filter_map(Result::ok) {
+                    if let Some(tema) = tema_descubierto(&entrada) {
+                        descubiertos.push(tema);
+                    }
+                }
+            }
+            // Un directorio que no existe es lo normal en un binario sin ficheros
+            // de datos: se dejan los siete y **no** se deja constancia.
+            Err(err) if err.kind() == ErrorKind::NotFound => {}
+            // Un directorio que existe y no se puede listar es un fallo del
+            // directorio del operador: se deja constancia y se dejan los siete.
+            Err(err) => {
+                tracing::warn!(
+                    dir = %content_dir.display(),
+                    error = %err,
+                    "no se pudo listar el directorio de contenido: se sirven solo los temas incorporados"
+                );
+            }
+        }
+
+        // `read_dir` no promete ningún orden: se ordenan por nombre para que el
+        // registro no dependa del del sistema de ficheros.
+        descubiertos.sort_by(|a, b| a.name.as_ref().cmp(b.name.as_ref()));
+        registro.temas.extend(descubiertos);
+
+        registro
+    }
+
+    /// El tema del registro con ese nombre, si lo hay.
+    ///
+    /// La comparación es **exacta**, sensible a mayúsculas: `Terminal` no es el
+    /// tema `terminal`. Adivinar la intención de quien escribe la cabecera sería
+    /// peor que no aceptarla.
+    pub fn by_name(&self, name: &str) -> Option<&Theme> {
+        self.temas.iter().find(|theme| theme.name == name)
+    }
+
+    /// Los nombres del registro, en orden, separados por `", "`.
+    ///
+    /// Es la lista que el error de `THEME` enumera: quien escribe la variable cree
+    /// que está configurando algo, así que el error tiene que decirle qué puede
+    /// escribir en su lugar —los nombres que el registro tenga **en ese
+    /// arranque**—, no solo que se equivocó.
+    pub fn names(&self) -> String {
+        self.iter()
+            .map(|theme| theme.name.as_ref())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// Recorre los temas del registro en orden.
+    pub fn iter(&self) -> std::slice::Iter<'_, Theme> {
+        self.temas.iter()
+    }
+}
+
+/// El tema **descubierto** que representa una entrada de `CONTENT_DIR`, si la
+/// entrada es un tema.
+///
+/// Devuelve `None` —y deja constancia cuando el motivo lo merece— si la entrada
+/// no es un fichero de tema. Las reglas están en [`Themes::descubrir`].
+fn tema_descubierto(entrada: &std::fs::DirEntry) -> Option<Theme> {
+    let path = entrada.path();
+
+    // Un fichero regular, **siguiendo enlaces simbólicos**: `is_file()` (y no
+    // `file_type()`) hace que un enlace a un fichero legible sea un tema y un
+    // enlace roto o a un directorio no. Un directorio llamado `neon.html` tampoco.
+    if !path.is_file() {
+        return None;
+    }
+
+    // La extensión tiene que ser **exactamente** `html`, comparada como cadena
+    // (una comparación de `OsStr` podría escaparse a mayúsculas).
+    if path.extension().and_then(|ext| ext.to_str()) != Some("html") {
+        return None;
+    }
+
+    // El nombre es el tallo del fichero: tiene que ser UTF-8 y no estar vacío.
+    let stem = path.file_stem().and_then(|stem| stem.to_str())?;
+    if stem.is_empty() {
+        return None;
+    }
+
+    // El tallo de un incorporado no añade un tema: es la página de ese tema en el
+    // disco, que es la regla de siempre —un fichero legible gana a la copia
+    // embebida—.
+    if INCORPORATED.iter().any(|tema| tema.name == stem) {
+        return None;
+    }
+
+    // Un tallo que **reclama la resolución de códigos** no es un tema. Se pregunta
+    // a la propia resolución ([`crate::resolve::code_from_path`]) en vez de
+    // comparar el rango `400..=599`, y el motivo está **medido**: `code_from_path`
+    // **parsea** el número y `is_error_page_path` decide **sin** `is_usable_code`,
+    // así que **cualquier** tallo que se lea como `u16` reclama el path
+    // —`/999.html` y `/200.html` responden el **código por defecto**, que es otra
+    // página—. La fuente única de esa decisión es la resolución, no una copia del
+    // rango.
+    let file_name = path.file_name().and_then(|name| name.to_str())?;
+    if crate::resolve::code_from_path(&format!("/{file_name}")).is_some() {
+        tracing::warn!(
+            file = %path.display(),
+            "el nombre del fichero reclama la resolución de códigos: no se registra como tema"
+        );
+
+        return None;
+    }
+
+    Some(Theme {
+        name: Cow::Owned(stem.to_string()),
+        embedded: None,
+    })
+}
+
+/// El tema por defecto (`default`), que es el de `INCORPORATED[0]`.
 pub fn default_theme() -> &'static Theme {
-    &THEMES[0]
+    &INCORPORATED[0]
 }
 
-/// Resuelve el tema efectivo de una petición.
+/// Resuelve el tema efectivo de una petición **contra el registro**.
 ///
 /// Con el principio de siempre —el **primer** origen que haga match—, un
 /// `X-Theme` **conocido** gana al tema configurado (`THEME`); **ausente o
 /// desconocido** cae al configurado. Es deliberado que un valor desconocido no
 /// sea un error: esa cabecera la elige quien llama, y un cliente no puede romper
-/// el servicio. La asimetría con `THEME` —que sí aborta el arranque— es la
-/// misma que ya rige entre `X-Code`/`X-Format` y las variables del operador.
-pub fn resolve(requested: Option<&str>, configured: &'static Theme) -> &'static Theme {
-    requested.and_then(theme_by_name).unwrap_or(configured)
+/// el servicio. La asimetría con `THEME` —que sí aborta el arranque— es la misma
+/// que ya rige entre `X-Code`/`X-Format` y las variables del operador.
+///
+/// **Invariante que no se puede romper**: el valor de `X-Theme` **nunca** compone
+/// una ruta. La ruta sale del **registro**, que se construyó con el barrido del
+/// directorio: se resuelve el nombre a una entrada y se sirve **su** ruta. Si se
+/// implementara como `content_dir.join(format!("{}.html", requested))`, un
+/// `X-Theme: ../../etc/passwd` sería una lectura arbitraria de ficheros.
+pub fn resolve<'a>(
+    registry: &'a Themes,
+    requested: Option<&str>,
+    configured: &'a Theme,
+) -> &'a Theme {
+    requested
+        .and_then(|nombre| registry.by_name(nombre))
+        .unwrap_or(configured)
 }
 
 impl Theme {
@@ -220,14 +431,19 @@ impl Theme {
     }
 
     /// La página del tema: la de `CONTENT_DIR/<nombre>.html` si se puede leer, y
-    /// si no la embebida.
+    /// si no la copia embebida —que un tema **descubierto** no tiene—.
     ///
-    /// Un fichero **ausente** no es un fallo —es lo normal en un binario
-    /// instalado sin ficheros de datos—, así que cae a la copia embebida **sin**
-    /// `warn`. Un fichero **presente pero ilegible** deja un `warn!` que **nombra
-    /// el fichero y su causa** y devuelve el `io::Error`: el render lo convierte
-    /// en [`crate::render::RenderError::Io`] y la respuesta es el **respaldo de
-    /// texto** con el estado intacto.
+    /// Un fichero **ausente** de un tema **incorporado** no es un fallo —es lo
+    /// normal en un binario instalado sin ficheros de datos—, así que cae a su
+    /// copia embebida **sin** `warn`. Un fichero **ausente** de un tema
+    /// **descubierto** sí deja constancia: sin copia a la que caer, el silencio
+    /// escondería un fichero que se ha esfumado, y devuelve el `io::Error`.
+    ///
+    /// Cualquier **otro** error de E/S —un fichero que existe y no se puede
+    /// leer— deja un `warn!` que **nombra el fichero y su causa** y devuelve el
+    /// `io::Error`: el render lo convierte en [`crate::render::RenderError::Io`] y
+    /// la respuesta es el **respaldo de texto** con el estado intacto, nunca un
+    /// `500`.
     ///
     /// Un fichero del operador roto **no** se tapa en silencio con la copia
     /// embebida: la página es **contenido**, y decidir que un directorio roto se
@@ -239,10 +455,23 @@ impl Theme {
 
         match std::fs::read(&path) {
             Ok(bytes) => Ok(bytes),
-            Err(err) if err.kind() == ErrorKind::NotFound => Ok(self.embedded.as_bytes().to_vec()),
+            Err(err) if err.kind() == ErrorKind::NotFound => match self.embedded {
+                // Un incorporado ausente cae a su copia embebida, **sin** `warn`.
+                Some(embedded) => Ok(embedded.as_bytes().to_vec()),
+                // Un descubierto ausente no tiene a qué caer: deja constancia.
+                None => {
+                    tracing::warn!(
+                        theme = %self.name,
+                        path = %path.display(),
+                        "el tema descubierto no tiene fichero ni copia embebida: se responderá el respaldo de texto"
+                    );
+
+                    Err(err)
+                }
+            },
             Err(err) => {
                 tracing::warn!(
-                    theme = self.name,
+                    theme = %self.name,
                     path = %path.display(),
                     error = %err,
                     "no se pudo leer la página del tema: se responderá el respaldo de texto"
@@ -1115,8 +1344,8 @@ fn busca(pajar: &[u8], aguja: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_THEME_NAME, Incumplimiento, THEME_NAMES, THEMES, default_theme, incumplimientos,
-        resolve, theme_by_name,
+        DEFAULT_THEME_NAME, INCORPORATED, Incumplimiento, Theme, Themes, default_theme,
+        incumplimientos, resolve,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -1127,8 +1356,29 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("content")
     }
 
-    /// Los siete nombres, escritos **literalmente** para no depender de `THEMES`
-    /// al comprobar que `THEMES` es el conjunto correcto.
+    /// La página embebida de un tema **incorporado**. Los siete la tienen:
+    /// `INCORPORATED` se declara con `Some`, así que el `None` de un tema descubierto
+    /// no aparece por aquí.
+    fn embebida(theme: &Theme) -> &'static str {
+        theme
+            .embedded
+            .expect("un tema incorporado siempre tiene copia embebida")
+    }
+
+    /// El directorio de un fixture bajo `tests/fixtures/`.
+    fn fixtures_dir(nombre: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(nombre)
+    }
+
+    /// El registro descubierto en un directorio de fixtures del repositorio.
+    fn descubrir(fixture: &str) -> Themes {
+        Themes::descubrir(&fixtures_dir(fixture))
+    }
+
+    /// Los siete nombres, escritos **literalmente** para no depender de
+    /// `INCORPORATED` al comprobar que `INCORPORATED` es el conjunto correcto.
     const NOMBRES: [&str; 7] = [
         "default", "minimal", "terminal", "paper", "amber", "compact", "matrix",
     ];
@@ -1238,39 +1488,48 @@ mod tests {
     // --- Tabla y resolución de temas ---------------------------------------
 
     #[test]
-    fn la_tabla_declara_los_siete_temas() {
+    fn la_tabla_declara_los_siete_incorporados() {
         assert_eq!(
-            THEMES.len(),
+            INCORPORATED.len(),
             NOMBRES.len(),
-            "`THEMES` tiene que declarar los siete temas incorporados"
+            "`INCORPORATED` tiene que declarar los siete temas incorporados"
         );
         assert_eq!(
-            THEMES[0].name, DEFAULT_THEME_NAME,
-            "`THEMES[0]` tiene que ser el tema por defecto"
+            INCORPORATED[0].name, DEFAULT_THEME_NAME,
+            "`INCORPORATED[0]` tiene que ser el tema por defecto"
         );
 
-        for (theme, nombre) in THEMES.iter().zip(NOMBRES) {
+        for (theme, nombre) in INCORPORATED.iter().zip(NOMBRES) {
             assert_eq!(
                 theme.name, nombre,
-                "el orden de `THEMES` tiene que ser el de la lista de nombres"
+                "el orden de `INCORPORATED` tiene que ser el de la lista de nombres"
             );
         }
 
-        // `THEME_NAMES` enumera los siete y **solo** los siete: sin nombres de más
-        // —una lista que anunciase uno que no existe— ni de menos.
-        let enumerados: Vec<&str> = THEME_NAMES.split(',').map(str::trim).collect();
+        // Cada incorporado lleva su copia embebida: el `None` queda reservado a un
+        // tema **descubierto**, cuya única copia es su fichero.
+        for theme in INCORPORATED.iter() {
+            assert!(
+                theme.embedded.is_some(),
+                "cada tema incorporado tiene que llevar su copia embebida (`embedded` `Some`)"
+            );
+        }
+
         assert_eq!(
-            enumerados, NOMBRES,
-            "`THEME_NAMES` tiene que enumerar los siete nombres: {THEME_NAMES}"
+            default_theme().name,
+            DEFAULT_THEME_NAME,
+            "`default_theme()` tiene que ser el tema por defecto (el primero)"
         );
     }
 
     #[test]
-    fn theme_by_name_solo_acepta_los_siete() {
+    fn by_name_solo_acepta_los_incorporados() {
+        let registro = Themes::incorporados();
+
         for nombre in NOMBRES {
             assert!(
-                theme_by_name(nombre).is_some(),
-                "`theme_by_name` tiene que encontrar el tema `{nombre}`"
+                registro.by_name(nombre).is_some(),
+                "`by_name` tiene que encontrar el tema `{nombre}`"
             );
         }
 
@@ -1286,38 +1545,41 @@ mod tests {
             "default ",
         ] {
             assert!(
-                theme_by_name(desconocido).is_none(),
-                "`theme_by_name({desconocido:?})` tiene que ser `None`: la comparación es exacta"
+                registro.by_name(desconocido).is_none(),
+                "`by_name({desconocido:?})` tiene que ser `None`: la comparación es exacta"
             );
         }
     }
 
     #[test]
     fn resolve_el_conocido_gana_y_lo_demas_cae_al_configurado() {
-        let configurado = theme_by_name("minimal").expect("`minimal` es uno de los siete");
+        let registro = Themes::incorporados();
+        let configurado = registro
+            .by_name("minimal")
+            .expect("`minimal` es uno de los siete");
 
         assert_eq!(
-            resolve(Some("terminal"), configurado).name,
+            resolve(&registro, Some("terminal"), configurado).name,
             "terminal",
             "un `X-Theme` conocido tiene que ganar al tema configurado"
         );
         assert_eq!(
-            resolve(Some("neon"), configurado).name,
+            resolve(&registro, Some("neon"), configurado).name,
             "minimal",
             "un `X-Theme` desconocido cae al configurado, no a otro tema"
         );
         assert_eq!(
-            resolve(Some(""), configurado).name,
+            resolve(&registro, Some(""), configurado).name,
             "minimal",
             "un `X-Theme` vacío no es un tema: cae al configurado"
         );
         assert_eq!(
-            resolve(None, configurado).name,
+            resolve(&registro, None, configurado).name,
             "minimal",
             "sin `X-Theme` el tema es el configurado"
         );
         assert_eq!(
-            resolve(None, default_theme()).name,
+            resolve(&registro, None, default_theme()).name,
             DEFAULT_THEME_NAME,
             "sin `X-Theme` y con el defecto configurado, el tema es `default`"
         );
@@ -1330,7 +1592,7 @@ mod tests {
         // D1: la ruta se **deriva** del nombre (`<nombre>.html`, en la raíz de
         // `CONTENT_DIR`), y cada tema tiene su fichero en `content/` con ese
         // tallo. Una tabla de rutas podría divergir del nombre; derivada, no.
-        for theme in THEMES.iter() {
+        for theme in INCORPORATED.iter() {
             let esperada = format!("{}.html", theme.name);
             assert_eq!(
                 theme.page_path(),
@@ -1353,7 +1615,7 @@ mod tests {
     fn las_paginas_embebidas_son_byte_a_byte_las_de_content() {
         // D5: los bytes embebidos de cada tema igualan la lectura de
         // `content/<nombre>.html`. Detecta una copia embebida obsoleta o distinta.
-        for theme in THEMES.iter() {
+        for theme in INCORPORATED.iter() {
             let ruta = content_dir().join(theme.page_path());
             let del_disco = match fs::read(&ruta) {
                 Ok(bytes) => bytes,
@@ -1365,7 +1627,7 @@ mod tests {
             };
 
             assert_eq!(
-                theme.embedded.as_bytes(),
+                embebida(theme).as_bytes(),
                 del_disco.as_slice(),
                 "la página embebida del tema `{}` no coincide byte a byte con {}",
                 theme.name,
@@ -1393,7 +1655,10 @@ mod tests {
         let propia = b"<p>pagina propia del operador, distinguible</p>".to_vec();
         fs::write(dir.join("matrix.html"), &propia).expect("el fixture tiene que poder escribirse");
 
-        let theme = theme_by_name("matrix").expect("`matrix` es uno de los siete");
+        let registro = Themes::incorporados();
+        let theme = registro
+            .by_name("matrix")
+            .expect("`matrix` es uno de los siete");
         assert_eq!(
             theme
                 .page(&dir)
@@ -1409,13 +1674,13 @@ mod tests {
     fn la_pagina_ausente_cae_a_la_embebida_sin_warn() {
         let dir = dir_temporal("ausente");
 
-        for theme in THEMES.iter() {
+        for theme in INCORPORATED.iter() {
             let pagina = theme
                 .page(&dir)
                 .expect("un fichero ausente no es un fallo: cae a la copia embebida");
             assert_eq!(
                 pagina.as_slice(),
-                theme.embedded.as_bytes(),
+                embebida(theme).as_bytes(),
                 "sin fichero en el disco, el tema `{}` tiene que servir su copia embebida",
                 theme.name
             );
@@ -1432,7 +1697,10 @@ mod tests {
         // reproducible.
         fs::create_dir(dir.join("matrix.html")).expect("el fixture tiene que poder crearse");
 
-        let theme = theme_by_name("matrix").expect("`matrix` es uno de los siete");
+        let registro = Themes::incorporados();
+        let theme = registro
+            .by_name("matrix")
+            .expect("`matrix` es uno de los siete");
         assert!(
             theme.page(&dir).is_err(),
             "una página del operador que existe y no se puede leer tiene que ser un error de E/S, \
@@ -1452,10 +1720,11 @@ mod tests {
         // todos los temas necesitan una regla para él, mientras que `footer` lo
         // estilan las seis. `matrix` queda **fuera**: es un documento propio.
         let mut fallos = Vec::new();
+        let registro = Themes::incorporados();
 
         for nombre in SOBRIAS {
-            let theme = theme_by_name(nombre).expect("es uno de los siete");
-            let css = String::from_utf8_lossy(estilo(theme.embedded.as_bytes())).into_owned();
+            let theme = registro.by_name(nombre).expect("es uno de los siete");
+            let css = String::from_utf8_lossy(estilo(embebida(theme).as_bytes())).into_owned();
 
             for selector in ["body", "h1", "h2", "hr", "p", "footer"] {
                 if !tiene_regla(&css, selector) {
@@ -1480,9 +1749,12 @@ mod tests {
         // glitch, terminal, minijuego— y NO se le exige el marcado de las sobrias
         // (ni `h2` ni `hr`). Esta prueba deja constancia de que su exclusión es
         // una decisión, no un olvido: si algún día se le exigiera, se caería aquí.
-        let matrix = theme_by_name("matrix").expect("`matrix` es uno de los siete");
+        let registro = Themes::incorporados();
+        let matrix = registro
+            .by_name("matrix")
+            .expect("`matrix` es uno de los siete");
         assert!(
-            !SOBRIAS.contains(&matrix.name),
+            !SOBRIAS.contains(&matrix.name.as_ref()),
             "`matrix` no puede estar en la lista de las seis sobrias"
         );
         assert_eq!(matrix.page_path(), "matrix.html");
@@ -1499,8 +1771,8 @@ mod tests {
         // que ese pedido no lo puede resolver nadie.
         let mut fallos = Vec::new();
 
-        for theme in THEMES.iter() {
-            for incumplimiento in incumplimientos(theme.embedded.as_bytes()) {
+        for theme in INCORPORATED.iter() {
+            for incumplimiento in incumplimientos(embebida(theme).as_bytes()) {
                 if let Incumplimiento::Peticion(token) = incumplimiento {
                     fallos.push(format!(
                         "la página del tema `{}` contiene `{token}`: el navegador tendría que \
@@ -1988,8 +2260,8 @@ main { animation: entrada 180ms ease-out; }
         // neutralizar, esta guarda es la que lo exige.
         let mut fallos = Vec::new();
 
-        for theme in THEMES.iter() {
-            for incumplimiento in incumplimientos(theme.embedded.as_bytes()) {
+        for theme in INCORPORATED.iter() {
+            for incumplimiento in incumplimientos(embebida(theme).as_bytes()) {
                 if let Incumplimiento::Movimiento(token) = incumplimiento {
                     fallos.push(format!(
                         "la página del tema `{}` anima con `{token}` y no se puede apagar",
@@ -2015,5 +2287,311 @@ main { animation: entrada 180ms ease-out; }
         assert!(!incumple_movimiento(r#"<img src="/x.png" alt="" />"#));
         assert!(incumple_movimiento(ANIMADA_SIN_FRENO));
         assert!(!incumple_red(ANIMADA_SIN_FRENO));
+    }
+
+    // --- El directorio añade temas al registro (change `themes-from-content-dir`) ---
+
+    #[test]
+    fn el_registro_enumera_los_nombres_en_orden() {
+        // Lo que sustituye a la comprobación de `THEME_NAMES`: los nombres del
+        // registro, en orden, separados por `, `.
+        assert_eq!(
+            Themes::incorporados().names(),
+            NOMBRES.join(", "),
+            "`names()` tiene que enumerar los siete incorporados en orden"
+        );
+    }
+
+    #[test]
+    fn un_fichero_de_mas_es_un_tema() {
+        let registro = descubrir("temas-extras");
+
+        let neon = registro
+            .by_name("neon")
+            .expect("`neon.html` en la raíz de CONTENT_DIR es un tema");
+        assert!(
+            neon.embedded.is_none(),
+            "un tema descubierto **no** tiene copia embebida: su única copia es su fichero"
+        );
+        assert_eq!(neon.page_path(), "neon.html");
+        assert_eq!(
+            registro.names(),
+            "default, minimal, terminal, paper, amber, compact, matrix, neon",
+            "los incorporados van primero y el descubierto detrás"
+        );
+    }
+
+    #[test]
+    fn un_fichero_con_el_tallo_de_un_incorporado_no_anade_tema() {
+        let registro = descubrir("temas-extras");
+
+        assert_eq!(
+            registro.iter().filter(|t| t.name == "default").count(),
+            1,
+            "`default.html` es la página del `default` incorporado en el disco, no un `default` \
+             de más"
+        );
+
+        let default = registro
+            .by_name("default")
+            .expect("`default` sigue en el registro");
+        assert!(
+            default.embedded.is_some(),
+            "el `default` del registro es el incorporado: conserva su copia embebida"
+        );
+    }
+
+    #[test]
+    fn un_fichero_con_nombre_de_codigo_no_es_un_tema() {
+        let registro = descubrir("temas-extras");
+
+        for nombre in ["404", "999", "200"] {
+            assert!(
+                registro.by_name(nombre).is_none(),
+                "`{nombre}.html` no es un tema: su path lo reclama la resolución de códigos, así \
+                 que no se serviría ni como asset ni como página de tema (`/999.html` o \
+                 `/200.html` responderían el código por defecto, que es otra página)"
+            );
+        }
+    }
+
+    #[test]
+    fn solo_se_mira_la_raiz_de_content_dir() {
+        let registro = descubrir("temas-extras");
+
+        assert!(
+            registro.by_name("profundo").is_none(),
+            "un fichero en `temas/profundo.html` no es un tema: el nombre de un tema no es una ruta"
+        );
+        assert!(
+            registro.by_name("neon").is_some(),
+            "`neon.html` está en la raíz del directorio, así que sí es un tema"
+        );
+    }
+
+    #[test]
+    fn la_extension_tiene_que_ser_html() {
+        let registro = descubrir("temas-extension");
+
+        assert_eq!(
+            registro.names(),
+            NOMBRES.join(", "),
+            "el registro tiene que quedarse con los siete incorporados"
+        );
+        assert_eq!(
+            registro.iter().count(),
+            7,
+            "`neon.htm`, `neon.HTML` y `neon.css` no añaden ningún tema"
+        );
+        assert!(
+            registro.by_name("neon").is_none(),
+            "`neon.htm`, `neon.HTML` y `neon.css` no son temas porque la extensión tiene que ser \
+             exactamente `html`"
+        );
+    }
+
+    #[test]
+    fn un_directorio_que_no_existe_da_los_siete() {
+        // Ese directorio no existe a propósito: es el caso de un binario instalado
+        // sin ficheros de datos, con `CONTENT_DIR` apuntando a un `content` que no
+        // está.
+        let registro = Themes::descubrir(&fixtures_dir("inexistente-y-ademas-inexistente"));
+
+        assert_eq!(
+            registro.names(),
+            NOMBRES.join(", "),
+            "un CONTENT_DIR que no existe da los siete incorporados **sin** fallar"
+        );
+    }
+
+    #[test]
+    fn un_directorio_que_no_se_puede_listar_deja_los_siete() {
+        // Un **fichero** donde se espera un directorio: `read_dir` sobre él falla
+        // con `NotADirectory`, que **no** es `NotFound`. El registro tiene que
+        // quedarse con los siete y **no** fallar.
+        let registro = Themes::descubrir(&fixtures_dir("temas-extras").join("neon.html"));
+
+        assert_eq!(
+            registro.names(),
+            NOMBRES.join(", "),
+            "un CONTENT_DIR que existe y no se puede listar deja los siete incorporados sin fallar"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn un_enlace_simbolico_a_un_fichero_legible_es_un_tema() {
+        use std::os::unix::fs::symlink;
+
+        let dir = dir_temporal("enlaces");
+
+        symlink(
+            fixtures_dir("temas-extras").join("neon.html"),
+            dir.join("enlazado.html"),
+        )
+        .expect("el enlace al fixture tiene que poder crearse");
+        symlink(dir.join("no-existe.html"), dir.join("roto.html"))
+            .expect("el enlace roto tiene que poder crearse");
+        symlink(&dir, dir.join("a-directorio.html"))
+            .expect("el enlace al directorio tiene que poder crearse");
+
+        let registro = Themes::descubrir(&dir);
+
+        assert!(
+            registro.by_name("enlazado").is_some(),
+            "un enlace simbólico a un fichero legible es un tema"
+        );
+        assert!(
+            registro.by_name("roto").is_none(),
+            "un enlace roto no es un tema: apunta a un destino que no existe"
+        );
+        assert!(
+            registro.by_name("a-directorio").is_none(),
+            "un enlace a un directorio no es un tema"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn el_tema_descubierto_cuyo_fichero_desaparece_es_un_error_de_e_s() {
+        let dir = dir_temporal("descubierto-desaparece");
+        let bytes = fs::read(fixtures_dir("temas-extras").join("neon.html"))
+            .expect("el fixture tiene que poder leerse");
+        fs::write(dir.join("neon.html"), &bytes).expect("el fixture tiene que poder escribirse");
+
+        let registro = Themes::descubrir(&dir);
+        let neon = registro
+            .by_name("neon")
+            .expect("`neon.html` es un tema descubierto");
+
+        let con_fichero = neon
+            .page(&dir)
+            .expect("con el fichero presente, la página se lee");
+        assert_eq!(
+            con_fichero, bytes,
+            "con el fichero presente, `page` devuelve sus bytes"
+        );
+
+        fs::remove_file(dir.join("neon.html")).expect("el fichero tiene que poder borrarse");
+
+        assert!(
+            neon.page(&dir).is_err(),
+            "un tema descubierto cuyo fichero desaparece es un error de E/S: no tiene copia \
+             embebida a la que caer, así que la respuesta del servicio será el respaldo de texto \
+             con el estado intacto, y **no** un 500"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn la_ruta_sale_del_nombre_del_registro() {
+        // La invariante que impide una lectura arbitraria de ficheros: el valor de
+        // `X-Theme` **nunca** compone una ruta; la ruta sale del registro. Un
+        // `X-Theme: ../../etc/passwd` no es un nombre del registro, así que cae al
+        // configurado y su ruta es la del configurado.
+        let registro = descubrir("temas-extras");
+        let configurado = registro
+            .by_name("minimal")
+            .expect("`minimal` es uno de los siete");
+
+        for intento in [
+            "../../etc/passwd",
+            "/etc/passwd",
+            "..",
+            "neon/../../x",
+            "neon.html",
+        ] {
+            let elegido = resolve(&registro, Some(intento), configurado);
+
+            assert_eq!(
+                elegido.name, "minimal",
+                "`X-Theme: {intento}` no es un nombre del registro: tiene que caer al configurado"
+            );
+            assert_eq!(
+                elegido.page_path(),
+                "minimal.html",
+                "la ruta sale del registro, nunca del valor de `X-Theme`: `{intento}` no puede \
+                 componer una ruta"
+            );
+        }
+    }
+
+    #[test]
+    fn anadir_un_tema_con_el_servicio_en_marcha_no_lo_convierte_en_tema() {
+        // El barrido es **al arrancar**, no por petición: un fichero que aparece
+        // **después** de construido el registro no entra en él hasta el arranque
+        // siguiente. Es la propiedad que fija el escenario «añadir un tema con el
+        // servicio en marcha no lo convierte en tema».
+        let dir = dir_temporal("anadir-en-marcha");
+
+        let registro = Themes::descubrir(&dir);
+        assert!(
+            registro.by_name("nuevo").is_none(),
+            "en un directorio vacío el registro son los siete incorporados y nada más"
+        );
+        assert_eq!(
+            registro.names(),
+            NOMBRES.join(", "),
+            "sin ningún fichero, el registro enumera los siete incorporados"
+        );
+
+        // El fichero aparece **con el registro ya construido**: el barrido no se
+        // repite, así que el registro no puede verlo.
+        fs::write(dir.join("nuevo.html"), b"<p>tema que llega tarde</p>")
+            .expect("el tema tiene que poder escribirse");
+
+        assert!(
+            registro.by_name("nuevo").is_none(),
+            "el registro ya construido no ve un fichero que apareció después: añadir un tema exige \
+             reiniciar"
+        );
+        assert_eq!(
+            registro.names(),
+            NOMBRES.join(", "),
+            "el registro que ya existe sigue enumerando los siete: no ha cambiado"
+        );
+
+        // La otra mitad, la que hace que la prueba diga la verdad entera: el
+        // **arranque siguiente** sí lo ve.
+        let siguiente = Themes::descubrir(&dir);
+        assert!(
+            siguiente.by_name("nuevo").is_some(),
+            "un `nuevo.html` presente al arrancar sí es un tema"
+        );
+        assert_eq!(
+            siguiente.names(),
+            format!("{}, nuevo", NOMBRES.join(", ")),
+            "el registro del arranque siguiente enumera los siete y, detrás, el descubierto"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn los_descubiertos_van_tras_los_siete_y_ordenados_por_nombre() {
+        // `read_dir` no promete ningún orden: el registro tiene que ordenar los
+        // descubiertos **por nombre** y ponerlos **detrás** de los siete
+        // incorporados, pase lo que pase con el orden del sistema de ficheros. Los
+        // ficheros se crean en orden **ascendente** para que el orden de `read_dir`
+        // no coincida con el alfabético: sin el `sort_by` de `Themes::descubrir`,
+        // esta prueba se cae.
+        let dir = dir_temporal("orden-alfabetico");
+        for nombre in ["alfa", "media", "zeta"] {
+            fs::write(dir.join(format!("{nombre}.html")), b"<p>tema</p>")
+                .expect("el tema tiene que poder escribirse");
+        }
+
+        let registro = Themes::descubrir(&dir);
+
+        assert_eq!(
+            registro.names(),
+            "default, minimal, terminal, paper, amber, compact, matrix, alfa, media, zeta",
+            "los descubiertos van **tras** los siete incorporados y **ordenados por nombre**, no \
+             en el orden del sistema de ficheros"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
