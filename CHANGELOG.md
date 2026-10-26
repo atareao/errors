@@ -3,6 +3,50 @@
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el
 versionado, [SemVer](https://semver.org/lang/es/).
 
+## [0.9.0](https://github.com/atareao/errserve/compare/v0.8.1..v0.9.0) - 2026-10-26
+
+La lista de temas deja de ser una **tabla cerrada en el binario**: al arrancar, el servicio
+construye un **registro** con los **siete incorporados** **más** los `*.html` de la **raíz** de
+`CONTENT_DIR`, y el **tallo** del fichero es el nombre del tema (`neon.html` → `neon`). Añadir un
+tema deja de exigir tocar código y recompilar: se deja el fichero y listo. Los siete se quedan como
+base, así que un `cargo install errserve` —un binario y ningún fichero de datos— sigue sirviendo los
+siete diseños.
+
+Los precios van escritos. El barrido es **al arrancar**, así que **añadir** un tema exige
+**reiniciar** —hasta entonces se sirve como asset crudo—, mientras que **editar** uno ya descubierto
+se ve **sin** reiniciar, porque los bytes de la página se leen **al servir**. `THEME` sigue
+**abortando** el arranque con un nombre que no esté en el registro, y el error enumera los nombres
+**de ese arranque** —ya no son «los siete»: dependen del directorio—. Eso abre la trampa del
+montaje: un `THEME` **correcto** cuyo fichero todavía no esté en `CONTENT_DIR` —un volumen sin
+montar cuando el contenedor arranca— **aborta** el arranque; la mitigación es del operador, que
+declara la dependencia del volumen o arranca sin `THEME`.
+
+El eje que **no** se toca es la página del operador, que no se inspecciona: los tres contratos —sin
+peticiones de red, movimiento apagable con `prefers-reduced-motion` y cobertura de marcado— siguen
+midiendo **solo** las **incorporadas**, así que un tema descubierto puede incumplirlos y ninguna
+guarda lo verá; es una decisión declarada, no un olvido. En seguridad, `X-Theme` elige contra el
+registro y **nunca** compone una ruta —sale **siempre** del barrido—, así que un
+`X-Theme: ../../etc/passwd` cae al tema configurado, y el *leak* no se reabre: `GET /neon.html`
+sigue siendo un `200` crudo con los marcadores a la vista, pero el respaldo de Traefik lo cierra
+**por forma** —una expresión regular sobre el path—, así que un tema nuevo queda protegido sin
+añadirlo a ninguna lista.
+
+Es un minor y no un parche porque es un eje de configuración más para el operador, no un arreglo. El
+change va con **256 pruebas** en verde (eran **235**), y el smoke test arranca ahora **dos**
+contenedores —el de siempre y uno con un `CONTENT_DIR` montado—, porque el barrido depende de que el
+montaje sea legible por el uid **10001** de la imagen, algo que `cargo test` no puede ver.
+
+### Añadido
+
+- **theme**: El registro de temas se construye al arrancar y CONTENT_DIR añade temas
+- **ci**: El smoke test prueba un CONTENT_DIR montado con un tema de más
+
+### Documentación
+
+- **openspec**: Archiva el change de la 0.8.1
+- **openspec**: Propone themes-from-content-dir
+- El directorio añade temas; README y AGENTS al día
+
 ## [0.8.1](https://github.com/atareao/errserve/compare/v0.8.0..v0.8.1) - 2026-10-26
 
 Nada del árbol del servicio cambia: `git diff v0.8.0 v0.8.1 -- src/ content/ Dockerfile` sale
