@@ -6,19 +6,21 @@
 
 ## Estado real del repositorio (verificado)
 
-Implementado, verificado y versionado. Catorce changes están **archivados** en
+Implementado, verificado y versionado. **Quince** changes están **archivados** en
 `openspec/changes/archive/` —cinco con fecha `2026-10-24` (`error-pages-parity`, `error-page-coverage`,
 `release-hardening`, `security-hardening` y `retry-after-configurable`), ocho con `2026-10-25`
 (`embedded-error-pages`, `error-page-template`, `self-contained-themes`, `theme-sheet-contracts`,
-`theme-visual-review`, `catchall-metrics-exclusion`, `fix-image-build` y `publish-crate-on-tag`) y uno
-con `2026-10-26` (`themes-as-pages`)— y sus requisitos viven fusionados en los cuatro specs de
-`openspec/specs/`: `error-page`, `http-server`, `observability` y `response-extras`. El último
-change archivado, `themes-as-pages` —el tema deja de ser **una hoja** y pasa a ser **una página**, con
-la cascada del cuerpo HTML en un solo paso—, entró en `error-page` y `http-server` (+6 requisitos
-añadidos, ~8 modificados, -5 retirados). Y hay **un change en curso**, sin archivar todavía:
+`theme-visual-review`, `catchall-metrics-exclusion`, `fix-image-build` y `publish-crate-on-tag`) y dos
+con `2026-10-26` (`themes-as-pages` y `smoke-test-and-catchall-html-exclusion`)— y sus requisitos viven
+fusionados en los cuatro specs de `openspec/specs/`: `error-page`, `http-server`, `observability` y
+`response-extras`. Los **dos últimos** changes archivados: `themes-as-pages` —el tema deja de ser
+**una hoja** y pasa a ser **una página**, con la cascada del cuerpo HTML en un solo paso—, que entró en
+`error-page` y `http-server` (+6 requisitos añadidos, ~8 modificados, -5 retirados); y
 `smoke-test-and-catchall-html-exclusion` —el smoke test pasa a un artefacto único que corren los dos
 workflows, el respaldo gana la exclusión del leak de las páginas de tema y el `502` entra en una
-puerta—, con su delta en `openspec/changes/smoke-test-and-catchall-html-exclusion/`.
+puerta—, que entró **solo** en `http-server` (+3 añadidos, ~1 modificado, 0 retirados). **No hay ningún
+change en curso**: `openspec/changes/` solo tiene `archive/`, y `openspec validate --all --strict` da
+**4 passed, 0 failed**.
 
 - `src/main.rs` — arranque, router, middleware de páginas de error, la lista `SERVICE_ENDPOINTS` que acota ese middleware, el clasificador `is_error_page_path` (con el alias `/default.html`/`/default.htm`) y los tests de router.
 - `src/config.rs` — configuración desde el entorno (`Config`, `ConfigError`, `from_env_iter`).
@@ -362,6 +364,14 @@ Se mantiene con [`git-cliff`](https://git-cliff.org) (`cliff.toml`) y la receta 
   nuevo** —lo que se publique a partir de ahora va a `ghcr.io/atareao/errserve`—. Y el nombre `errors`
   **no debe reutilizarse nunca** para otro repositorio: GitHub deja redirecciones desde la ruta
   antigua del repositorio renombrado, y un repositorio nuevo con ese nombre las rompe.
+
+Y un aviso para quien compare imágenes entre versiones: **el mismo código no da el mismo digest**.
+Medido entre la `0.8.0` y la `0.8.1`, cuyo árbol del servicio es **idéntico** —`git diff v0.8.0 v0.8.1
+-- src/ content/ Dockerfile` sale vacío—: de las **cinco** capas de la `0.8.1` (`sha256:5751ff2f…`)
+solo coincide con la `0.8.0` (`sha256:44f88a26…`) la **primera**, la base `alpine`. Y el build local
+tampoco reproduce el del runner: la imagen etiquetada `v0.8.0` construida en esta máquina tiene
+`sha256:e35ab086…`. Lo único que el servicio dice distinto entre las dos versiones es `GET /version`
+—el binario embebe `CARGO_PKG_VERSION`—: `{"version":"0.8.1"}` frente a `{"version":"0.8.0"}`.
 
 ## Quirks
 

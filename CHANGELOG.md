@@ -5,10 +5,16 @@ versionado, [SemVer](https://semver.org/lang/es/).
 
 ## [0.8.1](https://github.com/atareao/errserve/compare/v0.8.0..v0.8.1) - 2026-10-26
 
-Nada del servicio publicado cambia: ni el binario, ni las páginas, ni la imagen, que sale
-byte-idéntica a la de la `0.8.0`. Lo que entra es una puerta que faltaba, una exclusión en la
+Nada del árbol del servicio cambia: `git diff v0.8.0 v0.8.1 -- src/ content/ Dockerfile` sale
+**vacío**, y lo único que el servicio dice distinto es `GET /version`, que responde `0.8.1` porque el
+binario embebe `CARGO_PKG_VERSION`. Lo que entra es una puerta que faltaba, una exclusión en la
 configuración que el repositorio entrega y el `502` ejercitado —el código con el que un proxy
 responde a un upstream caído—. Por eso es un parche y no un minor.
+
+La imagen se **reconstruye** y no comparte digest con la de la `0.8.0`: medido en el registro, de sus
+cinco capas solo coincide la de la base `alpine`. Comparar digests entre versiones de este proyecto
+dice poco —el build local tampoco reproduce el del runner—, pero conviene saber que la `0.8.1` no es
+la `0.8.0` byte a byte.
 
 ### Añadido
 
