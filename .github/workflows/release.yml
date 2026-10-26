@@ -40,8 +40,10 @@ name: Release
 # POR QUÉ AQUÍ SÍ HAY DOCKER
 #   La máquina de desarrollo no tiene docker (usa podman), así que la imagen solo se había
 #   probado con podman y en formato OCI, que **descarta el HEALTHCHECK del Dockerfile**. El
-#   runner sí tiene docker: este workflow es el único sitio donde el healthcheck y el `USER` de
-#   la imagen se ejercitan contra docker de verdad, y por eso la prueba va **antes** de publicar.
+#   runner sí tiene docker, así que aquí el motor es el de fábrica. El healthcheck y el `USER`
+#   de la imagen ya no se ejercitan solo aquí: las aserciones sobre la imagen arrancada viven en
+#   un único artefacto versionado (`.github/scripts/smoke.sh`) que corren las dos puertas —el CI
+#   en cada propuesta de cambio y este release—, y por eso la prueba va **antes** de publicar.
 #
 # LA VISIBILIDAD DEL PAQUETE (leer antes de publicar)
 #   La visibilidad de un paquete no se puede cambiar **por API** (medido: `PATCH
@@ -233,122 +235,14 @@ jobs:
             --tag "$IMAGE:latest" \
             .
 
-      # El smoke test es el punto de este job: hasta hoy la imagen solo se había probado con
-      # podman. Aquí corre con docker de verdad y comprueba lo que el proyecto promete.
+      # Las aserciones sobre la imagen arrancada viven en un solo artefacto versionado
+      # (`.github/scripts/smoke.sh`), el mismo que corre el CI en cada propuesta de
+      # cambio. Aquí solo se invoca: una copia en este `run:` es lo que divergió en la
+      # `v0.8.0`. El runner tiene `docker` de verdad, así que el motor es el de fábrica.
       - name: Probar la imagen con docker (smoke test)
         env:
-          IMAGE: ${{ needs.version.outputs.image }}
-          VERSION: ${{ needs.version.outputs.version }}
-        run: |
-          set -euo pipefail
-
-          image="$IMAGE:$VERSION"
-          base="http://127.0.0.1:8080"
-
-          # Al fallar se vuelca el registro del contenedor: un `test` a secas en Actions deja
-          # "exit code 1" y ninguna pista de qué respondió el servicio.
-          fallo() {
-            echo "::error::$1"
-            echo "--- docker logs smoke (últimas 40 líneas) ---"
-            docker logs smoke 2>&1 | tail -n 40 || true
-            echo "--- estado del contenedor ---"
-            docker inspect --format '{{json .State}}' smoke || true
-            exit 1
-          }
-
-          # Se publica **solo** en loopback: el puerto no tiene por qué quedar expuesto en el
-          # runner, y lo único que hace falta es hablar con él desde el propio job.
-          docker run --detach --rm --name smoke \
-            --publish 127.0.0.1:8080:8080 \
-            "$image"
-
-          # 1) Que arranque. `/healthz` responde siempre 200 y no pasa por la resolución de
-          #    páginas de error, así que sirve de puerta sin depender de nada más.
-          for _ in $(seq 1 20); do
-            if curl -fsS -o /dev/null "$base/healthz"; then listo=1; break; fi
-            sleep 1
-          done
-          [[ "${listo:-0}" == "1" ]] || fallo "el contenedor no respondió en /healthz"
-
-          # 2) La garantía del proyecto: una página de error devuelve **su** código, nunca 200.
-          comprobar() {
-            local real
-            real=$(curl -s -o /dev/null -w '%{http_code}' "$base$1")
-            [[ "$real" == "$2" ]] || fallo "GET $1 devolvió $real; se esperaba $2"
-            echo "ok   GET $1 -> $real"
-          }
-
-          comprobar /404 404                                   # página de error
-          comprobar /503 503                                   # 5xx, con Retry-After
-          comprobar /404.json 404                              # el formato no cambia el código
-          comprobar /healthz 200                               # endpoint de servicio
-          comprobar /metrics 200                               # contador Prometheus
-          # La garantía 4, con una página de tema que no es el alias: un asset existente gana a
-          # la página de error, y hoy ese asset es una de las seis páginas de tema que NO son
-          # `/default.html`. El `200` es CRUDO —el fichero tal cual, con sus marcadores
-          # `{{code}}`/`{{reason}}`/`{{description}}` a la vista—, que es justo lo que la
-          # garantía promete; el bloqueo de ese leak va en el proxy, no en el servicio.
-          comprobar /minimal.html 200
-          # La excepción de la garantía 4, nueva de este release: `/default.html` (y `/default.htm`)
-          # es el **alias del código por defecto**, se intercepta y responde el código resuelto
-          # (`DEFAULT_ERROR_PAGE`, `404` de fábrica) — **nunca `200`**.
-          comprobar /default.html 404
-
-          # El cuerpo HTML servido, que es el corazón de esta entrega: la página del tema lleva su
-          # `<style>` **incrustado** y **no** enlaza ninguna hoja. Ojo al detalle que este
-          # repositorio documenta: un `curl` sin `Accept` cae en **texto plano** por defecto, así
-          # que una comprobación de cuerpo TIENE que mandar `-H 'Accept: text/html'` o está
-          # midiendo el formato equivocado. El helper devuelve el cuerpo con ese `Accept`.
-          cuerpo() {
-            curl -s -H 'Accept: text/html' "$base$1"
-          }
-
-          cuerpo /404 | grep -q '<style' \
-            || fallo "el cuerpo de /404 en HTML no lleva su <style> incrustado"
-          echo "ok   GET /404 (Accept: text/html) -> lleva <style> incrustado"
-
-          if cuerpo /404 | grep -q '<link'; then
-            fallo "el cuerpo de /404 en HTML lleva un <link>: no es autocontenido"
-          fi
-          echo "ok   GET /404 (Accept: text/html) -> sin <link>"
-
-          # 3) Cabeceras que la documentación promete.
-          cabecera() {
-            curl -s -D - -o /dev/null "$base$1" | grep -qi "^$2:" \
-              || fallo "GET $1 no trae la cabecera $2"
-            echo "ok   GET $1 -> $2"
-          }
-
-          cabecera /404 x-robots-tag
-          cabecera /503 retry-after
-          curl -s -D - -o /dev/null "$base/503" | grep -qi '^retry-after: 120' \
-            || fallo "el 503 no trae Retry-After: 120"
-
-          # 4) El HEALTHCHECK del Dockerfile (wget de busybox contra /healthz), ejercitado en
-          #    docker por primera vez. Su `interval` es 30s, así que el primer veredicto tarda
-          #    ~30s: de ahí los 90s de margen.
-          for _ in $(seq 1 45); do
-            estado=$(docker inspect --format '{{.State.Health.Status}}' smoke 2>/dev/null \
-              || echo sin-healthcheck)
-            [[ "$estado" == "healthy" ]] && break
-            sleep 2
-          done
-          [[ "${estado:-}" == "healthy" ]] \
-            || fallo "el healthcheck de la imagen quedó en '$estado' (se esperaba 'healthy')"
-          echo "ok   healthcheck -> healthy"
-
-          # 5) La imagen no corre como root (uid/gid 10001 fijos, lo promete el README).
-          usuario=$(docker inspect --format '{{.Config.User}}' smoke)
-          [[ "$usuario" == "10001:10001" ]] \
-            || fallo "la imagen declara USER '$usuario'; se esperaba 10001:10001"
-          echo "ok   USER -> $usuario"
-
-          echo "--- docker logs smoke ---"
-          docker logs smoke
-
-      - name: Retirar el contenedor de prueba
-        if: always()
-        run: docker rm --force smoke || true
+          IMAGE: ${{ needs.version.outputs.image }}:${{ needs.version.outputs.version }}
+        run: bash .github/scripts/smoke.sh
 
       - name: Entrar en GHCR
         env:
