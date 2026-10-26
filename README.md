@@ -39,7 +39,7 @@ el estado del servidor de ficheros no es una fuente de la cascada.
 
 Con el binario anterior se veía el hueco: `GET /<300 caracteres>` respondía `500` **con el cuerpo
 vacío** (`content-length: 0`), sin `Content-Type`, sin `X-Robots-Tag` y sin que ninguna página lo
-hubiera producido; `PUT /css/error.css` respondía `405` y `Range: bytes=0-1,3-4` sobre un asset
+hubiera producido; `PUT /minimal.html` respondía `405` y `Range: bytes=0-1,3-4` sobre un asset
 respondía `416`, los dos sin cuerpo y sin pasar por la cascada.
 
 Y hay **tres razones medidas** para no conservar su estado:
@@ -51,8 +51,10 @@ Y hay **tres razones medidas** para no conservar su estado:
 - con `DEFAULT_ERROR_PAGE=503`, cualquier asset inexistente saldría `404`, dejando sin efecto a
   `X-Code`, que existe justo para los despliegues que no reescriben el path.
 
-Un asset **existente** sigue ganando, que es la otra mitad de la regla: `GET /css/error.css` es un
-`200 text/css` y no pasa por la página de error.
+Un asset **existente** sigue ganando, que es la otra mitad de la regla: `GET /minimal.html` —una de
+las seis páginas de tema que **no** son el alias— es un `200 text/html` crudo, con sus marcadores a la
+vista, y no pasa por la página de error. La excepción es `/default.html`: es el **alias del código por
+defecto**, así que se intercepta y responde el código resuelto, **nunca `200`** (ver «Los siete temas»).
 
 ## Integración con Traefik
 
@@ -82,7 +84,7 @@ curl -s  localhost:8080/404.json             # {"error":true,"code":404,...}
 curl -s  -H 'X-Format: application/xml' localhost:8080/404
 curl -i  localhost:8080/healthz              # 200
 curl -s  localhost:8080/version              # {"version":"..."}
-curl -s  -H 'Accept: text/html' -H 'X-Theme: terminal' localhost:8080/404   # con la hoja del tema `terminal` dentro
+curl -s  -H 'Accept: text/html' -H 'X-Theme: terminal' localhost:8080/404   # con la página del tema `terminal` dentro
 ```
 
 ## Configuración (solo variables de entorno)
@@ -91,17 +93,17 @@ curl -s  -H 'Accept: text/html' -H 'X-Theme: terminal' localhost:8080/404   # co
 |---|---|---|
 | `PORT` | `8080` | Puerto de escucha (bind `0.0.0.0`). El que asume la guía de Traefik. |
 | `LOG_LEVEL` | `info` | Filtro de `tracing-subscriber`. |
-| `CONTENT_DIR` | `content` | *Override* de las páginas HTML y los assets **embebidos** en el binario. |
+| `CONTENT_DIR` | `content` | *Override* de las siete **páginas de tema** embebidas en el binario. |
 | `DEFAULT_ERROR_PAGE` | `404` | Código cuando el path y `X-Code` no aportan uno utilizable. |
 | `LOG_FORMAT` | `text` | Formato del registro: `text` o `json`. |
 | `RETRY_AFTER` | `120` | Segundos de la cabecera `Retry-After`. La llevan solo el `429` y el `503`. |
-| `THEME` | `default` | Tema de las páginas **HTML**: `default`, `minimal`, `terminal`, `paper`, `amber` o `compact`. |
+| `THEME` | `default` | Tema de las páginas **HTML**: `default`, `minimal`, `terminal`, `paper`, `amber`, `compact` o `matrix`. |
 
 No se lee ningún fichero de configuración. Una variable **presente pero vacía**
 es un error de arranque, no un valor por defecto. `DEFAULT_ERROR_PAGE` fuera del
-rango `400..=599` también lo es, y un `THEME` que no sea uno de los seis temas
+rango `400..=599` también lo es, y un `THEME` que no sea uno de los **siete** temas
 —o que venga vacío— aborta el arranque igual, con un error que **nombra la
-variable** y **enumera los seis nombres**: quien escribe `THEME` cree que está
+variable** y **enumera los siete nombres**: quien escribe `THEME` cree que está
 configurando algo, así que el error tiene que decirle qué puede escribir en su
 lugar.
 
@@ -112,11 +114,11 @@ segundos —`0` significa «reintenta ya»— y no tiene techo. Una variable vac
 de segundos, es un error de arranque. Lo que **no** se configura es qué códigos la llevan: son el
 `429` y el `503`, y eso lo decide el código.
 
-`CONTENT_DIR` es solo un ***override***. El binario lleva **dentro** la página —una plantilla— y su
-hoja, así que un `cargo install errserve` —que deja un ejecutable y ningún fichero de datos, con
-`CONTENT_DIR` apuntando por defecto a un `content` que no existe— sirve la página de verdad y su hoja,
-y no el respaldo de texto. Lo que haya en `CONTENT_DIR` gana **cuando se pueda leer**; lo que falte se
-sirve desde la copia embebida.
+`CONTENT_DIR` es solo un ***override***. El binario lleva **dentro** las siete páginas de tema, así
+que un `cargo install errserve` —que deja un ejecutable y ningún fichero de datos, con `CONTENT_DIR`
+apuntando por defecto a un `content` que no existe— sirve las siete, y no el respaldo de texto. Lo
+que haya en `CONTENT_DIR` gana **cuando se pueda leer**; lo que falte se sirve desde la copia
+embebida.
 
 ## Cómo se resuelve
 
@@ -130,30 +132,31 @@ rango `400..=599` se ignora y se pasa a la siguiente.
 
 Código y formato son ortogonales: `/503.xml` es un 503 en XML.
 
-Y hay un **tercer eje**, que no reparte códigos ni formatos sino aspecto, y que solo toca al HTML: la
-hoja que va incrustada. La elige `THEME` —el tema de todo el servicio— y, por petición, la cabecera
-`X-Theme`, que gana a `THEME` cuando nombra uno de los seis temas; un `X-Theme` ausente, desconocido o
-vacío **no** es un error y cae al tema configurado. En JSON, XML y texto no hay hoja que incrustar, así
-que ahí el tema se ignora (ver «Páginas autocontenidas y temas»).
+Y hay un **tercer eje**, que no reparte códigos ni formatos sino aspecto, y que solo toca al HTML: **la
+página del tema** que se sirve. La elige `THEME` —el tema de todo el servicio— y, por petición, la
+cabecera `X-Theme`, que gana a `THEME` cuando nombra uno de los **siete** temas; un `X-Theme` ausente,
+desconocido o vacío **no** es un error y cae al tema configurado. En JSON, XML y texto no hay página
+que incrustar, así que ahí el tema se ignora (ver «Páginas autocontenidas y temas»).
 
 Cada página de error lleva `Content-Type`, `Content-Length`,
 `X-Robots-Tag: noindex, nofollow, nosnippet, noarchive` y, en `429` y `503`,
 `Retry-After` con el valor de `RETRY_AFTER` (`120` por defecto).
 
-El HTML se sirve de `CONTENT_DIR/<código>.html` (con caída al fichero del código
-por defecto) y, agotadas esas dos lecturas, de la **plantilla embebida** en el
-binario, rellenada con el código resuelto; JSON, XML y texto se generan del
-código, su razón canónica y su descripción. Las cuatro formas de un mismo código
-llevan la **misma** razón y la **misma** descripción: las tablas de `resolve` son
-su fuente única.
+El HTML es **la página del tema** elegido: la de `CONTENT_DIR/<nombre>.html` si se puede leer y, si no,
+su copia embebida. **No** hay capa por código —`CONTENT_DIR/<código>.html` ya no se consulta—; el
+diseño por código vive en la clase `body.c<código>`, que la plantilla rellena al servir. Además,
+`/default.html` y `/default.htm` son el **alias del código por defecto** (`DEFAULT_ERROR_PAGE`): se
+interceptan y responden ese código, nunca `200`. JSON, XML y texto se generan del código, su razón
+canónica y su descripción. Las cuatro formas de un mismo código llevan la **misma** razón y la
+**misma** descripción: las tablas de `resolve` son su fuente única.
 
 ## Códigos cubiertos
 
-**Cualquier** código de `400..=599` tiene página, no solo once: la página es una **plantilla**
-(`content/404.html`) que el servidor rellena al vuelo, así que un `451`, un `418` o un `599` salen
-con **su propio** código, su razón y su descripción, y con **su propio** estado —nunca verás un `504`
-servido como `404`, ni un cuerpo que diga `404` para otro código—. Quince códigos traen su
-descripción escrita en el código (`400`, `401`, `403`, `404`, `405`, `408`, `410`, `418`, `422`,
+**Cualquier** código de `400..=599` tiene página, no solo once: la página del tema es una **plantilla**
+(por defecto `content/default.html`) que el servidor rellena al vuelo, así que un `451`, un `418` o un
+`599` salen con **su propio** código, su razón y su descripción, y con **su propio** estado —nunca
+verás un `504` servido como `404`, ni un cuerpo que diga `404` para otro código—. Quince códigos traen
+su descripción escrita en el código (`400`, `401`, `403`, `404`, `405`, `408`, `410`, `418`, `422`,
 `429`, `500`, `501`, `502`, `503` y `504`); el resto usa una genérica, siempre con la razón canónica
 del código en el título.
 
@@ -165,11 +168,9 @@ La plantilla lleva tres marcadores que el servidor sustituye **al servir**:
 | `{{reason}}` | La razón canónica del código (`Not Found`). |
 | `{{description}}` | La descripción del código (la tabla de `resolve`). |
 
-Todo comparte una sola hoja, `css/error.css` —que **también va embebida**, y es tan *override* como
-la página—, y la clase del `body` (`c504`, `c503`…) es lo que permite diferenciar el aspecto de cada
-código sin duplicar la hoja. Esa hoja es el tema `default`, y el `<link>` que la referencia en el
-**fichero** es el marcador que el servidor sustituye al servir (ver «Páginas autocontenidas y
-temas»).
+Cada página de tema lleva su `<style>` **dentro**, y la clase del `body` (`c504`, `c503`…) es lo que
+permite diferenciar el aspecto de cada código sin duplicar la página: el diseño por código vive ahí,
+no en un fichero por código. El tema `matrix` lleva además su `<script>` dentro (ver «Los siete temas»).
 
 ### Cómo cambiar el texto de una página de error
 
@@ -178,92 +179,111 @@ Hay tres vías, de la más global a la más local:
 1. **El texto de todos los códigos**: edita la tabla de `resolve::description` en `src/resolve.rs` y
    recompila. Es la **fuente única** del texto de los cuatro formatos (HTML, JSON, XML y texto), así
    que el cambio vale para todos ellos a la vez.
-2. **Una página propia para un código**: deja tu fichero en `CONTENT_DIR/<código>.html` (por ejemplo
-   `content/451.html`). Gana a la plantilla del proyecto y, si **no** lleva marcadores, se sirve **tal
-   cual**, byte a byte: su texto fijo es tuyo. Un `CONTENT_DIR/<código por defecto>.html` (por
-   defecto, `content/404.html`) sirve de respaldo para cualquier código que no tenga el suyo.
-3. **Una página propia que se adapte al código**: escribe los marcadores `{{code}}`, `{{reason}}` y
-   `{{description}}` en tu propia página y el servidor la rellenará con el código resuelto, igual que
-   hace con la del proyecto. Un `CONTENT_DIR/<código>.html` con marcadores cubre así cualquier código
-   sin que tengas que escribir un fichero por código.
+2. **La página del tema**: deja tu fichero en `CONTENT_DIR/<nombre>.html` (por ejemplo,
+   `content/default.html` para el tema por defecto). Gana a la copia embebida y se lee **al servir**,
+   así que la ves cambiar sin reiniciar. Si **no** lleva marcadores, se sirve **tal cual**, byte a
+   byte: su texto fijo es tuyo. Es el **punto de personalización** del operador.
+3. **Una página del tema que se adapte al código**: escribe los marcadores `{{code}}`, `{{reason}}` y
+   `{{description}}` en tu página del tema y el servidor la rellenará con el código resuelto, igual
+   que hace con la del proyecto. Así una sola página cubre cualquier código `400..=599`.
+
+**Qué pierde el operador, escrito sin maquillarlo**: la capa por **código**
+(`CONTENT_DIR/<código>.html`) y la del código por defecto (`CONTENT_DIR/404.html`) **ya no se
+consultan**. El punto de personalización es la página del **tema**, así que un `content/404.html` que
+tuvieras **deja de servir**: con `THEME=matrix` verás la página de `matrix`, no la tuya. Lo que
+conservas: tu página del tema es tuya, gana a la embebida y se sirve byte a byte si no lleva
+marcadores. Si quieres granularidad por código, el camino es el `<style>` de tu página, no un fichero
+por código.
 
 ## Páginas autocontenidas y temas
 
-El HTML que sirve este servicio es **autocontenido**: lleva la hoja de estilos **dentro**, así que la
-página no pide ningún fichero para verse. No es una preferencia estética, es el arreglo de un fallo
-medido. Con el middleware `errors` de Traefik —el montaje de cualquier aplicación con dominio
-propio—, la página se sirve **en el host de la aplicación**, donde `/css/error.css` lo contesta el
-upstream, no este servicio: el navegador pide la hoja, recibe su `404` con `Content-Type: text/plain`,
-el middleware intercepta ese `404` y lo vuelve a pedir como página de error con un `Accept` que no
-negocia HTML —`text/css,*/*;q=0.1`—, así que la cascada de formato cae al **texto plano** y el
-navegador rechaza la hoja: *«MIME type ('text/plain') is not a supported stylesheet MIME type»*. El
-resultado era un `503` correcto, con el código correcto, y la página **sin estilos**. En el host del
-respaldo el mismo enlace sí resolvía —un asset existente gana a la página de error—, y esa asimetría
-escondía el fallo.
+Cada página de tema es **autocontenida**: lleva su `<style>` **dentro** —y `matrix`, su `<script>`
+también—, así que la página no pide ningún fichero para verse. No es una preferencia estética, es el
+arreglo de un fallo medido. Con el middleware `errors` de Traefik —el montaje de cualquier aplicación
+con dominio propio—, la página se sirve **en el host de la aplicación**. Con el modelo anterior
+enlazaba `/css/error.css`, y ese path lo contestaba el upstream, no este servicio: el navegador pedía
+la hoja, recibía su `404` con `Content-Type: text/plain`, el middleware interceptaba ese `404` y lo
+volvía a pedir como página de error con un `Accept` que no negocia HTML —`text/css,*/*;q=0.1`—, así
+que la cascada de formato caía al **texto plano** y el navegador rechazaba la hoja: *«MIME type
+('text/plain') is not a supported stylesheet MIME type»*. El resultado era un `503` correcto, con el
+código correcto, y la página **sin estilos**. **Ese enlace ya no existe**: `content/css/error.css` y
+el asset `/css/error.css` se retiraron en la `0.8.0` —un tema es una página con su hoja dentro—, así
+que no hay `<link>` que servir y el fallo no puede volver.
 
 `error-pages` no lo sufre porque sus páginas son «fully self-contained — all styles and images are
 embedded directly in the HTML, without loading any external resources»: esto es **paridad**, no un
 adorno.
 
-Cómo se hace, sin romper nada de lo de arriba:
+### El tema es una página
 
-- Las **páginas** de `CONTENT_DIR` conservan su `<link rel="stylesheet" href="/css/error.css" />` y
-  el servidor lo sustituye por un bloque `<style>` **al servir**. El fichero conserva el enlace a
-  propósito: sigue siendo legible y previsualizable, y así no se duplica la página por tema.
-- Una página **sin** el marcador —una página propia, ya autocontenida— se sirve **byte a byte**, sin
-  añadir ni sustituir nada; y en ese caso el servicio no lee ninguna hoja, así que un CSS roto no
-  puede afectar a una página que no lo necesita.
-- Un `<link>` que **no** sea el marcador no se toca: es tuyo.
-- `/css/error.css` **sigue sirviéndose** como asset, con su `200 text/css`: no es una página de error
-  y hay instalaciones que lo enlazan. Y la hoja que se incrusta y la que se sirve son **la misma**,
-  resuelta con la misma regla —tu fichero, si se puede leer; si no, la copia embebida—, así que no
-  pueden discrepar. Un fallo al leerla **no** tumba la página: deja un `warn` en el registro y se usa
-  la copia embebida.
+Un tema **es** su página, y el nombre del tema **es** el de su fichero: las siete viven en la **raíz**
+de `CONTENT_DIR` —`content/<nombre>.html`— y todas van embebidas en el binario. Elegir un tema no
+duplica nada: elige **qué página** se sirve. Tu página gana a la embebida y se lee **al servir**, así
+que la ves cambiar sin reiniciar; una página **sin** marcadores se sirve **byte a byte**; y una que
+existe y no se puede leer responde el **respaldo de texto** con el código resuelto —el `warn` la
+delata—, sin cambiar el estado.
 
-### Los seis temas
+### Los siete temas
 
-Un tema es **una sola hoja**: elegirlo no duplica la página.
-
-| Tema | Hoja en `CONTENT_DIR` | Aspecto |
+| Tema | Página en `CONTENT_DIR` | Aspecto |
 |---|---|---|
-| `default` | `css/error.css` | El tema sobrio de la casa, y el **único** que anima: un fundido de 180 ms sobre el contenido, que se apaga con `prefers-reduced-motion: reduce`. Sus reglas pueden cambiar de una versión a otra; lo que no cambia es que sigue siendo el tema por defecto y que su hoja sigue en `css/error.css` —y por tanto como asset público `/css/error.css`—. |
-| `minimal` | `themes/minimal.css` | Solo tipografía, sin acento de color; claro u oscuro según decida el sistema. |
-| `terminal` | `themes/terminal.css` | Monoespaciado, fósforo verde sobre negro. No se mueve: un terminal apagado, sin parpadeo ni cursor. |
-| `paper` | `themes/paper.css` | Serif, fondo crema, aire de página impresa. |
-| `amber` | `themes/amber.css` | Monocromo ámbar, tipo CRT. |
-| `compact` | `themes/compact.css` | Todo lo corto posible, con el título y el subtítulo en una línea: para móvil y CLI. |
+| `default` | `default.html` | El tema sobrio de la casa, y el **único** de las seis sobrias que anima: un fundido de 180 ms sobre el contenido, que se apaga con `prefers-reduced-motion: reduce`. Sus reglas pueden cambiar de una versión a otra; lo que no cambia es que sigue siendo el tema por defecto. |
+| `minimal` | `minimal.html` | Solo tipografía, sin acento de color; claro u oscuro según decida el sistema. |
+| `terminal` | `terminal.html` | Monoespaciado, fósforo verde sobre negro. No se mueve: un terminal apagado, sin parpadeo ni cursor. |
+| `paper` | `paper.html` | Serif, fondo crema, aire de página impresa. |
+| `amber` | `amber.html` | Monocromo ámbar, tipo CRT. |
+| `compact` | `compact.html` | Todo lo corto posible, con el título y el subtítulo en una línea: para móvil y CLI. |
+| `matrix` | `matrix.html` | Un **documento propio**: canvas de lluvia, glitch, scanlines, terminal, pastillas roja y azul, minijuego de teclado y toast. Su `<script>` consulta `prefers-reduced-motion` y no arranca la lluvia con movimiento reducido. |
 
 `THEME` (entorno, al arrancar) elige el tema de **todo el servicio**, y `X-Theme` (cabecera de la
 petición) elige el de **esa** petición, con el primer-origen-que-haga-match de siempre: un `X-Theme`
 conocido gana a `THEME`. Un `X-Theme` desconocido **no** es un error —cae al tema configurado—,
 porque esa cabecera la elige quien llama y un cliente no puede romper el servicio; la comparación es
 **exacta**, así que `X-Theme: Terminal` no es el tema `terminal` y cae al configurado. `X-Theme` solo
-afecta al **HTML**: un JSON o un XML no tienen hoja, así que ahí el tema se ignora.
+afecta al **HTML**: un JSON o un XML no tienen página que incrustar, así que ahí el tema se ignora.
 
-Ninguno de los seis referencia recursos externos —ni `@import`, ni `url(...)` remotos, ni fuentes
+Ninguna de las siete referencia recursos externos —ni `@import`, ni `url(...)` remotos, ni fuentes
 descargadas—: una página que necesita la red para verse es exactamente el defecto que este apartado
-corrige. Los cinco temas nuevos viven en `CONTENT_DIR` (`content/themes/`), así que además se sirven
-como assets —`GET /themes/terminal.css` es un `200 text/css`— y puedes verlos sin incrustar nada.
+corrige. Las seis sobrias comparten su marcado **palabra por palabra** —quitado el bloque `<style>`—
+y solo cambia su CSS; lo vigila una prueba de `tests/content_pages.rs`, no una guarda —una guarda
+textual no puede demostrar que seis ficheros no diverjan—. Y como viven en la raíz de `CONTENT_DIR`,
+las **otras seis** páginas (todas menos `default.html`) se sirven crudas si alguien las pide: el leak
+cosmético que se mitiga en el **proxy** —bloquear `*.html` salvo `/default.html`—, no aquí. El
+servicio no promete ocultarlas.
 
-Una hoja de tema **puede animar**: el movimiento es una decisión de aspecto, no un defecto de
-autocontención. Ahora bien, lo que anima tiene que poder apagarse: una hoja que declare una animación
+Una página de tema **puede animar**: el movimiento es una decisión de aspecto, no un defecto de
+autocontención. Ahora bien, lo que anima tiene que poder apagarse: una página que declare una animación
 —`animation`, `animation-name`, `transition` o `transition-property` con un valor **distinto de
 `none`**— tiene que **neutralizarla** dentro de un bloque `@media (prefers-reduced-motion: reduce)` que
-**exista**, **no esté vacío** y apague **cada** una con la forma canónica de su familia —`animation:
-none` o `animation-name: none` para una animación, `transition: none` o `transition-property: none`
-para una transición; `animation: none` **no** apaga una transición—. `@keyframes` por sí solo no obliga
-a nada: define fotogramas y no anima mientras ninguna declaración los use. Y el motivo sigue siendo el
-mismo: hay gente a la que el movimiento le marea, y una página de error que se mueve mientras intentas
-leer qué ha pasado es peor página de error.
+**exista**, **no esté vacío** y apague **cada familia** con la forma canónica —`animation: none` o
+`animation-name: none` para una animación, `transition: none` o `transition-property: none` para una
+transición; `animation: none` **no** apaga una transición—. `@keyframes` por sí solo no obliga a nada:
+define fotogramas y no anima mientras ninguna declaración los use. Un guion que anime con
+`requestAnimationFrame` o `setInterval` tiene que **mencionar** `prefers-reduced-motion`. Y el motivo
+sigue siendo el mismo: hay gente a la que el movimiento le marea, y una página de error que se mueve
+mientras intentas leer qué ha pasado es peor página de error.
 
-Las hojas **incorporadas** cumplen dos contratos —no pedir nada por la red y poder apagar el
-movimiento— y las pruebas del proyecto los comprueban. Ese segundo contrato es una comprobación
-**textual sobre los bytes** de la hoja: garantiza que el patrón canónico está, **no** que el CSS apague
-el movimiento en todos los navegadores —eso exigiría un motor de CSS y una matriz de navegadores—. Y esa
-comprobación cubre las **seis hojas que el proyecto entrega**, no la tuya: una hoja propia en
-`CONTENT_DIR/themes/<nombre>.css` es tuya y el servicio no la inspecciona. Y `url(#…)` —un filtro o
-degradado SVG— y `@font-face` con `src: local(...)` están **permitidos**, porque no piden nada a la
-red.
+Las páginas **incorporadas** cumplen **tres contratos** —no pedir nada por la red, poder apagar el
+movimiento y, las seis sobrias, cubrir su marcado (`body`, `h1`, `h2`, `hr`, `p` y `footer`)— y las
+pruebas del proyecto los comprueban. Los dos primeros son comprobaciones **textuales sobre los bytes**
+de la página: garantizan que el patrón canónico está, **no** que el CSS apague el movimiento en todos
+los navegadores —eso exigiría un motor de CSS y una matriz de navegadores—; y la guarda de red **no
+puede demostrar** que un guion construya una URL en tiempo de ejecución, ni que una librería pida por
+su cuenta. La guarda de movimiento mide la neutralización **por familia, no por declaración**: ligar
+cada declaración con *su* neutralización exigiría un parser de selectores y rechazaría
+neutralizaciones legítimas (`* { animation: none }`), así que dos animaciones declaradas y **una sola**
+neutralizada **pasan**; el límite está escrito en vez de escondido. Y todo esto cubre las **siete
+páginas que el proyecto entrega**, no la tuya: una página propia en `CONTENT_DIR/<nombre>.html` es tuya
+y el servicio no la inspecciona al servir. `url(#…)` —un filtro o degradado SVG—, `url(data:…)` y
+`@font-face` con `src: local(...)` están **permitidos**, porque no piden nada a la red.
+
+### El endurecimiento y la CSP
+
+Las siete páginas son **incompatibles con una CSP estricta** (`default-src 'none'`): cada una lleva su
+`<style>` **en línea** y `matrix` su `<script>` **en línea**. Si el proxy pone una CSP sin
+`style-src 'unsafe-inline'` —o sin *nonce*—, las siete pierden el estilo; y `matrix` pierde también el
+script, y con él el teclado del minijuego y las pastillas. El servicio **no emite CSP**: la pone el
+proxy, que es donde va el endurecimiento. Es una **decisión de diseño** escrita, no un fallo.
 
 `THEME` es el equivalente del `--template-name`/`$TEMPLATE_NAME` de `error-pages` —que por defecto usa
 `app-down`—, con una diferencia que se declara: allí la plantilla puede **rotar**
@@ -327,7 +347,7 @@ con codificación por trozos, sin `Content-Length`—, y declara `Vary: Accept-E
 X-Trace-Id, X-Correlation-Id, X-Amzn-Trace-Id, X-Theme`: las seis, siempre, las traiga la petición o
 no. Las cabeceras de correlación se copian de la petición a la respuesta cuando vienen —no se
 inventan—, así que una caché intermedia tiene que saber que la respuesta varía por ellas; y `X-Theme`
-cambia **el cuerpo** —la hoja que va incrustada en el HTML—, así que sin declararla una caché le
+cambia **el cuerpo** —la página del tema que va incrustada en el HTML—, así que sin declararla una caché le
 entregaría a un cliente el tema que pidió otro, o el cuerpo entero de otro. Sin caché por medio el
 impacto es nulo (Traefik no cachea por defecto), pero con un CDN delante no.
 
@@ -450,10 +470,10 @@ Se copian **solo** las cuatro cabeceras de correlación, no el conjunto completo
 `--proxy-headers`, y la compresión se limita a gzip.
 
 Tampoco hay rotación de temas: `error-pages` tiene `--rotation-mode` (aleatorio
-al arrancar, horario, diario) y aquí no existe —un tema, y ya—. Y los seis temas
+al arrancar, horario, diario) y aquí no existe —un tema, y ya—. Y los **siete** temas
 están **incorporados al binario**, así que `THEME` no admite un nombre que no sea
-uno de ellos: un `content/themes/<nombre>.css` propio **reemplaza** la hoja de un
-tema que ya existe, pero no **añade** un séptimo nombre, porque eso haría que
+uno de ellos: un `content/<nombre>.html` propio **reemplaza** la página de un
+tema que ya existe, pero no **añade** un octavo nombre, porque eso haría que
 `THEME` dependiera del sistema de ficheros al arrancar.
 
 ## Licencia

@@ -120,10 +120,35 @@ pub enum CodeSource {
     Default,
 }
 
+/// ¿El path —ya normalizado— es el **alias del código por defecto**?
+///
+/// `/default.html` y `/default.htm` son el nombre del fichero del tema por
+/// defecto, el **único** que el proyecto entrega con nombre propio. Se clasifican
+/// como el **código por defecto** —el de `DEFAULT_ERROR_PAGE`— y se tratan como
+/// el código, no como un asset: así se renderiza la página del tema elegido y el
+/// fichero **no** se sirve crudo, con los marcadores a la vista, que es justo el
+/// defecto que el proyecto corrige.
+///
+/// Es **del código** porque el path lo elige quien llama y lo que pide es una
+/// página de error, no un asset. Las otras seis páginas de tema (`minimal.html`,
+/// `matrix.html`…) **no** se interceptan: son assets crudos, y hacerlo rompería
+/// «un asset existente gana» con seis casos especiales. La comparación es
+/// **exacta** y sobre el path ya normalizado, así que `/./default.html` y
+/// `/default%2Ehtml` también lo resuelven —los pliega `crate::path` antes de
+/// llegar aquí—.
+pub fn es_alias_del_codigo_por_defecto(path: &str) -> bool {
+    matches!(path, "/default.html" | "/default.htm")
+}
+
 /// Cascada del código: path -> `X-Code` -> `default`, con el origen incluido.
 ///
 /// El primer origen que hace match gana, así que el path siempre manda sobre
 /// la cabecera. No depende del formato: `/503.xml` es un `503`.
+///
+/// El **alias del código por defecto** ([`es_alias_del_codigo_por_defecto`]) se
+/// resuelve el primero: `/default.html` y `/default.htm` son el código por
+/// defecto con origen [`CodeSource::Path`] —el path lo pide explícitamente—, no
+/// el defecto, y ganan a `X-Code`.
 ///
 /// Una fuente que aporte un código **no utilizable** (`/200`, `X-Code: 0`…)
 /// se considera vacía y se continúa con la siguiente: `/200` con
@@ -145,6 +170,10 @@ pub fn resolve_code_with_source(
         is_usable_code(default),
         "el código por defecto debe estar en 400..=599: {default}"
     );
+
+    if es_alias_del_codigo_por_defecto(path) {
+        return (default, CodeSource::Path);
+    }
 
     if let Some(code) = code_from_path(path).filter(|code| is_usable_code(*code)) {
         return (code, CodeSource::Path);
@@ -375,6 +404,56 @@ mod tests {
         assert_eq!(resolve_code("/503.xml", None, 404), 503);
         assert_eq!(resolve_code("/404.txt", None, 404), 404);
         assert_eq!(resolve_code("/404.htm", None, 404), 404);
+    }
+
+    // --- Alias del código por defecto (change `themes-as-pages`) -----------
+
+    #[test]
+    fn el_alias_default_html_resuelve_el_codigo_por_defecto() {
+        // `/default.html` y `/default.htm` son el **código por defecto**, con
+        // origen `Path` —no `Default`—: el path lo pide explícitamente.
+        assert_eq!(
+            resolve_code_with_source("/default.html", None, 404),
+            (404, CodeSource::Path)
+        );
+        assert_eq!(
+            resolve_code_with_source("/default.htm", None, 404),
+            (404, CodeSource::Path)
+        );
+        assert_eq!(
+            resolve_code_with_source("/default.html", None, 503),
+            (503, CodeSource::Path)
+        );
+    }
+
+    #[test]
+    fn el_alias_default_gana_a_x_code() {
+        assert_eq!(
+            resolve_code_with_source("/default.html", Some("503"), 404),
+            (404, CodeSource::Path),
+            "el alias del path tiene que ganar a `X-Code`"
+        );
+    }
+
+    #[test]
+    fn el_alias_default_es_exacto() {
+        assert!(es_alias_del_codigo_por_defecto("/default.html"));
+        assert!(es_alias_del_codigo_por_defecto("/default.htm"));
+        // No es un alias: ni la raíz de un prefijo, ni otra caja, ni una
+        // extensión que lo extienda.
+        for no_alias in [
+            "/default",
+            "/default.htmlx",
+            "/Default.html",
+            "/x/default.html",
+            "/minimal.html",
+            "/matrix.html",
+        ] {
+            assert!(
+                !es_alias_del_codigo_por_defecto(no_alias),
+                "`{no_alias}` no puede ser el alias del código por defecto"
+            );
+        }
     }
 
     // --- Solo códigos utilizables (auditoría B-2) -------------------------
