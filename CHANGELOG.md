@@ -3,6 +3,19 @@
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el
 versionado, [SemVer](https://semver.org/lang/es/).
 
+## [0.10.0](https://github.com/atareao/errserve/compare/v0.9.0..v0.10.0) - 2026-10-27
+
+### Añadido
+
+- **content**: Renueva las páginas de tema y añade antique, oasis y starwars
+- Descubre los temas al compilar desde content/
+- **content**: Añade el tema aurora
+
+### Documentación
+
+- **openspec**: Archiva el change de la 0.9.0
+- Pone al dia el estado real del repositorio
+
 ## [0.9.0](https://github.com/atareao/errserve/compare/v0.8.1..v0.9.0) - 2026-10-26
 
 La lista de temas deja de ser una **tabla cerrada en el binario**: al arrancar, el servicio

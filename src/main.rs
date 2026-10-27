@@ -780,20 +780,16 @@ mod tests {
         rellena
     }
 
-    /// La página **embebida** del tema `default` (`content/default.html`, con los
-    /// marcadores), distinta del fixture del operador de [`fixture_default_html`].
-    const EMBEDDED_DEFAULT_PAGE: &str = include_str!("../content/default.html");
-
-    /// La página **incorporada** del tema `nombre` tal como se **sirve** para `code`.
-    /// Usa `INCORPORATED`, así que no depende de `content/` en el disco.
+    /// La página **embebida** del tema `nombre` tal como se **sirve** para `code`.
+    /// Usa `Themes::incorporados()`, así que no depende de `content/` en el disco.
     fn pagina_del_tema(nombre: &str, code: u16) -> String {
-        let theme = crate::theme::INCORPORATED
-            .iter()
-            .find(|theme| theme.name == nombre)
-            .unwrap_or_else(|| panic!("el tema incorporado `{nombre}` tiene que existir"));
+        let registro = crate::theme::Themes::incorporados();
+        let theme = registro
+            .by_name(nombre)
+            .unwrap_or_else(|| panic!("el tema embebido `{nombre}` tiene que existir"));
         let pagina = theme
             .embedded
-            .expect("un tema incorporado siempre tiene copia embebida");
+            .expect("un tema embebido siempre tiene copia embebida");
         let rellena = crate::render::plantilla(pagina.as_bytes(), code);
 
         String::from_utf8(rellena).expect("la página del tema, rellenada, es UTF-8")
@@ -830,9 +826,7 @@ mod tests {
 
     /// La página **embebida** del tema `default` tal como se **sirve** para `code`.
     fn embedded_servida(code: u16) -> Vec<u8> {
-        let rellena = crate::render::plantilla(EMBEDDED_DEFAULT_PAGE.as_bytes(), code);
-        let texto = String::from_utf8(rellena.clone())
-            .expect("la página embebida del tema, rellenada, es UTF-8");
+        let texto = pagina_del_tema("default", code);
 
         // Red de la sustitución: si `plantilla` dejara de rellenar los marcadores
         // —o de usar el escape—, **todas** las pruebas que pasan por este
@@ -848,7 +842,7 @@ mod tests {
             "red de la sustitución: no puede quedar ningún marcador sin rellenar, fue: {texto}"
         );
 
-        rellena
+        texto.into_bytes()
     }
 
     /// Directorio de contenido que **no existe**: el caso de un binario

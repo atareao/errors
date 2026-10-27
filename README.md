@@ -52,9 +52,9 @@ Y hay **tres razones medidas** para no conservar su estado:
   `X-Code`, que existe justo para los despliegues que no reescriben el path.
 
 Un asset **existente** sigue ganando, que es la otra mitad de la regla: `GET /minimal.html` —una de
-las seis páginas de tema que **no** son el alias— es un `200 text/html` crudo, con sus marcadores a la
+las páginas de tema que **no** son el alias— es un `200 text/html` crudo, con sus marcadores a la
 vista, y no pasa por la página de error. La excepción es `/default.html`: es el **alias del código por
-defecto**, así que se intercepta y responde el código resuelto, **nunca `200`** (ver «Los siete temas»).
+defecto**, así que se intercepta y responde el código resuelto, **nunca `200`** (ver «El tema es una página»).
 
 ## Integración con Traefik
 
@@ -93,11 +93,11 @@ curl -s  -H 'Accept: text/html' -H 'X-Theme: terminal' localhost:8080/404   # co
 |---|---|---|
 | `PORT` | `8080` | Puerto de escucha (bind `0.0.0.0`). El que asume la guía de Traefik. |
 | `LOG_LEVEL` | `info` | Filtro de `tracing-subscriber`. |
-| `CONTENT_DIR` | `content` | El directorio del operador **y la fuente de temas**: *override* de la página de un tema incorporado, y los `*.html` de su **raíz** **añaden** temas al registro. |
+| `CONTENT_DIR` | `content` | El directorio del operador **y la fuente de temas**: *override* de la página de un tema **embebido**, y los `*.html` de su **raíz** **añaden** temas al registro. |
 | `DEFAULT_ERROR_PAGE` | `404` | Código cuando el path y `X-Code` no aportan uno utilizable. |
 | `LOG_FORMAT` | `text` | Formato del registro: `text` o `json`. |
 | `RETRY_AFTER` | `120` | Segundos de la cabecera `Retry-After`. La llevan solo el `429` y el `503`. |
-| `THEME` | `default` | Tema de las páginas **HTML**: uno de los siete **incorporados** (`default`, `minimal`, `terminal`, `paper`, `amber`, `compact`, `matrix`) **o** un tema descubierto en `CONTENT_DIR`. |
+| `THEME` | `default` | Tema de las páginas **HTML**: uno de los **embebidos** (`default`, `minimal`, `terminal`, `paper`, `amber`, `compact`, `matrix`) **o** un tema descubierto en `CONTENT_DIR`. |
 
 No se lee ningún fichero de configuración. Una variable **presente pero vacía**
 es un error de arranque, no un valor por defecto. `DEFAULT_ERROR_PAGE` fuera del
@@ -118,12 +118,12 @@ segundos —`0` significa «reintenta ya»— y no tiene techo. Una variable vac
 de segundos, es un error de arranque. Lo que **no** se configura es qué códigos la llevan: son el
 `429` y el `503`, y eso lo decide el código.
 
-`CONTENT_DIR` es el directorio del operador: el ***override*** de la página de un tema incorporado
-**y** la fuente de los temas nuevos. El binario lleva **dentro** las siete páginas de tema, así que
+`CONTENT_DIR` es el directorio del operador: el ***override*** de la página de un tema **embebido**
+**y** la fuente de los temas nuevos. El binario lleva **dentro** las páginas **embebidas** de tema, así que
 un `cargo install errserve` —que deja un ejecutable y ningún fichero de datos, con `CONTENT_DIR`
-apuntando por defecto a un `content` que no existe— sirve las siete, y no el respaldo de texto. Lo
+apuntando por defecto a un `content` que no existe— sirve las páginas **embebidas**, y no el respaldo de texto. Lo
 que haya en `CONTENT_DIR` gana **cuando se pueda leer**; lo que falte se sirve desde la copia
-embebida. Y los `*.html` de su **raíz** que no sean la página de un incorporado **añaden** temas al
+embebida. Y los `*.html` de su **raíz** que no sean la página de un **embebido** **añaden** temas al
 registro: un fichero de más **es** un tema, y su tallo es su nombre (ver «El tema es una página»).
 
 ## Cómo se resuelve
@@ -140,7 +140,7 @@ Código y formato son ortogonales: `/503.xml` es un 503 en XML.
 
 Y hay un **tercer eje**, que no reparte códigos ni formatos sino aspecto, y que solo toca al HTML: **la
 página del tema** que se sirve. La elige `THEME` —el tema de todo el servicio— y, por petición, la
-cabecera `X-Theme`, que gana a `THEME` cuando nombra un tema del **registro** —los siete incorporados
+cabecera `X-Theme`, que gana a `THEME` cuando nombra un tema del **registro** —los **embebidos**
 más los descubiertos en `CONTENT_DIR`—; un `X-Theme` ausente, desconocido o vacío **no** es un error y
 cae al tema configurado. En JSON, XML y texto no hay página que incrustar, así que ahí el tema se
 ignora (ver «Páginas autocontenidas y temas»).
@@ -159,7 +159,7 @@ canónica y su descripción. Las cuatro formas de un mismo código llevan la **m
 
 ## Códigos cubiertos
 
-**Cualquier** código de `400..=599` tiene página, no solo once: la página del tema es una **plantilla**
+**Cualquier** código de `400..=599` tiene página, no solo las que hay en `content/`: la página del tema es una **plantilla**
 (por defecto `content/default.html`) que el servidor rellena al vuelo, así que un `451`, un `418` o un
 `599` salen con **su propio** código, su razón y su descripción, y con **su propio** estado —nunca
 verás un `504` servido como `404`, ni un cuerpo que diga `404` para otro código—. Quince códigos traen
@@ -177,7 +177,7 @@ La plantilla lleva tres marcadores que el servidor sustituye **al servir**:
 
 Cada página de tema lleva su `<style>` **dentro**, y la clase del `body` (`c504`, `c503`…) es lo que
 permite diferenciar el aspecto de cada código sin duplicar la página: el diseño por código vive ahí,
-no en un fichero por código. El tema `matrix` lleva además su `<script>` dentro (ver «Los siete temas»).
+no en un fichero por código. El tema `matrix` lleva además su `<script>` dentro (ver «Los temas»).
 
 ### Cómo cambiar el texto de una página de error
 
@@ -224,7 +224,7 @@ adorno.
 ### El tema es una página
 
 Un tema **es** su página, y el nombre del tema **es** el de su fichero: viven en la **raíz** de
-`CONTENT_DIR` —`content/<nombre>.html`—. Las **siete** incorporadas van dentro del binario y la raíz
+`CONTENT_DIR` —`content/<nombre>.html`—. Las páginas **embebidas** van dentro del binario y la raíz
 del directorio **añade** temas: un `*.html` de más **es** un tema, y su **tallo** es su nombre
 (`neon.html` → `neon`). El barrido del directorio es **al arrancar**, así que **añadir** un tema exige
 **reiniciar**: un fichero añadido con el servicio en marcha **no** es un tema hasta el siguiente
@@ -238,19 +238,19 @@ estado intacto.
 
 Las reglas del barrido, para no esperar lo que no es: solo la **raíz** (un `temas/neon.html` no es un
 tema); la extensión tiene que ser **exactamente** `html` (`neon.htm`, `neon.HTML` y `neon.css` **no**
-son temas); el nombre es el **tallo**; el tallo de un **incorporado** no añade un tema
-(`content/default.html` es la página del `default` incorporado, no un `default` de más); y un tallo
+son temas); el nombre es el **tallo**; el tallo de un **embebido** no añade un tema
+(`content/default.html` es la página del `default` **embebido**, no un `default` de más); y un tallo
 que **reclame la resolución de códigos** (`404`, `999`, `200`…) **no** es un tema, porque ese path
-responde **otra** página de error. Los descubiertos van **ordenados por nombre** detrás de los siete.
+responde **otra** página de error. Los descubiertos van **ordenados por nombre** detrás de los embebidos.
 
-### Los siete temas
+### Los temas
 
-Los siete **incorporados** al binario son la **base** del registro, y un directorio puede **añadir**
-más (ver «El tema es una página»). Estos siete son:
+Los temas **embebidos** al binario son la **base** del registro, y un directorio puede **añadir**
+más (ver «El tema es una página»). La tabla describe algunos de los temas; la lista completa sale de `content/*.html`.
 
 | Tema | Página en `CONTENT_DIR` | Aspecto |
 |---|---|---|
-| `default` | `default.html` | El tema sobrio de la casa, y el **único** de las seis sobrias que anima: un fundido de 180 ms sobre el contenido, que se apaga con `prefers-reduced-motion: reduce`. Sus reglas pueden cambiar de una versión a otra; lo que no cambia es que sigue siendo el tema por defecto. |
+| `default` | `default.html` | El tema sobrio de la casa, y el **único** tema sobrio que anima: un fundido de 180 ms sobre el contenido, que se apaga con `prefers-reduced-motion: reduce`. Sus reglas pueden cambiar de una versión a otra; lo que no cambia es que sigue siendo el tema por defecto. |
 | `minimal` | `minimal.html` | Solo tipografía, sin acento de color; claro u oscuro según decida el sistema. |
 | `terminal` | `terminal.html` | Monoespaciado, fósforo verde sobre negro. No se mueve: un terminal apagado, sin parpadeo ni cursor. |
 | `paper` | `paper.html` | Serif, fondo crema, aire de página impresa. |
@@ -266,50 +266,20 @@ la comparación es **exacta**, así que `X-Theme: Terminal` no es el tema `termi
 configurado. `X-Theme` solo afecta al **HTML**: un JSON o un XML no tienen página que incrustar, así
 que ahí el tema se ignora.
 
-Ninguna de las siete referencia recursos externos —ni `@import`, ni `url(...)` remotos, ni fuentes
-descargadas—: una página que necesita la red para verse es exactamente el defecto que este apartado
-corrige. Las seis sobrias comparten su marcado **palabra por palabra** —quitado el bloque `<style>`—
-y solo cambia su CSS; lo vigila una prueba de `tests/content_pages.rs`, no una guarda —una guarda
-textual no puede demostrar que seis ficheros no diverjan—. Y como viven en la raíz de `CONTENT_DIR`,
-las **otras seis** páginas (todas menos `default.html`) se sirven crudas si alguien las pide: el
-**servicio** sigue sin ocultarlas —es un servidor, no un proxy, y esa mitad se mantiene—, pero este
-repositorio **ya entrega la regla del respaldo que las bloquea** —y un tema **descubierto** nuevo queda
-protegido **sin añadirlo a ninguna lista**, porque la regla bloquea **por forma**, no por nombre—, y
-una prueba la guarda (`tests/traefik_catchall.rs`, porque comprobarlo de extremo a extremo necesita un
-motor de contenedores y no corre en el CI). La regla, su precio y sus límites están en «Operación y
-observabilidad»: aquí, la frase y el puntero.
-
-Una página de tema **puede animar**: el movimiento es una decisión de aspecto, no un defecto de
-autocontención. Ahora bien, lo que anima tiene que poder apagarse: una página que declare una animación
-—`animation`, `animation-name`, `transition` o `transition-property` con un valor **distinto de
-`none`**— tiene que **neutralizarla** dentro de un bloque `@media (prefers-reduced-motion: reduce)` que
-**exista**, **no esté vacío** y apague **cada familia** con la forma canónica —`animation: none` o
-`animation-name: none` para una animación, `transition: none` o `transition-property: none` para una
-transición; `animation: none` **no** apaga una transición—. `@keyframes` por sí solo no obliga a nada:
-define fotogramas y no anima mientras ninguna declaración los use. Un guion que anime con
-`requestAnimationFrame` o `setInterval` tiene que **mencionar** `prefers-reduced-motion`. Y el motivo
-sigue siendo el mismo: hay gente a la que el movimiento le marea, y una página de error que se mueve
-mientras intentas leer qué ha pasado es peor página de error.
-
-Las páginas **incorporadas** cumplen **tres contratos** —no pedir nada por la red, poder apagar el
-movimiento y, las seis sobrias, cubrir su marcado (`body`, `h1`, `h2`, `hr`, `p` y `footer`)— y las
-pruebas del proyecto los comprueban. Los dos primeros son comprobaciones **textuales sobre los bytes**
-de la página: garantizan que el patrón canónico está, **no** que el CSS apague el movimiento en todos
-los navegadores —eso exigiría un motor de CSS y una matriz de navegadores—; y la guarda de red **no
-puede demostrar** que un guion construya una URL en tiempo de ejecución, ni que una librería pida por
-su cuenta. La guarda de movimiento mide la neutralización **por familia, no por declaración**: ligar
-cada declaración con *su* neutralización exigiría un parser de selectores y rechazaría
-neutralizaciones legítimas (`* { animation: none }`), así que dos animaciones declaradas y **una sola**
-neutralizada **pasan**; el límite está escrito en vez de escondido. Y todo esto cubre las **siete
-páginas que el proyecto entrega**, no la tuya: una página propia en `CONTENT_DIR/<nombre>.html` es tuya
-y el servicio no la inspecciona al servir. `url(#…)` —un filtro o degradado SVG—, `url(data:…)` y
-`@font-face` con `src: local(...)` están **permitidos**, porque no piden nada a la red.
+Las páginas de tema son **opacas**: el servicio no valida su contenido. Una página puede llevar
+`@import`, animación, redirecciones, los marcadores `{{code}}`/`{{reason}}`/`{{description}}` o
+ninguno; se sirve tal cual y el render solo rellena los marcadores cuando están. Añadir un tema es
+dejar su `.html` en `content/` y reconstruir: `build.rs` lo descubre al compilar y lo embebe. El
+registro en marcha es `EMBEBIDOS ∪ CONTENT_DIR`, y el fichero del directorio gana por nombre. No hay
+una lista cerrada de temas ni una guarda que inspeccione la página: la decisión de qué lleva cada una
+es de quien la escribe. El servicio las sirve también como assets crudos si se piden; la regla del
+respaldo que bloquea ese leak está en «Operación y observabilidad».
 
 ### El endurecimiento y la CSP
 
-Las siete páginas son **incompatibles con una CSP estricta** (`default-src 'none'`): cada una lleva su
+Las páginas son **incompatibles con una CSP estricta** (`default-src 'none'`): cada una lleva su
 `<style>` **en línea** y `matrix` su `<script>` **en línea**. Si el proxy pone una CSP sin
-`style-src 'unsafe-inline'` —o sin *nonce*—, las siete pierden el estilo; y `matrix` pierde también el
+`style-src 'unsafe-inline'` —o sin *nonce*—, las páginas pierden el estilo; y `matrix` pierde también el
 script, y con él el teclado del minijuego y las pastillas. El servicio **no emite CSP**: la pone el
 proxy, que es donde va el endurecimiento. Es una **decisión de diseño** escrita, no un fallo.
 
@@ -357,7 +327,7 @@ es un detalle de la prosa: son **dos** conjunciones en la regla —la de `/metri
 entrega este repositorio, en **cuatro** ficheros: el ejemplo de `examples/traefik/` (sus labels), la
 plantilla de producción de `compose.yml`, este mismo `README.md` y las **dos** del README del ejemplo
 —el bloque de prosa y la variante de *provider de fichero*—. La segunda no es cosmética: el nombre de
-cada tema **es** la ruta de su página, así que sin ella el respaldo publicaba los paths de las seis
+cada tema **es** la ruta de su página, así que sin ella el respaldo publicaba los paths de las
 páginas de tema que **no** son el alias del código por defecto, con `200` y los marcadores
 `{{code}}`/`{{reason}}`/`{{description}}` a la vista, a quien preguntara por un Host sin router
 propio.
@@ -378,7 +348,7 @@ y nada más, y hoy no hay ningún aviso que lo haga explotable.
 
 La respuesta se comprime cuando el cliente envía `Accept-Encoding: gzip` —y entonces responde
 con codificación por trozos, sin `Content-Length`—, y declara `Vary: Accept-Encoding, X-Request-Id,
-X-Trace-Id, X-Correlation-Id, X-Amzn-Trace-Id, X-Theme`: las seis, siempre, las traiga la petición o
+X-Trace-Id, X-Correlation-Id, X-Amzn-Trace-Id, X-Theme`: todas, siempre, las traiga la petición o
 no. Las cabeceras de correlación se copian de la petición a la respuesta cuando vienen —no se
 inventan—, así que una caché intermedia tiene que saber que la respuesta varía por ellas; y `X-Theme`
 cambia **el cuerpo** —la página del tema que va incrustada en el HTML—, así que sin declararla una caché le
@@ -520,8 +490,8 @@ Se copian **solo** las cuatro cabeceras de correlación, no el conjunto completo
 `--proxy-headers`, y la compresión se limita a gzip.
 
 Tampoco hay rotación de temas: `error-pages` tiene `--rotation-mode` (aleatorio
-al arrancar, horario, diario) y aquí no existe —un tema, y ya—. Los **siete** temas
-siguen **incorporados al binario** —un `cargo install` sirve los siete sin ficheros de datos—, **y**
+al arrancar, horario, diario) y aquí no existe —un tema, y ya—. Los temas
+siguen **embebidos** al binario —un `cargo install` sirve los temas sin ficheros de datos—, **y**
 el directorio `CONTENT_DIR` **añade** nombres: un `*.html` de más en su raíz **es** un tema nuevo (ver
 «El tema es una página»). `THEME` **sí** depende del sistema de ficheros al arrancar: se valida contra
 el registro de **ese** arranque, y un `THEME` correcto cuyo fichero todavía no esté montado **aborta**.

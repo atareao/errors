@@ -31,10 +31,10 @@ ningún change en curso**: `openspec/changes/` solo tiene `archive/`, y `openspe
 - `src/path.rs` — normalización del path (percent-decode + plegado de `.`/`..`).
 - `src/resolve.rs` — cascadas de código y formato, rango `400..=599`, y las tablas de razón canónica (`canonical_reason`) y descripción (`description`) —**fuente única** del texto de los cuatro formatos, que el HTML incrusta al servir—.
 - `src/render.rs` — cuerpo por formato y cabeceras; la cascada del HTML tiene **un solo paso** (la página del tema, `Theme::page`), ya **sin capa por código**, y el HTML se sirve **relleno** (`plantilla`: sustituye `{{code}}`/`{{reason}}`/`{{description}}` por el código resuelto y las tablas de `resolve`, escapando lo insertado).
-- `src/theme.rs` — el **registro de temas**: los siete incorporados (`INCORPORATED`) más los **descubiertos** en `CONTENT_DIR` (`struct Themes`, con `incorporados`, `descubrir`, `by_name`, `names` e `iter`), y la resolución `resolve(registry, requested, configured)`. La ruta de cada página sigue **derivada del nombre** (`Theme::page_path` → `"<nombre>.html"`) y `Theme::page` resuelve la página **como un asset** (disco si se puede leer; la copia embebida si no, y **solo** un incorporado la tiene: un tema descubierto sin fichero responde el respaldo de texto). Aquí vive el `#[cfg(test)]` con las **tres guardas** sobre las páginas.
-- `src/embedded.rs` — las **siete páginas de tema** embebidas con `include_str!` (`DEFAULT_PAGE`, `MINIMAL_PAGE`, …, `MATRIX_PAGE`), una por nombre; el binario sirve los siete diseños sin ficheros de datos. Aquí vive la prueba de paridad de las dos copias, **página a página** (D5).
+- `src/theme.rs` — la **gestión de temas**: el registro parte de `EMBEBIDOS` —las páginas que `build.rs` descubrió en `content/` al compilar— y se completa al arrancar con los `*.html` descubiertos en la raíz de `CONTENT_DIR`; el fichero del directorio gana por nombre. Las páginas son **opacas**: el servicio no valida su contenido, sus marcadores ni su autocontención, y no las inspecciona al servir. La ruta de cada página sigue **derivada del nombre** (`Theme::page_path` → `"<nombre>.html"`) y `Theme::page` resuelve la página **como un asset** (disco si se puede leer; la copia embebida si no, y **solo** un tema embebido la tiene: uno descubierto sin fichero responde el respaldo de texto).
+- `src/embedded.rs` — incluye con `include!` el array `EMBEBIDOS` que genera `build.rs` a partir de `content/*.html`; una entrada por página y nombre. El binario sirve las páginas de tema sin ficheros de datos. El array se regenera al compilar: añadir un tema es dejar el `.html` en `content/` y reconstruir. Las páginas son **opacas** y no hay prueba de paridad ni guarda de contenido.
 - `src/metrics.rs` — contador de páginas servidas por código **y por origen del código**, y su serialización en texto Prometheus.
-- `content/` — **siete páginas planas y nada más**, una por nombre en la **raíz** (`default.html`, `minimal.html`, `terminal.html`, `paper.html`, `amber.html`, `compact.html` y `matrix.html`), cada una **autocontenida** con su `<style>` dentro (`matrix`, también su `<script>`), con los tres marcadores `{{code}}`/`{{reason}}`/`{{description}}` y el `<main>` —el *landmark* que el tema `default` anima— y el `<footer>errserve</footer>` **sin `href`** de las seis sobrias. Las siete van **embebidas** en el binario. Ya no hay hoja ni `content/css/`.
+- `content/` — **las páginas de tema del proyecto**, una por nombre en la **raíz**; `build.rs` las descubre al compilar y las embebe. Son **opacas**: cada una puede llevar su `<style>`, su `<script>`, los marcadores `{{code}}`/`{{reason}}`/`{{description}}` o ninguno; el servicio no las valida. Ya no hay hoja ni `content/css/`.
 - `Dockerfile`, `.dockerignore`, `.justfile`, `compose.yml` — empaquetado (imagen ~13 MB, no-root uid 10001); el `compose.yml` va endurecido: `read_only: true`, `cap_drop: [ALL]`, `no-new-privileges:true` e `init: true`.
 - `README.md` — el contrato con Traefik y los ejemplos.
 - `.github/scripts/smoke.sh` — el **único** sitio donde viven las aserciones sobre la **imagen
@@ -45,16 +45,15 @@ ningún change en curso**: `openspec/changes/` solo tiene `archive/`, y `openspe
   (`/minimal.html` → `200`)— y un **segundo** con un `CONTENT_DIR` **montado** y un tema de más, en su
   propio puerto de loopback (`PORT_VOLUMEN`, por defecto `PORT` + 1), porque el barrido del directorio
   del operador depende de que el montaje sea legible por el uid **10001** con el que corre la imagen.
-- `tests/` — las guardas sobre ficheros versionados: `content_pages.rs` (**7**, la paridad byte a
-  byte de las seis páginas sobrias), `traefik_catchall.rs` (**9**, las **cinco** definiciones de
-  respaldo de los **cuatro** ficheros, con la regresión de la forma anclada al fin de cadena) y
-  `puertas.rs` (**9**, los dos workflows invocan el script, ninguno duplica sus aserciones y
-  `check.sh` conserva el `502`); y los fixtures del descubrimiento, en `tests/fixtures/temas-extras/`
-  y `tests/fixtures/temas-extension/`.
+- `tests/` — las guardas sobre ficheros versionados: `traefik_catchall.rs` (las definiciones de
+  respaldo de los cuatro ficheros, con la regresión de la forma anclada al fin de cadena) y
+  `puertas.rs` (los dos workflows invocan el script, ninguno duplica sus aserciones y `check.sh`
+  conserva el `502`); y los fixtures del descubrimiento, en `tests/fixtures/temas-extras/` y
+  `tests/fixtures/temas-extension/`.
 
-Puertas en verde: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` y **256 tests**
-(**231** unitarias + **7** de `content_pages` + **9** de `puertas` + **9** de `traefik_catchall`).
-Verificado además contra el servidor real y contra la imagen.
+Puertas en verde: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` y la suite de
+pruebas (unitaria, `puertas` y `traefik_catchall`). Verificado además contra el servidor real y
+contra la imagen.
 
 ## Qué es
 
@@ -96,7 +95,7 @@ defecto `app-down`); su rotación (`--rotation-mode`) **no** existe aquí, y es 
    código decide en el acceso **directo** —router *catch-all*, *default backend*—, que es el caso
    que justifica el proyecto. No prometas lo contrario en la documentación.
 4. **Un asset existente gana a la página de error.** La garantía del código aplica a las *páginas de
-   error*, no a los assets: `GET /minimal.html` —una de las seis páginas de tema que **no** son el
+   error*, no a los assets: `GET /minimal.html` —una de las páginas de tema que **no** son el
    alias— es un `200 text/html` crudo, con sus marcadores a la vista. Solo se sustituye una respuesta
    del servidor de ficheros **con estado de error**; su `200` —y su cuerpo— se sirve tal cual. La
    excepción es `/default.html`: es el **alias del código por defecto**, se intercepta y responde el
@@ -113,29 +112,27 @@ defecto `app-down`); su rotación (`--rotation-mode`) **no** existe aquí, y es 
    un `GET` de un asset con `If-Modified-Since` responde `304 Not Modified`, sin cuerpo y sin
    `X-Robots-Tag`, que es justo la respuesta que el cliente pidió. `append_index_html_on_directories(false)`
    suprime la redirección de directorio, **no** los `3xx`. No «endurezcas» esto leyendo lo contrario.
-7. **El binario sirve las páginas sin ficheros de datos, y la hoja ya no existe.** Los **siete** temas
-   van **dentro** del ejecutable: cada página se embebe con `include_str!`
-   (`embedded::DEFAULT_PAGE` … `embedded::MATRIX_PAGE`), así que un `cargo install errserve` —un
-   binario y ningún fichero de datos, con `CONTENT_DIR` por defecto apuntando a un `content` que no
-   existe— sirve los **siete** diseños, no el respaldo de texto. La página del tema se resuelve **al
-   servir** (`Theme::page`: el fichero legible en `CONTENT_DIR/<nombre>.html` o, si no, su copia
-   embebida). **La hoja y su asset ya no existen**: `content/css/error.css`, `themes/*.css` y
-   `GET /css/error.css` se retiraron en la `0.8.0`; la hoja de cada tema vive en el `<style>` de su
-   propia página.
-   `CONTENT_DIR` es el *override* de la página de un incorporado **y la fuente de temas nuevos**: los
-   siete se quedan y su **raíz** **añade** —un `*.html` de más **es** un tema, y su tallo es su nombre—
-   a un **registro** que se construye **al arrancar** (los siete incorporados **más** los descubiertos;
+7. **El binario sirve las páginas sin ficheros de datos, y la hoja ya no existe.** Los temas
+   van **dentro** del ejecutable: `build.rs` lee `content/*.html` al compilar y genera `EMBEBIDOS`
+   con `include_str!`, así que un `cargo install errserve` —un binario y ningún fichero de datos,
+   con `CONTENT_DIR` por defecto apuntando a un `content` que no existe— sirve las páginas de tema,
+   no el respaldo de texto. La página del tema se resuelve **al servir** (`Theme::page`: el fichero
+   legible en `CONTENT_DIR/<nombre>.html` o, si no, su copia embebida). **La hoja y su asset ya no
+   existen**: `content/css/error.css`, `themes/*.css` y `GET /css/error.css` se retiraron en la
+   `0.8.0`; la hoja de cada tema vive en el `<style>` de su propia página.
+   `CONTENT_DIR` es el *override* de la página de un tema **embebido** **y la fuente de temas nuevos**:
+   los embebidos se quedan y su **raíz** **añade** —un `*.html` de más **es** un tema, y su tallo es su
+   nombre— a un **registro** que se construye **al arrancar** (los embebidos **más** los descubiertos;
    las reglas del barrido y la trampa del montaje están en el *quirk* del barrido). El precio, escrito:
    **añadir** un tema exige **reiniciar**, mientras que los **bytes** de la página se leen al servir,
    así que **editar** uno que ya estaba se ve **sin** reiniciar. Y lo que gana es **un fichero que se
    pueda leer**, no «siempre»: una página que existe y no se puede abrir responde el respaldo de texto
    con el código resuelto —el `warn` la delata—, en vez de que la copia embebida tape en silencio un
-   directorio del operador roto (Opción A de `design.md`). Las dos copias **no pueden divergir** —y eso
-   es de las páginas **incorporadas**, que son las que tienen copia embebida—: una prueba de paridad
-   compara sus bytes, **página a página** y en los **dos sentidos** (D5). Nada de esto toca la
-   garantía 1: el estado sigue siendo el código resuelto, nunca `200`.
+   directorio del operador roto (Opción A de `design.md`). La copia embebida sale del mismo fichero de
+   `content/`, así que no hay dos copias que puedan divergir ni una prueba de paridad que las vigile.
+   Nada de esto toca la garantía 1: el estado sigue siendo el código resuelto, nunca `200`.
 8. **El respaldo que este repositorio entrega no publica las páginas de tema crudas.** El nombre
-   del tema **es** la ruta de su página (`content/<nombre>.html`), y las **seis** páginas que no
+   del tema **es** la ruta de su página (`content/<nombre>.html`), y las páginas que no
    son el alias se sirven como assets **crudos**, con los marcadores
    `{{code}}`/`{{reason}}`/`{{description}}` a la vista: un Host sin router propio las publicaba a
    cualquiera con `200`. La conjunción que lo cierra es idéntica en los **cinco** sitios
@@ -146,7 +143,7 @@ defecto `app-down`); su rotación (`--rotation-mode`) **no** existe aquí, y es 
    el mismo con **barra final** o un segmento detrás (`/minimal.html/`, `/matrix.html/`) y el mismo
    con la barra **percent-encoded**, en las dos cajas (`/minimal.html%2F`, `/matrix.html%2f`). Una
    exclusión anclada al fin de cadena —``!PathRegexp(`\.html?$`)``— **no** la cierra: medida, dejaba
-   **diecisiete** formas sirviendo el fichero crudo. La rama `%2[fF]` no es adorno: Traefik
+   **más de una decena de** formas sirviendo el fichero crudo. La rama `%2[fF]` no es adorno: Traefik
    normaliza los escapes de los caracteres **no reservados** (`/minimal%2Ehtml` queda bloqueado
    porque lo lee como `minimal.html`) y **no** el de la barra, que sobrevive como `%2F`; y la regla
    **no depende de `sanitizePath`** —la tabla de 41 paths es **idéntica** con el *entrypoint* en su
@@ -176,11 +173,11 @@ defecto `app-down`); su rotación (`--rotation-mode`) **no** existe aquí, y es 
 |---|---|---|
 | `PORT` | `8080` | Puerto de escucha (bind `0.0.0.0`). |
 | `LOG_LEVEL` | `info` | Filtro de registro. |
-| `CONTENT_DIR` | `content` | El directorio del operador: *override* de la página de un tema incorporado **y** fuente de temas nuevos (los `*.html` de su **raíz** **añaden** al registro). |
+| `CONTENT_DIR` | `content` | El directorio del operador: *override* de la página de un tema embebido **y** fuente de temas nuevos (los `*.html` de su **raíz** **añaden** al registro). |
 | `DEFAULT_ERROR_PAGE` | `404` | Código por defecto; fuera de `400..=599` es error de arranque. |
 | `LOG_FORMAT` | `text` | `text` o `json`; cualquier otro valor, o vacía, es error de arranque. |
 | `RETRY_AFTER` | `120` | Segundos de la cabecera `Retry-After` (solo `429` y `503`); no numérica, o vacía, es error de arranque. |
-| `THEME` | `default` | Tema de las páginas **HTML**: uno de los siete **incorporados** (`default`, `minimal`, `terminal`, `paper`, `amber`, `compact`, `matrix`) **o** un tema descubierto en `CONTENT_DIR`; un nombre que no esté en el **registro** de ese arranque, o vacía, es error de arranque. |
+| `THEME` | `default` | Tema de las páginas **HTML**: uno de los **embebidos** **o** un tema descubierto en `CONTENT_DIR`; un nombre que no esté en el **registro** de ese arranque, o vacía, es error de arranque. |
 
 `GET /metrics` es un endpoint de servicio (siempre `200`, fuera de la resolución de páginas de
 error) que expone el contador Prometheus de páginas servidas **por código y por el origen de ese
@@ -210,7 +207,7 @@ tanto **el código viaja en el path**: una página 404 llega como `GET /404`. `X
 Orden de resolución (el **primero** que haga match): **path** (`/404`, `/404.html`, `/404.json`,
 `/503.xml`…) → cabecera **`X-Code`** → **`DEFAULT_ERROR_PAGE`** (defecto `404`). `/default.html` y
 `/default.htm` son el **alias del código por defecto**: se resuelven **después** de la normalización
-del path, responden `DEFAULT_ERROR_PAGE` y **nunca `200`** (las otras seis páginas de tema se sirven
+del path, responden `DEFAULT_ERROR_PAGE` y **nunca `200`** (las otras páginas de tema se sirven
 como assets crudos; ver la garantía 4).
 
 El **tema** es un eje aparte, y solo toca al HTML: lo elige `THEME` (entorno, al arrancar) y, por
@@ -218,7 +215,7 @@ petición, la cabecera **`X-Theme`**, con el mismo principio —el **primer** or
 que un `X-Theme` conocido gana a `THEME`—. Un `X-Theme` ausente, desconocido o vacío **no** es un
 error: cae al configurado, porque esa cabecera la elige quien llama y un cliente no puede romper el
 servicio. Comparación **exacta** (`X-Theme: Terminal` no es `terminal`). `THEME`, en cambio, la
-escribe el operador: un valor que no sea uno de los **siete** nombres —o la cadena vacía— **aborta el
+escribe el operador: un valor que no sea uno de los nombres —o la cadena vacía— **aborta el
 arranque** con un error que nombra la variable y enumera los nombres válidos, como `LOG_FORMAT`. En
 JSON, XML y texto plano no hay página que incrustar, así que el tema se ignora.
 
@@ -418,91 +415,42 @@ tampoco reproduce el del runner: la imagen etiquetada `v0.8.0` construida en est
   `LOG_LEVEL="tower_http=debug,info"`; y para no traer de regalo el `on_failure` que marca todo `5xx`
   como fallo, `LOG_LEVEL="tower_http::trace::on_failure=off,tower_http=debug,info"`. Medido: dos
   líneas por petición —entrada y salida—, sin el falso «response failed» de cada `503`.
-- **`include_str!` exige que el fichero exista al compilar, y `content/` viaja dentro del `.crate`.**
-  Borrar o renombrar **cualquiera** de las siete páginas del proyecto —`content/default.html` …
-  `content/matrix.html`— ya no degrada en silencio al respaldo de texto: es un **error de compilación**
-  (D6). Y como el embedding se resuelve al compilar, `content/` tiene que seguir entrando en el paquete
-  —comprobable con `cargo package --list --offline`, que lista las **siete** páginas—: sin ese hecho el
-  binario compila aquí y falla en la máquina de quien instala (D3).
-  Y por eso el **stage de compilación de la imagen** también las necesita: no basta con que `content/`
-  esté en el árbol, tiene que estar **en el `builder`**. Un `Dockerfile` que solo copie `content/` al
-  stage de runtime **no compila** —medido: `exit code 101` y doce `couldn't read` al etiquetar la
-  `0.4.0`—: es justo lo que caza el job `imagen` del CI en cada propuesta de cambio.
-- **Las tres guardas de una página de tema, y por qué miran la regla y no la prosa.** Las guardas se
-  *retargetizaron* de hojas a **páginas** en `themes-as-pages` y viven en el `#[cfg(test)]` de
-  `src/theme.rs`. Son tres, con nombres que dicen la verdad, y **cada una mide la lista cerrada que
-  declara, y nada más**:
-
-  - **Red** —`ninguna_pagina_puede_hacer_una_peticion`—: `@import` —en **cualquiera** de sus formas,
-    incluida `@import "otra.css";`, que no lleva `url(`—, cualquier `url(...)` cuyo destino no sea una
-    referencia interna (`url(#…)`) ni un dato incrustado (`url(data:…)`), las etiquetas que piden algo
-    por la red (`<script src>`, `<img>`, `<source>`, `<video>`, `<audio>`, `<iframe>`, `<embed>`,
-    `<object>`, `<form action>` y `<link href>` con destino externo) —`<script src>` incumple siempre;
-    en las demás, un `#…` o un `data:` no es petición—, más `srcset` y los tokens de JavaScript
-    (`fetch(`, `XMLHttpRequest`, `WebSocket`, `EventSource`, `sendBeacon`, `new Image`).
-  - **Movimiento** —`una_pagina_que_anima_puede_apagarse`—: una **declaración** de `animation`,
-    `animation-name`, `transition` o `transition-property` con un valor **distinto de `none`** tiene
-    que neutralizarse dentro de un bloque `@media (prefers-reduced-motion: reduce)` que **exista**,
-    **no esté vacío** —un bloque con solo un comentario dentro se lee vacío, porque los comentarios se
-    quitan antes de escanear— y traiga la forma canónica de su **familia**: `animation: none` o
-    `animation-name: none` para una animación, `transition: none` o `transition-property: none` para
-    una transición —**cada familia por su forma**: `animation: none` **no** apaga una transición—.
-    `@keyframes` **no** dispara nada por sí solo —define fotogramas y no anima mientras ninguna
-    declaración los use—, así que una página que solo trae fotogramas cumple sin la media query.
-    Quedan fuera a propósito `animation-duration: 0s` y `animation-play-state: paused`: una guarda
-    textual no puede demostrar que apagan igual en todos los navegadores. Y un guion que anime con
-    `requestAnimationFrame` o `setInterval` tiene que **mencionar** `prefers-reduced-motion`.
-  - **Cobertura de marcado** —`cada_pagina_sobria_cubre_el_marcado`—: solo las **seis sobrias**
-    estilan `body`, `h1`, `h2`, `hr`, `p` y `footer`. **`matrix` queda fuera**: es un documento propio
-    y no tiene por qué llevar `h2` ni `hr`.
-
-  La **paridad byte a byte** de las seis sobrias —quitado el bloque `<style>`— la vigila una prueba de
-  `tests/content_pages.rs`, **no** una guarda: una guarda textual no puede demostrar que seis ficheros
-  no diverjan.
-
-  Un tema **puede** animar —el movimiento es una decisión de aspecto, no un defecto de
-  autocontención—, pero tiene que poder apagarse: una página de error que se mueve mientras el usuario
-  intenta leer qué ha pasado es peor página de error. Las guardas **no** miran la página del operador
-  en `CONTENT_DIR/<nombre>.html`: cubren las páginas **incorporadas** al binario
-  (`INCORPORATED[i].embedded`), y la del operador es suya —el servicio no la inspecciona al servir—. Escanean
-  la página **sin sus comentarios** —textual sobre bytes, sin `regex` ni parser—, y lo hacen **por
-  regiones**: el `<!-- … -->` en todo el documento, el `/* … */` **solo** dentro de `<style>` o
-  `<script>` —es la sintaxis de CSS y de JavaScript, no de HTML— y la línea `//` **solo** dentro de
-  `<script>` —fuera de un guion `//` es **texto visible**, como en `<p class="boot">// errserve</p>` de
-  `matrix`, y tratarlo como comentario se comería el resto de la línea y taparía una petición que
-  viniera detrás—; dentro de una región respetan las **cadenas**. La detección de **HTML** es
-  **insensible a mayúsculas** y la de **JavaScript**, **sensible** —son identificadores—. La aguja del
-  bloque reduce es **literal y con el espacio después del `:`** —`@media (prefers-reduced-motion:
-  reduce)`; sin el espacio, a la guarda no le consta—, y el bloque se delimita a mano contando llaves
-  hasta **su** cierre equilibrado.
-
-  Y los límites que ningún código salva, escritos en lugar de escondidos: la guarda de **red** **no
-  puede demostrar** que un guion construya una URL en tiempo de ejecución, ni que una librería pida por
-  su cuenta, ni que un `<img>` o un `<link>` se cree por JavaScript después de cargar; la de
-  **movimiento** sobre el guion mide **la mención** de `prefers-reduced-motion`, no que la rama sea
-  correcta, y la del CSS mide la neutralización **por familia, no por declaración** —no liga cada
-  declaración con *su* neutralización, así que dos animaciones declaradas y **una sola** neutralizada
-  **pasan**, porque ligarlas exigiría un parser de selectores y rechazaría neutralizaciones legítimas
-  como `* { animation: none }`—; y **ninguna guarda mide el aspecto** —paleta, escala, jerarquía y
-  espaciado se revisan a ojo—. Los contratos se comprueban con fixtures en línea a través de
-  `pub fn incumplimientos(pagina: &[u8])` y `pub enum Incumplimiento` —**bajo `#[cfg(test)]`**: el crate
-  es solo binario y el servicio no valida la página—, más las **tres guardas** sobre la tabla `INCORPORATED`.
-- **El `<hr>` de las seis páginas sobrias es decorativo, y su contraste bajo es una decisión medida.**
+- **`build.rs` lee `content/*.html` y genera `EMBEBIDOS`, y `src/embedded.rs` lo incluye con `include!`.**
+  El descubrimiento se resuelve al compilar: borrar o renombrar **cualquiera** de las páginas del proyecto
+  —`content/default.html` … `content/matrix.html`— ya no degrada en silencio al respaldo de texto: es un
+  **error de compilación** (D6). Y como el embedding se resuelve al compilar, `content/` tiene que seguir
+  entrando en el paquete —comprobable con `cargo package --list --offline`, que lista las páginas—: sin
+  ese hecho el binario compila aquí y falla en la máquina de quien instala (D3). Y por eso el **stage de
+  compilación de la imagen** también necesita `content/` **y `build.rs`**: no basta con que `content/`
+  esté en el árbol, tienen que estar **en el `builder`** —sin `build.rs` la compilación muere con
+  `OUT_DIR`/`EMBEBIDOS` ausentes (medido: `exit code 101`)—. Un `Dockerfile` que solo copie `content/` al
+  stage de runtime **no compila**: es justo lo que caza el job `imagen` del CI en cada propuesta de
+  cambio. La medición histórica del modelo anterior —el `exit code 101` y los doce `couldn't read` de la
+  `0.4.0`— queda como referencia de lo que se juega el build en ese stage.
+- **Las páginas son opacas: el servicio no valida su contenido.** No hay guardas de red, movimiento
+  ni cobertura de marcado, ni prueba de paridad de las páginas sobrias. Una página de tema —embebida
+  o descubierta— puede llevar `@import`, animación, redirecciones, marcadores o ninguno; el servicio
+  la sirve tal cual y solo rellena `{{code}}`/`{{reason}}`/`{{description}}` cuando están. El modelo
+  anterior intentaba imponer tres comprobaciones textuales (red, movimiento y marcado) a las páginas
+  **embebidas**; se retiraron con el descubrimiento al compilar: una página es contenido del
+  operador y el servicio no la inspecciona. La decisión de qué lleva cada página es del autor del
+  tema, no una puerta del binario.
+- **El `<hr>` de las páginas sobrias es decorativo, y su contraste bajo es una decisión medida.**
   Va entre **1,31 y 1,55** según la página —1,31 `terminal`, 1,39 `paper`, **1,43** claro y **1,55**
   oscuro en `default`/`minimal`/`compact`, 1,48 `amber`—, por debajo del 3:1 de WCAG 1.4.11, y queda
   fuera de ese criterio porque cubre el **contenido no textual necesario para entender el contenido** y
   los componentes de interfaz, no el adorno. Se decide **no** subirlo —llevarlo a 3:1 pediría un trazo
-  mucho más marcado y rompería el aire de las seis páginas sobrias—, y es una **decisión explícita del
+  mucho más marcado y rompería el aire de las páginas sobrias—, y es una **decisión explícita del
   usuario**, no el resultado de una guarda: el `<hr>` queda con su ratio en la cabecera de cada página
   para que quien vuelva a medirlo no lo cuente como hallazgo. Lo que **sí** importa es el contraste del
   **texto** —el que se lee—, que se mide **a mano** (**44 pares**, objetivo **AA**) y se deja escrito:
   **ninguna guarda mide el aspecto** —paleta, escala, jerarquía y espaciado se revisan a ojo—.
-- **La página del proyecto es una plantilla, y ya no son once ficheros: son siete páginas.** Cada tema
+- **La página del proyecto es una plantilla, y ya no son ficheros sueltos: son las páginas.** Cada tema
   **es** su página —`content/default.html` … `content/matrix.html`— y el servidor la **rellena al
   servir** (`src/render.rs::plantilla`): `{{code}}` con el código resuelto, `{{reason}}` con
   `resolve::canonical_reason(code)` y `{{description}}` con `resolve::description(code)`, los tres —el
   código también en la clase del `body`, `class="c{{code}}"`, y en `data-text="{{code}}"` de `matrix`—.
-  El marcado de las **seis sobrias** envuelve el contenido en un `<main>` y cierra con un
+  Las páginas de tema pueden envolver el contenido en un `<main>` y cerrar con un
   `<footer>errserve</footer>` —**sin `href`**, y con el nombre como **texto del fichero**, no como
   marcador: siguen siendo tres—; `matrix`, que es un **documento propio**, lleva su propio marcado. Las
   reglas de esa sustitución: una página **sin** marcadores se sirve **byte a byte** —sin tocar el
@@ -512,7 +460,7 @@ tampoco reproduce el del runner: la imagen etiquetada `v0.8.0` construida en est
   descripción las escribe el servidor, no un humano dentro del HTML, y escapar de más convertiría en
   `&quot;` una comilla que habría que leer tal cual.
 
-  El único valor que cae dentro de un **atributo** es el **código** (`class="c{{code}}"` en las siete,
+  El único valor que cae dentro de un **atributo** es el **código** (`class="c{{code}}"` en las páginas,
   `data-text="{{code}}"` en `matrix`), que es un `u16` y solo produce dígitos: `escape_html` no escapa
   la comilla, así que la seguridad la sostiene **esa invariante**, no el escaper —la tabla de razones ya
   trae una comilla, `canonical_reason(418) == "I'm a teapot"`, y una prueba la fija—.
@@ -524,7 +472,7 @@ tampoco reproduce el del runner: la imagen etiquetada `v0.8.0` construida en est
 
   La **cascada del cuerpo HTML tiene un solo paso**: la página del tema (`CONTENT_DIR/<nombre>.html` o
   su copia embebida). Se **retiraron** la capa por código y la del código por defecto
-  (`CONTENT_DIR/<código>.html`, `CONTENT_DIR/<código por defecto>.html`): con las siete páginas en el
+  (`CONTENT_DIR/<código>.html`, `CONTENT_DIR/<código por defecto>.html`): con las páginas en el
   repositorio, esa capa quedaría **siempre sombreada**. `DEFAULT_ERROR_PAGE` **conserva** su significado
   —el código que se sirve cuando ninguna fuente aporta uno utilizable— pero **ya no nombra ningún
   fichero**; el diseño por código se expresa con la clase `c{{code}}` del `body`, que no puede discrepar
@@ -537,10 +485,10 @@ tampoco reproduce el del runner: la imagen etiquetada `v0.8.0` construida en est
   se sirve byte a byte (su texto fijo es suyo). **Pierde** la capa por código: un `content/404.html`
   suyo **ya no se consulta** (con `THEME=matrix` verá la página de `matrix`, no la suya), así que el
   camino para granularidad por código es el `<style>` de su página del tema.
-- **La prueba de paridad de las dos copias vive en el `#[cfg(test)]` de `src/embedded.rs`, y no en
-  `tests/`.** El crate no tiene *lib target*, así que una prueba de integración no ve las constantes
-  del binario; para verlas desde `tests/` habría que añadir un `lib` y cambiar la forma del crate
-  entera (D5).
+- **La prueba de paridad de las dos copias ya no existe.** El modelo anterior comparaba la copia
+  embebida con el fichero de `content/`; ahora la copia embebida **sale del mismo fichero** que
+  `build.rs` incluye, así que no hay dos copias que puedan divergir. El crate no tiene *lib target*,
+  así que una prueba de integración tampoco vería las constantes del binario (D5).
 - **Lo que se retiró con la hoja, y por qué no queda andamiaje.** El modelo anterior incrustaba al
   servir una **hoja** dentro de la página, sustituyendo el marcador
   `<link rel="stylesheet" href="/css/error.css" />`, y publicaba esa hoja como asset en
@@ -564,7 +512,7 @@ tampoco reproduce el del runner: la imagen etiquetada `v0.8.0` construida en est
   usaba como comprobación. Un `static X: &[u8] = include_bytes!(…)` **no bastaba**: al leerlo en el
   inicializador de otro `static` el compilador re-inlinea el `include_bytes!` y con varias *codegen
   units* las direcciones diferían (medido: `ptr::eq` da `false` con `cargo test`). Con la hoja retirada
-  **ese andamiaje ya no existe**: las siete páginas se comparan por **bytes**, no por punteros, así que
+  **ese andamiaje ya no existe**: las páginas se comparan por **bytes**, no por punteros, así que
   cada una es un `&'static str` directo con su `include_str!` y no hace falta ningún array intermedio.
 - **La página del operador gana a la embebida.** `Theme::page` aplica a la página la misma regla que a
   cualquier asset: un fichero **legible** en `CONTENT_DIR/<nombre>.html` gana a la copia embebida. Como
@@ -575,34 +523,35 @@ tampoco reproduce el del runner: la imagen etiquetada `v0.8.0` construida en est
   adorno: tapar en silencio con la copia embebida un directorio del operador roto lo escondería—. Es la
   Opción A de `design.md` (garantía 7), sin cambios para las páginas.
 - **El registro de temas se construye al arrancar, y su barrido tiene reglas exactas.** El registro
-  efectivo es los **siete incorporados** **más** los temas descubiertos en la **raíz** de
+  efectivo es los **embebidos** **más** los temas descubiertos en la **raíz** de
   `CONTENT_DIR`: un `*.html` de más **es** un tema, y su **tallo** es su nombre (`neon.html` → `neon`).
   Las reglas, una a una: **solo la raíz** —un `temas/neon.html` no es un tema—; la extensión tiene que
   ser **exactamente** `html` (`neon.htm`, `neon.HTML` y `neon.css` **no** lo son); el **tallo de un
-  incorporado** no añade un tema (`content/default.html` es la página del `default` incorporado, no un
+  tema embebido** no añade un tema (`content/default.html` es la página del `default` embebido, no un
   `default` de más); y un **tallo que reclama la resolución de códigos** queda **fuera** —el criterio
   **no** es el rango utilizable y está medido: `code_from_path` **parsea** el número y
   `is_error_page_path` decide **sin** filtrar `400..=599`, así que **cualquier** tallo que se lea como
   un `u16` (`404`, `999`, `200`…) reclama el path, que responde **otra** página de error—. Los
-  descubiertos van **ordenados por nombre** detrás de los siete (`read_dir` no promete ningún orden).
+  descubiertos van **ordenados por nombre** detrás de los embebidos (`read_dir` no promete ningún orden).
   El barrido es **al arrancar**: **añadir** un tema exige **reiniciar**, mientras que los **bytes** de
   la página se leen **al servir**, así que **editar** uno ya descubierto se ve **sin** reiniciar. Un
-  directorio que **no existe** deja los siete **sin** `warn` (es lo normal en un binario sin ficheros
-  de datos); uno que existe y **no se puede listar** deja los siete **con** un `warn` que **nombra el
+  directorio que **no existe** deja los embebidos **sin** `warn` (es lo normal en un binario sin ficheros
+  de datos); uno que existe y **no se puede listar** deja los embebidos **con** un `warn` que **nombra el
   directorio y su causa**. Y la **trampa del montaje** (D7): un `THEME` **correcto** cuyo fichero
   **todavía** no esté en `CONTENT_DIR` —un volumen que aún no se ha montado cuando el contenedor
   arranca— **aborta** el arranque, porque `THEME` se valida contra el registro de **ese** arranque; la
-  mitigación es del operador —declarar la dependencia del volumen, o arrancar sin `THEME`—. Y la
-  página del operador **no se inspecciona**: los tres contratos (red, movimiento, cobertura de marcado)
-  siguen midiendo **solo** las páginas incorporadas, así que un tema descubierto puede incumplirlos y
-  **ninguna guarda lo verá** (decisión explícita del usuario, D9).
+  mitigación es del operador —declarar la dependencia del volumen, o arrancar sin `THEME`—. Y el
+  servicio **no inspecciona** el contenido de ninguna página: las páginas son opacas, tanto las
+  embebidas como las descubiertas, y no hay guardas que las validen.
 - **El `Dockerfile` copia `content/` dos veces, y la primera no es un «por si acaso»: es una entrada de
-  la compilación.** El stage `builder` necesita las **siete páginas** para compilar —las macros
-  resuelven la ruta en tiempo de compilación—, así que su `COPY content ./content` es **obligatorio**:
-  sin él, el `cargo build` del crate real muere y no hay imagen. La segunda copia, la del stage
-  `runtime`, es la decisión que sigue abierta: `CONTENT_DIR` es la única ruta de estáticos y, como la
-  capa del disco gana (D1), la imagen sirve esos ficheros y no los del binario, de modo que quitarla
-  cambiaría qué bytes se sirven en producción. Es la pregunta abierta de `design.md`, y ahí sigue.
+  la compilación.** El stage `builder` necesita `content/` **y `build.rs`** para compilar —`build.rs`
+  resuelve la ruta de las páginas en tiempo de compilación—, así que sus copias de `content/` y
+  `build.rs` son **obligatorias**: sin `build.rs` la compilación muere con `OUT_DIR`/`EMBEBIDOS`
+  ausentes (medido: `exit code 101`); sin `content/`, el `cargo build` del crate real muere y no hay
+  imagen. La segunda copia, la del stage `runtime`, es la decisión que sigue abierta: `CONTENT_DIR` es
+  la única ruta de estáticos y, como la capa del disco gana (D1), la imagen sirve esos ficheros y no los
+  del binario, de modo que quitarla cambiaría qué bytes se sirven en producción. Es la pregunta abierta
+  de `design.md`, y ahí sigue.
 - **La publicación del crate tiene su propia puerta y su propio aviso, y los dos son deliberados.**
   `cargo publish --dry-run --locked` es la puerta del paquete en `puertas`, y es real: compila el
   paquete **extraído** (`target/package/errserve-<versión>`), así que un `content/` que no viaje en

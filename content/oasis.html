@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{code}} - {{reason}}</title>
+  <style>
+    :root {
+      --bg-gradient: radial-gradient(circle at 50% 30%, #1e293b 0%, #0f172a 70%, #020617 100%);
+      --glass-bg: rgba(30, 41, 59, 0.7);
+      --glass-border: rgba(255, 255, 255, 0.15);
+      --accent: #38bdf8;
+      --accent-glow: rgba(56, 189, 248, 0.4);
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg-gradient);
+      color: var(--text-main);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      position: relative;
+    }
+
+    canvas#world-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+    }
+
+    .glass-card {
+      position: relative;
+      z-index: 10;
+      max-width: 580px;
+      width: 90%;
+      padding: 3rem 2.5rem;
+      background: var(--glass-bg);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid var(--glass-border);
+      border-radius: 28px;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5),
+                  0 0 40px var(--accent-glow);
+      text-align: center;
+      transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .error-code {
+      font-size: clamp(5rem, 14vw, 8rem);
+      font-weight: 900;
+      line-height: 0.9;
+      background: linear-gradient(135deg, #38bdf8 0%, #818cf8 50%, #c084fc 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 1rem;
+      letter-spacing: -3px;
+      filter: drop-shadow(0 10px 20px rgba(56, 189, 248, 0.2));
+    }
+
+    .error-reason {
+      font-size: clamp(1.25rem, 3.5vw, 1.85rem);
+      font-weight: 700;
+      color: var(--text-main);
+      margin-bottom: 1rem;
+      letter-spacing: -0.5px;
+    }
+
+    .error-description {
+      font-size: 1.05rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+      margin-bottom: 2.5rem;
+    }
+
+    .actions {
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.85rem 2rem;
+      font-size: 0.95rem;
+      font-weight: 600;
+      border-radius: 14px;
+      text-decoration: none;
+      transition: all 0.3s ease;
+      cursor: pointer;
+      border: none;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #38bdf8, #6366f1);
+      color: #ffffff;
+      box-shadow: 0 4px 20px rgba(56, 189, 248, 0.4);
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 25px rgba(56, 189, 248, 0.6);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-main);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.15);
+      transform: translateY(-2px);
+    }
+
+    .controls-bar {
+      position: absolute;
+      bottom: 2rem;
+      z-index: 20;
+      display: flex;
+      gap: 0.75rem;
+      background: rgba(15, 23, 42, 0.8);
+      padding: 0.5rem 1rem;
+      border-radius: 9999px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      backdrop-filter: blur(10px);
+    }
+
+    .ctrl-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      padding: 0.4rem 0.8rem;
+      border-radius: 9999px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-weight: 500;
+      transition: all 0.2s ease;
+    }
+
+    .ctrl-btn:hover, .ctrl-btn.active {
+      color: #38bdf8;
+      background: rgba(56, 189, 248, 0.1);
+    }
+  </style>
+</head>
+<body>
+
+  <canvas id="world-canvas"></canvas>
+
+  <main class="glass-card">
+    <div class="error-code" id="display-code">{{code}}</div>
+    <h1 class="error-reason" id="display-reason">{{reason}}</h1>
+    <p class="error-description" id="display-description">{{description}}</p>
+
+    <div class="actions">
+      <a href="/" class="btn btn-primary">Volver al Oasis</a>
+      <button onclick="history.back()" class="btn btn-secondary">Regresar</button>
+    </div>
+  </main>
+
+  <div class="controls-bar">
+    <button class="ctrl-btn active" onclick="setBiomeMode('day')">Día</button>
+    <button class="ctrl-btn" onclick="setBiomeMode('sunset')">Atardecer</button>
+    <button class="ctrl-btn" onclick="setBiomeMode('night')">Noche</button>
+    <button class="ctrl-btn" onclick="plantSeed()">Plantar Flor</button>
+  </div>
+
+  <script>
+    // Fallback dinámico si se abre el HTML directamente sin Jinja2 procesado
+    document.addEventListener("DOMContentLoaded", () => {
+      const codeEl = document.getElementById("display-code");
+      const reasonEl = document.getElementById("display-reason");
+      const descEl = document.getElementById("display-description");
+
+      const params = new URLSearchParams(window.location.search);
+
+      if (codeEl.innerText.includes("{{") || codeEl.innerText.trim() === "") {
+        codeEl.innerText = params.get("code") || "404";
+      }
+      if (reasonEl.innerText.includes("{{") || reasonEl.innerText.trim() === "") {
+        reasonEl.innerText = params.get("reason") || "Oasis No Encontrado";
+      }
+      if (descEl.innerText.includes("{{") || descEl.innerText.trim() === "") {
+        descEl.innerText = params.get("description") || "Parece que te has desviado del camino. La coordenada solicitada no existe en este ecosistema.";
+      }
+    });
+
+    // Renderizado 3D Isométrico y Partículas del Oasis
+    const canvas = document.getElementById('world-canvas');
+    const ctx = canvas.getContext('2d');
+
+    let width, height;
+    let time = 0;
+    let mode = 'day';
+    let flowers = [];
+    let spores = [];
+
+    const themes = {
+      day: { bg1: '#1e293b', bg2: '#0f172a', accent: '#38bdf8', water: '#38bdf888' },
+      sunset: { bg1: '#31103f', bg2: '#0f172a', accent: '#f43f5e', water: '#fb718588' },
+      night: { bg1: '#020617', bg2: '#090d16', accent: '#a855f7', water: '#c084fc88' }
+    };
+
+    function resize() {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+    }
+
+    window.addEventListener('resize', resize);
+    resize();
+
+    function setBiomeMode(m) {
+      mode = m;
+      document.querySelectorAll('.ctrl-btn').forEach(b => b.classList.remove('active'));
+      event.target.classList.add('active');
+    }
+
+    function plantSeed() {
+      flowers.push({
+        x: (Math.random() - 0.5) * 120,
+        y: (Math.random() - 0.5) * 60,
+        size: 0,
+        maxSize: Math.random() * 6 + 4,
+        color: ['#f43f5e', '#38bdf8', '#a855f7', '#facc15'][Math.floor(Math.random() * 4)]
+      });
+    }
+
+    // Inicializar esporas
+    for(let i=0; i<40; i++) {
+      spores.push({
+        x: Math.random() * width,
+        y: Math.random() * height,
+        vx: (Math.random() - 0.5) * 0.5,
+        vy: -Math.random() * 0.5 - 0.2,
+        r: Math.random() * 2 + 1
+      });
+    }
+
+    function drawIsland(cx, cy) {
+      const bobbing = Math.sin(time * 0.03) * 8;
+      cy += bobbing;
+
+      // Base Isométrica de Tierra
+      ctx.save();
+      ctx.translate(cx, cy);
+
+      // Bloque inferior
+      ctx.beginPath();
+      ctx.moveTo(0, 40);
+      ctx.lineTo(140, 110);
+      ctx.lineTo(0, 180);
+      ctx.lineTo(-140, 110);
+      ctx.closePath();
+      ctx.fillStyle = '#0f172a';
+      ctx.fill();
+
+      // Superficie Verde
+      ctx.beginPath();
+      ctx.moveTo(0, -30);
+      ctx.lineTo(140, 40);
+      ctx.lineTo(0, 110);
+      ctx.lineTo(-140, 40);
+      ctx.closePath();
+      ctx.fillStyle = mode === 'night' ? '#1e1b4b' : (mode === 'sunset' ? '#881337' : '#065f46');
+      ctx.fill();
+
+      // Lago de Agua
+      ctx.beginPath();
+      ctx.ellipse(0, 35, 60, 30, 0, 0, Math.PI * 2);
+      ctx.fillStyle = themes[mode].water;
+      ctx.fill();
+
+      // Flores plantadas
+      flowers.forEach(f => {
+        if(f.size < f.maxSize) f.size += 0.1;
+        ctx.beginPath();
+        ctx.arc(f.x, f.y + 20, f.size, 0, Math.PI * 2);
+        ctx.fillStyle = f.color;
+        ctx.fill();
+      });
+
+      ctx.restore();
+    }
+
+    function animate() {
+      time++;
+      ctx.clearRect(0, 0, width, height);
+
+      // Fondo dinámico
+      const curTheme = themes[mode];
+      const grad = ctx.createRadialGradient(width/2, height/2, 50, width/2, height/2, width/1.2);
+      grad.addColorStop(0, curTheme.bg1);
+      grad.addColorStop(1, curTheme.bg2);
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, width, height);
+
+      // Esporas Flotantes
+      spores.forEach(s => {
+        s.x += s.vx;
+        s.y += s.vy;
+        if(s.y < 0) s.y = height;
+        if(s.x < 0 || s.x > width) s.x = Math.random() * width;
+
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+        ctx.fillStyle = curTheme.accent + '88';
+        ctx.fill();
+      });
+
+      // Dibujar Isla
+      drawIsland(width / 2, height / 2);
+
+      requestAnimationFrame(animate);
+    }
+
+    animate();
+  </script>
+</body>
+</html>

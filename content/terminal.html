@@ -1,105 +1,407 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="robots" content="noindex, nofollow" />
-    <title>{{code}} — {{reason}}</title>
-    <style>
-/* Estilo de la página del tema `terminal`.
- *
- * Vive dentro de la página: un tema es una página, así que estas reglas no se
- * cargan de ningún fichero ni se incrustan al servir, y la página no puede pedir
- * nada por la red —nada de hojas importadas ni de ficheros remotos—. Si animase,
- * tendría que neutralizarlo en `prefers-reduced-motion: reduce`.
- *
- * Monoespaciada, fósforo verde sobre negro. Sin parpadeo, sin cursor y sin
- * brillos: un terminal apagado. El marcado lleva la clase `c<código>` en el
- * `body`, pero este tema no la usa.
- *
- * Contraste medido a mano (objetivo AA): fg/bg 15,09, accent/bg 11,08 y muted/bg
- * 5,40.
- *
- * El `<hr>` decorativo —un separador, no información— se queda fuera del 3:1
- * de WCAG 1.4.11, que cubre el contenido no textual necesario para entender el
- * contenido y los componentes de interfaz. Su `--rule` mide 1,31 sobre el fondo
- * `#0b0f0c`: es una decisión medida, no un descuido, así que quien vuelva a
- * medirla no debería contarla como hallazgo.
- */
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TERMINAL ERROR: {{code}} - {{reason}}</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600;700&display=swap');
 
-:root {
-  color-scheme: dark;
-  --bg: #0b0f0c;
-  --fg: #cdebd3;
-  --accent: #4ade80;
-  --muted: #6f8f78;
-  --rule: #1e2b21;
-}
+    :root {
+      --term-color: #00ff66;
+      --term-glow: rgba(0, 255, 102, 0.4);
+      --term-dim: #008833;
+      --term-bg: #030a05;
+      --font-mono: 'Fira Code', 'Courier New', monospace;
+    }
 
-* {
-  box-sizing: border-box;
-}
+    * { box-sizing: border-box; margin: 0; padding: 0; }
 
-body {
-  margin: 0 auto;
-  padding: 2rem;
-  max-width: 44rem;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 0.5rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono",
-    monospace;
-  line-height: 1.5;
-  color: var(--fg);
-  background: var(--bg);
-}
+    body {
+      background-color: #000000;
+      color: var(--term-color);
+      font-family: var(--font-mono);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      padding: 1rem;
+    }
 
-h1 {
-  margin: 0;
-  font-size: clamp(2.75rem, 10vw, 5rem);
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  color: var(--accent);
-}
+    /* Monitor CRT Curvature & Scanlines */
+    .crt-screen {
+      position: relative;
+      width: 100%;
+      max-width: 900px;
+      height: 85vh;
+      background-color: var(--term-bg);
+      border: 2px solid var(--term-dim);
+      border-radius: 12px;
+      box-shadow: 0 0 30px var(--term-glow), inset 0 0 15px rgba(0,0,0,0.9);
+      padding: 2rem;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
 
-h2 {
-  margin: 0;
-  font-size: clamp(1.1rem, 3vw, 1.5rem);
-  font-weight: 600;
-  color: var(--muted);
-}
+    .crt-screen::before {
+      content: " ";
+      display: block;
+      position: absolute;
+      top: 0; left: 0; bottom: 0; right: 0;
+      background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.3) 50%),
+                  linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
+      z-index: 10;
+      background-size: 100% 3px, 6px 100%;
+      pointer-events: none;
+    }
 
-hr {
-  width: 100%;
-  margin: 0.75rem 0;
-  border: 0;
-  border-top: 1px dashed var(--rule);
-}
+    /* Monitor Glass Glow Effect */
+    .crt-screen::after {
+      content: " ";
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: radial-gradient(circle at 50% 50%, rgba(255,255,255,0.02) 0%, rgba(0,0,0,0.4) 100%);
+      pointer-events: none;
+      z-index: 11;
+    }
 
-p {
-  margin: 0;
-  max-width: 44rem;
-  color: var(--fg);
-}
+    .terminal-header {
+      display: flex;
+      justify-content: space-between;
+      border-bottom: 1px dashed var(--term-dim);
+      padding-bottom: 0.8rem;
+      margin-bottom: 1.5rem;
+      font-size: 0.85rem;
+      opacity: 0.8;
+      text-shadow: 0 0 5px var(--term-glow);
+    }
 
-/* La firma, en el tono atenuado del terminal. */
-footer {
-  margin-top: 0.75rem;
-  font-size: 0.8rem;
-  letter-spacing: 0.08em;
-  color: var(--muted);
-}
-    </style>
-  </head>
-  <body class="c{{code}}">
-    <main>
-      <h1>{{code}}</h1>
-      <h2>{{reason}}</h2>
-      <hr />
-      <p>{{description}}</p>
-    </main>
-    <footer>errserve</footer>
-  </body>
+    .terminal-body {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      padding-right: 0.5rem;
+      z-index: 5;
+    }
+
+    /* Custom Scrollbar */
+    .terminal-body::-webkit-scrollbar { width: 6px; }
+    .terminal-body::-webkit-scrollbar-thumb { background: var(--term-dim); }
+
+    .ascii-banner {
+      font-size: clamp(0.4rem, 1.2vw, 0.75rem);
+      line-height: 1.1;
+      white-space: pre;
+      color: var(--term-color);
+      text-shadow: 0 0 8px var(--term-glow);
+      font-weight: bold;
+    }
+
+    .error-details {
+      background: rgba(0, 255, 102, 0.05);
+      border-left: 3px solid var(--term-color);
+      padding: 1rem;
+      margin: 0.5rem 0;
+    }
+
+    .error-code-badge {
+      font-size: 1.4rem;
+      font-weight: bold;
+      color: #ffffff;
+      text-shadow: 0 0 10px var(--term-color);
+    }
+
+    .error-reason-title {
+      font-size: 1.1rem;
+      font-weight: bold;
+      text-transform: uppercase;
+      margin: 0.3rem 0;
+    }
+
+    .error-desc-text {
+      color: var(--term-color);
+      opacity: 0.85;
+      font-size: 0.95rem;
+      line-height: 1.5;
+    }
+
+    .terminal-logs {
+      font-size: 0.85rem;
+      opacity: 0.75;
+      line-height: 1.6;
+    }
+
+    .log-line { display: flex; gap: 0.8rem; }
+    .log-time { opacity: 0.5; }
+    .log-err { color: #ff3366; text-shadow: 0 0 5px rgba(255, 51, 102, 0.5); }
+
+    /* CLI Prompt Input */
+    .cli-container {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 1rem;
+      padding-top: 0.8rem;
+      border-top: 1px solid rgba(0, 255, 102, 0.2);
+      z-index: 5;
+    }
+
+    .prompt-symbol {
+      font-weight: bold;
+      color: var(--term-color);
+      text-shadow: 0 0 5px var(--term-glow);
+    }
+
+    .cli-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--term-color);
+      font-family: var(--font-mono);
+      font-size: 1rem;
+      text-shadow: 0 0 5px var(--term-glow);
+    }
+
+    .controls-bar {
+      position: absolute;
+      bottom: 0.8rem; right: 1.5rem;
+      z-index: 20;
+      display: flex; gap: 0.6rem;
+      background: rgba(3, 10, 5, 0.9);
+      padding: 0.3rem 0.8rem;
+      border: 1px solid var(--term-dim);
+      border-radius: 4px;
+    }
+
+    .ctrl-btn {
+      background: transparent; border: none;
+      color: var(--term-dim);
+      font-family: var(--font-mono);
+      font-size: 0.75rem; cursor: pointer;
+    }
+    .ctrl-btn:hover, .ctrl-btn.active { color: var(--term-color); text-shadow: 0 0 5px var(--term-glow); }
+  </style>
+</head>
+<body>
+
+  <div class="crt-screen">
+    <div class="terminal-header">
+      <span>SYS_TTY_01 // VT100 KERNEL 6.8.12</span>
+      <span id="sys-clock">00:00:00 UTC</span>
+    </div>
+
+    <div class="terminal-body" id="term-body">
+      <pre class="ascii-banner" id="ascii-display"></pre>
+
+      <div class="error-details">
+        <div class="error-code-badge">[STATUS_CODE: <span id="display-code">{{code}}</span>]</div>
+        <div class="error-reason-title" id="display-reason">{{reason}}</div>
+        <div class="error-desc-text" id="display-description">{{description}}</div>
+      </div>
+
+      <div class="terminal-logs">
+        <div class="log-line"><span class="log-time">[0.00012]</span> <span>KERN_INIT: Memory layout verified. 640K system memory available.</span></div>
+        <div class="log-line"><span class="log-time">[0.00045]</span> <span>HTTP_STACK: Inbound request dispatched to routing daemon...</span></div>
+        <div class="log-line"><span class="log-time">[0.00089]</span> <span class="log-err">PANIC: Route resolved to unmapped virtual memory address.</span></div>
+        <div class="log-line"><span class="log-time">[0.00102]</span> <span>SYSTEM: Interactive recovery shell initialized. Type 'help' or 'home'.</span></div>
+      </div>
+
+      <div id="cli-output"></div>
+    </div>
+
+    <div class="cli-container">
+      <span class="prompt-symbol">root@system:~#</span>
+      <input type="text" class="cli-input" id="cli-input" autofocus autocomplete="off" spellcheck="false" placeholder="Escribe 'help' o 'home' y presiona Enter...">
+    </div>
+  </div>
+
+  <div class="controls-bar">
+    <button class="ctrl-btn active" onclick="setTheme('green')">Verde VT100</button>
+    <button class="ctrl-btn" onclick="setTheme('amber')">Ámbar Fósforo</button>
+    <button class="ctrl-btn" onclick="setTheme('cyan')">Cian Cyber</button>
+    <button class="ctrl-btn" onclick="setTheme('mono')">Monocromo</button>
+  </div>
+
+  <script>
+    // Fallback dinámico si se abre localmente sin procesar con Jinja
+    document.addEventListener("DOMContentLoaded", () => {
+      const codeEl = document.getElementById("display-code");
+      const reasonEl = document.getElementById("display-reason");
+      const descEl = document.getElementById("display-description");
+      const params = new URLSearchParams(window.location.search);
+
+      if (codeEl.innerText.includes("{{") || codeEl.innerText.trim() === "") {
+        codeEl.innerText = params.get("code") || "404";
+      }
+      if (reasonEl.innerText.includes("{{") || reasonEl.innerText.trim() === "") {
+        reasonEl.innerText = params.get("reason") || "ERROR: RECURSO NO ENCONTRADO";
+      }
+      if (descEl.innerText.includes("{{") || descEl.innerText.trim() === "") {
+        descEl.innerText = params.get("description") || "El identificador de recurso o ruta solicitada no existe en el índice del sistema virtual.";
+      }
+
+      generateAscii(codeEl.innerText.trim());
+      updateClock();
+      setInterval(updateClock, 1000);
+    });
+
+    function updateClock() {
+      const now = new Date();
+      document.getElementById('sys-clock').innerText = now.toISOString().substring(11, 19) + ' UTC';
+    }
+
+    // Generador de ASCII Banner para el código de error
+    function generateAscii(code) {
+      const asciiMap = {
+        '0': ["  ██████  ", " ██    ██ ", " ██    ██ ", " ██    ██ ", "  ██████  "],
+        '1': ["   ███    ", "  ████    ", "    ██    ", "    ██    ", "  ███████ "],
+        '2': [" ███████  ", "       ██ ", "  ███████ ", " ██       ", " ████████ "],
+        '3': [" ███████  ", "       ██ ", "  ███████ ", "       ██ ", " ███████  "],
+        '4': [" ██   ██  ", " ██   ██  ", " ████████ ", "      ██  ", "      ██  "],
+        '5': [" ████████ ", " ██       ", " ███████  ", "       ██ ", " ███████  "],
+        '6': ["  ██████  ", " ██       ", " ███████  ", " ██    ██ ", "  ██████  "],
+        '7': [" ████████ ", "      ██  ", "     ██   ", "    ██    ", "   ██     "],
+        '8': ["  ██████  ", " ██    ██ ", "  ██████  ", " ██    ██ ", "  ██████  "],
+        '9': ["  ██████  ", " ██    ██ ", "  ███████ ", "       ██ ", "  ██████  "]
+      };
+
+      let lines = ["", "", "", "", ""];
+      for (let char of code) {
+        if (asciiMap[char]) {
+          for (let i = 0; i < 5; i++) lines[i] += asciiMap[char][i] + " ";
+        }
+      }
+      document.getElementById('ascii-display').innerText = lines.join("\n");
+    }
+
+    // Web Audio Synthesizer
+    let audioCtx = null;
+    function initAudio() {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+
+    function playKeyClick() {
+      initAudio();
+      if (!audioCtx) return;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(1200 + Math.random() * 400, audioCtx.currentTime);
+      gain.gain.setValueAtTime(0.04, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.04);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.04);
+    }
+
+    // CLI Command Processor
+    const cliInput = document.getElementById('cli-input');
+    const cliOutput = document.getElementById('cli-output');
+
+    cliInput.addEventListener('keydown', (e) => {
+      playKeyClick();
+      if (e.key === 'Enter') {
+        const cmd = cliInput.value.trim().toLowerCase();
+        cliInput.value = '';
+        executeCmd(cmd);
+      }
+    });
+
+    function executeCmd(cmd) {
+      const line = document.createElement('div');
+      line.style.margin = '0.4rem 0';
+      line.innerHTML = `<span style="color:var(--term-dim)">root@system:~#</span> <span>${escapeHtml(cmd)}</span>`;
+      cliOutput.appendChild(line);
+
+      const response = document.createElement('div');
+      response.style.marginBottom = '0.8rem';
+
+      switch (cmd) {
+        case 'help':
+          response.innerHTML = `Comandos disponibles:
+  <b style="color:#fff">home</b>     - Regresar a la página de inicio (URL '/')
+  <b style="color:#fff">status</b>   - Mostrar diagnóstico del Kernel
+  <b style="color:#fff">clear</b>    - Limpiar salida del terminal
+  <b style="color:#fff">theme</b>    - Cambiar paleta (ej. 'theme amber', 'theme green', 'theme cyan')
+  <b style="color:#fff">reboot</b>   - Recargar sistema
+  <b style="color:#fff">exit</b>     - Volver atrás en el navegador`;
+          break;
+        case 'home':
+          window.location.href = '/';
+          return;
+        case 'exit':
+          history.back();
+          return;
+        case 'clear':
+          cliOutput.innerHTML = '';
+          return;
+        case 'reboot':
+          location.reload();
+          return;
+        case 'status':
+          response.innerHTML = `SYS_STATUS: OK
+MEMORY_USAGE: 42.8%
+CPU_LOAD: 0.08
+HTTP_GATEWAY: ACTIVE`;
+          break;
+        case 'theme amber':
+          setTheme('amber');
+          response.innerText = "Paleta cambiada a Ámbar Fósforo.";
+          break;
+        case 'theme green':
+          setTheme('green');
+          response.innerText = "Paleta cambiada a Verde VT100.";
+          break;
+        case 'theme cyan':
+          setTheme('cyan');
+          response.innerText = "Paleta cambiada a Cian Cyber.";
+          break;
+        default:
+          if (cmd !== '') {
+            response.innerText = `Comando no reconocido: '${cmd}'. Escribe 'help' para ver la lista.`;
+          }
+      }
+
+      cliOutput.appendChild(response);
+      document.getElementById('term-body').scrollTop = document.getElementById('term-body').scrollHeight;
+    }
+
+    function escapeHtml(text) {
+      return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    function setTheme(theme) {
+      const root = document.documentElement;
+      if (theme === 'amber') {
+        root.style.setProperty('--term-color', '#ffb000');
+        root.style.setProperty('--term-glow', 'rgba(255, 176, 0, 0.4)');
+        root.style.setProperty('--term-dim', '#996600');
+        root.style.setProperty('--term-bg', '#0f0a00');
+      } else if (theme === 'cyan') {
+        root.style.setProperty('--term-color', '#00f3ff');
+        root.style.setProperty('--term-glow', 'rgba(0, 243, 255, 0.4)');
+        root.style.setProperty('--term-dim', '#007788');
+        root.style.setProperty('--term-bg', '#000c10');
+      } else if (theme === 'mono') {
+        root.style.setProperty('--term-color', '#f0f0f0');
+        root.style.setProperty('--term-glow', 'rgba(240, 240, 240, 0.3)');
+        root.style.setProperty('--term-dim', '#666666');
+        root.style.setProperty('--term-bg', '#0a0a0a');
+      } else {
+        root.style.setProperty('--term-color', '#00ff66');
+        root.style.setProperty('--term-glow', 'rgba(0, 255, 102, 0.4)');
+        root.style.setProperty('--term-dim', '#008833');
+        root.style.setProperty('--term-bg', '#030a05');
+      }
+      document.querySelectorAll('.ctrl-btn').forEach(b => b.classList.remove('active'));
+      if (event && event.target) event.target.classList.add('active');
+    }
+  </script>
+</body>
 </html>

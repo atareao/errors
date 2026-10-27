@@ -1,114 +1,150 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="robots" content="noindex, nofollow" />
-    <title>{{code}} — {{reason}}</title>
-    <style>
-/* Estilo de la página del tema `minimal`.
- *
- * Vive dentro de la página: un tema es una página, así que estas reglas no se
- * cargan de ningún fichero ni se incrustan al servir, y la página no puede pedir
- * nada por la red —nada de hojas importadas ni de ficheros remotos—. Si animase,
- * tendría que neutralizarlo en `prefers-reduced-motion: reduce`.
- *
- * Solo tipografía: ni un color de acento. La jerarquía la marcan el tamaño y el
- * peso, y el paso de claro a oscuro lo decide el sistema operativo. El marcado
- * lleva la clase `c<código>` en el `body`, pero este tema no la usa.
- *
- * Contraste medido a mano (objetivo AA): fg/bg 15,80 y muted/bg 6,11 en claro;
- * 16,02 y 6,50 en oscuro.
- *
- * El `<hr>` decorativo —un separador, no información— se queda fuera del 3:1
- * de WCAG 1.4.11, que cubre el contenido no textual necesario para entender el
- * contenido y los componentes de interfaz. Su `--rule` mide 1,43 sobre el fondo
- * claro y 1,55 sobre el oscuro: es una decisión medida, no un descuido, así que
- * quien vuelva a medirla no debería contarla como hallazgo.
- */
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{code}} - {{reason}}</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: rgba(17, 24, 39, 0.7);
+      --border: rgba(255, 255, 255, 0.08);
+      --text-main: #f3f4f6;
+      --text-muted: #9ca3af;
+      --accent-1: #6366f1;
+      --accent-2: #a855f7;
+      --font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
 
-:root {
-  color-scheme: light dark;
-  --fg: #1f2328;
-  --bg: #ffffff;
-  --muted: #59636e;
-  --rule: #d1d9e0;
-}
+    * { box-sizing: border-box; margin: 0; padding: 0; }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --fg: #e6edf3;
-    --bg: #0d1117;
-    --muted: #9198a1;
-    --rule: #30363d;
-  }
-}
+    body {
+      background-color: var(--bg);
+      background-image: 
+        radial-gradient(at 20% 20%, rgba(99, 102, 241, 0.15) 0px, transparent 50%),
+        radial-gradient(at 80% 80%, rgba(168, 85, 247, 0.12) 0px, transparent 50%);
+      color: var(--text-main);
+      font-family: var(--font-family);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+    }
 
-* {
-  box-sizing: border-box;
-}
+    .card {
+      max-width: 520px;
+      width: 100%;
+      background: var(--card-bg);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 3rem 2.5rem;
+      text-align: center;
+      box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.5);
+    }
 
-body {
-  margin: 0 auto;
-  padding: 2rem;
-  max-width: 40rem;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 0.75rem;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  line-height: 1.6;
-  color: var(--fg);
-  background: var(--bg);
-}
+    .error-code {
+      font-size: clamp(4.5rem, 12vw, 7rem);
+      font-weight: 800;
+      line-height: 1;
+      letter-spacing: -0.04em;
+      background: linear-gradient(135deg, #a5b4fc 0%, var(--accent-1) 50%, var(--accent-2) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 0.75rem;
+    }
 
-h1 {
-  margin: 0;
-  font-size: clamp(2.5rem, 9vw, 4.5rem);
-  font-weight: 300;
-  letter-spacing: -0.02em;
-  line-height: 1.1;
-}
+    .error-reason {
+      font-size: clamp(1.2rem, 3vw, 1.5rem);
+      font-weight: 600;
+      color: var(--text-main);
+      margin-bottom: 0.75rem;
+      letter-spacing: -0.01em;
+    }
 
-h2 {
-  margin: 0;
-  font-size: clamp(1.05rem, 2.5vw, 1.35rem);
-  font-weight: 500;
-  color: var(--muted);
-}
+    .error-description {
+      font-size: 0.975rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+      margin-bottom: 2.25rem;
+    }
 
-hr {
-  width: 6rem;
-  margin: 0.5rem 0;
-  border: 0;
-  border-top: 1px solid var(--rule);
-}
+    .actions {
+      display: flex;
+      gap: 0.85rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
 
-p {
-  margin: 0;
-  max-width: 40rem;
-  color: var(--muted);
-  line-height: 1.6;
-}
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0.75rem 1.5rem;
+      font-size: 0.9rem;
+      font-weight: 500;
+      border-radius: 10px;
+      text-decoration: none;
+      transition: all 0.2s ease;
+      cursor: pointer;
+      border: none;
+    }
 
-/* La firma, en el tono atenuado: más pequeña, para no ganar peso a la
- * descripción. */
-footer {
-  margin-top: 1rem;
-  font-size: 0.8rem;
-  letter-spacing: 0.08em;
-  color: var(--muted);
-}
-    </style>
-  </head>
-  <body class="c{{code}}">
-    <main>
-      <h1>{{code}}</h1>
-      <h2>{{reason}}</h2>
-      <hr />
-      <p>{{description}}</p>
-    </main>
-    <footer>errserve</footer>
-  </body>
+    .btn-primary {
+      background: var(--text-main);
+      color: var(--bg);
+    }
+
+    .btn-primary:hover {
+      opacity: 0.9;
+      transform: translateY(-1px);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-main);
+      border: 1px solid var(--border);
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.1);
+      transform: translateY(-1px);
+    }
+  </style>
+</head>
+<body>
+
+  <main class="card">
+    <div class="error-code" id="display-code">{{code}}</div>
+    <h1 class="error-reason" id="display-reason">{{reason}}</h1>
+    <p class="error-description" id="display-description">{{description}}</p>
+
+    <div class="actions">
+      <a href="/" class="btn btn-primary">Ir al Inicio</a>
+      <button onclick="history.back()" class="btn btn-secondary">Volver Atrás</button>
+    </div>
+  </main>
+
+  <script>
+    // Fallback dinámico si se abre en local sin pasar por el motor de plantillas Jinja2
+    document.addEventListener("DOMContentLoaded", () => {
+      const codeEl = document.getElementById("display-code");
+      const reasonEl = document.getElementById("display-reason");
+      const descEl = document.getElementById("display-description");
+      const params = new URLSearchParams(window.location.search);
+
+      if (codeEl.innerText.includes("{{") || codeEl.innerText.trim() === "") {
+        codeEl.innerText = params.get("code") || "404";
+      }
+      if (reasonEl.innerText.includes("{{") || reasonEl.innerText.trim() === "") {
+        reasonEl.innerText = params.get("reason") || "Página no encontrada";
+      }
+      if (descEl.innerText.includes("{{") || descEl.innerText.trim() === "") {
+        descEl.innerText = params.get("description") || "La página o el recurso al que intentas acceder no existe o ha sido trasladado.";
+      }
+    });
+  </script>
+</body>
 </html>

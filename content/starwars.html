@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{code}} - {{reason}}</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;800;900&family=Rajdhani:wght@500;700&display=swap');
+
+    :root {
+      --saber-cyan: #00f3ff;
+      --saber-glow: rgba(0, 243, 255, 0.4);
+      --hud-dark: rgba(2, 12, 27, 0.85);
+      --hud-border: rgba(0, 243, 255, 0.3);
+      --text-bright: #e6f1ff;
+      --font-hud: 'Orbitron', sans-serif;
+      --font-sub: 'Rajdhani', sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background-color: #02060e;
+      color: var(--text-bright);
+      font-family: var(--font-sub);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* CRT Scanlines retro-futuristas */
+    body::after {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%);
+      background-size: 100% 4px;
+      pointer-events: none;
+      z-index: 15;
+    }
+
+    canvas#starfield-canvas {
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      z-index: 1;
+    }
+
+    /* Holocron Frame */
+    .holocron-card {
+      position: relative;
+      z-index: 10;
+      max-width: 650px;
+      width: 90%;
+      padding: 3rem 2.5rem;
+      background: var(--hud-dark);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--saber-cyan);
+      border-radius: 16px;
+      box-shadow: 0 0 35px var(--saber-glow), inset 0 0 20px rgba(0, 243, 255, 0.1);
+      text-align: center;
+      clip-path: polygon(0 8%, 8% 0, 92% 0, 100% 8%, 100% 92%, 92% 100%, 8% 100%, 0 92%);
+    }
+
+    .error-code {
+      font-family: var(--font-hud);
+      font-size: clamp(4.5rem, 14vw, 8rem);
+      font-weight: 900;
+      line-height: 0.9;
+      color: var(--saber-cyan);
+      text-shadow: 0 0 15px var(--saber-cyan), 0 0 30px var(--saber-cyan);
+      margin-bottom: 0.8rem;
+      letter-spacing: -2px;
+    }
+
+    .error-reason {
+      font-family: var(--font-hud);
+      font-size: clamp(1.1rem, 3.2vw, 1.7rem);
+      font-weight: 800;
+      color: #ffffff;
+      text-transform: uppercase;
+      letter-spacing: 3px;
+      margin-bottom: 1.2rem;
+      text-shadow: 0 0 8px rgba(255, 255, 255, 0.8);
+    }
+
+    .error-description {
+      font-size: 1.15rem;
+      color: #a8b2d1;
+      line-height: 1.6;
+      margin-bottom: 2.5rem;
+    }
+
+    .actions {
+      display: flex;
+      gap: 1.2rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .btn-saber {
+      font-family: var(--font-hud);
+      font-size: 0.85rem;
+      font-weight: 800;
+      padding: 0.9rem 2rem;
+      color: #02060e;
+      background: var(--saber-cyan);
+      border: none;
+      text-decoration: none;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      cursor: pointer;
+      box-shadow: 0 0 20px var(--saber-cyan);
+      transition: all 0.3s ease;
+      clip-path: polygon(10px 0, 100% 0, calc(100% - 10px) 100%, 0 100%);
+    }
+
+    .btn-saber:hover {
+      transform: translateY(-2px) scale(1.03);
+      box-shadow: 0 0 35px var(--saber-cyan);
+    }
+
+    .btn-secondary {
+      background: transparent;
+      color: var(--saber-cyan);
+      border: 1px solid var(--saber-cyan);
+      box-shadow: none;
+    }
+
+    .btn-secondary:hover {
+      background: rgba(0, 243, 255, 0.15);
+      color: #ffffff;
+      box-shadow: 0 0 20px var(--saber-glow);
+    }
+
+    .controls-bar {
+      position: absolute;
+      bottom: 1.5rem;
+      z-index: 20;
+      display: flex;
+      gap: 0.8rem;
+      background: rgba(2, 12, 27, 0.9);
+      padding: 0.5rem 1.2rem;
+      border: 1px solid var(--hud-border);
+      border-radius: 50px;
+    }
+
+    .ctrl-btn {
+      background: transparent;
+      border: none;
+      color: #a8b2d1;
+      font-family: var(--font-hud);
+      font-size: 0.75rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .ctrl-btn:hover, .ctrl-btn.active {
+      color: var(--saber-cyan);
+      text-shadow: 0 0 8px var(--saber-cyan);
+    }
+  </style>
+</head>
+<body>
+
+  <canvas id="starfield-canvas"></canvas>
+
+  <main class="holocron-card">
+    <div class="error-code" id="display-code">{{code}}</div>
+    <h1 class="error-reason" id="display-reason">{{reason}}</h1>
+    <p class="error-description" id="display-description">{{description}}</p>
+
+    <div class="actions">
+      <a href="/" class="btn-saber" onclick="playSaberAudio()">Volver a la Base</a>
+      <button onclick="triggerHyperspace()" class="btn-saber btn-secondary">Salto Hiperespacial</button>
+    </div>
+  </main>
+
+  <div class="controls-bar">
+    <button class="ctrl-btn active" onclick="setKyberCrystal('cyan')">Jedi Cyan</button>
+    <button class="ctrl-btn" onclick="setKyberCrystal('red')">Sith Red</button>
+    <button class="ctrl-btn" onclick="setKyberCrystal('gold')">Sentinel Gold</button>
+  </div>
+
+  <script>
+    // Fallback dinámico si se abre el HTML en local sin procesar con Jinja2
+    document.addEventListener("DOMContentLoaded", () => {
+      const codeEl = document.getElementById("display-code");
+      const reasonEl = document.getElementById("display-reason");
+      const descEl = document.getElementById("display-description");
+      const params = new URLSearchParams(window.location.search);
+
+      if (codeEl.innerText.includes("{{") || codeEl.innerText.trim() === "") {
+        codeEl.innerText = params.get("code") || "404";
+      }
+      if (reasonEl.innerText.includes("{{") || reasonEl.innerText.trim() === "") {
+        reasonEl.innerText = params.get("reason") || "REGISTRO NO ENCONTRADO EN ARCHIVOS JEDI";
+      }
+      if (descEl.innerText.includes("{{") || descEl.innerText.trim() === "") {
+        descEl.innerText = params.get("description") || "El sistema planetario o coordenada solicitada no existe en las cartas estelares del Templo. Si un elemento no aparece en nuestros archivos, sencillamente no existe.";
+      }
+    });
+
+    // Sintetizador Web Audio API para efectos R2-D2 y Sable de Luz
+    let audioCtx = null;
+    function initAudio() {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+
+    function playR2Audio() {
+      initAudio();
+      if (!audioCtx) return;
+      const now = audioCtx.currentTime;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(800 + Math.random() * 600, now);
+      osc.frequency.linearRampToValueAtTime(1800 + Math.random() * 800, now + 0.12);
+      osc.frequency.linearRampToValueAtTime(600 + Math.random() * 400, now + 0.25);
+      gain.gain.setValueAtTime(0.12, now);
+      gain.gain.linearRampToValueAtTime(0, now + 0.25);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(now);
+      osc.stop(now + 0.25);
+    }
+
+    function playSaberAudio() {
+      initAudio();
+      if (!audioCtx) return;
+      const now = audioCtx.currentTime;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(120, now);
+      osc.frequency.exponentialRampToValueAtTime(320, now + 0.2);
+      gain.gain.setValueAtTime(0.2, now);
+      gain.gain.linearRampToValueAtTime(0.01, now + 0.35);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(now);
+      osc.stop(now + 0.35);
+    }
+
+    // 3D Hyperspace Canvas Simulation
+    const canvas = document.getElementById('starfield-canvas');
+    const ctx = canvas.getContext('2d');
+
+    let width, height;
+    let stars = [];
+    let speed = 2;
+    let targetSpeed = 2;
+
+    function resize() {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    for (let i = 0; i < 400; i++) {
+      stars.push({
+        x: (Math.random() - 0.5) * width * 2,
+        y: (Math.random() - 0.5) * height * 2,
+        z: Math.random() * width
+      });
+    }
+
+    function triggerHyperspace() {
+      playSaberAudio();
+      targetSpeed = 45;
+      setTimeout(() => { targetSpeed = 2; }, 1800);
+    }
+
+    function setKyberCrystal(color) {
+      playR2Audio();
+      const root = document.documentElement;
+      if (color === 'red') {
+        root.style.setProperty('--saber-cyan', '#ff003c');
+        root.style.setProperty('--saber-glow', 'rgba(255, 0, 60, 0.4)');
+      } else if (color === 'gold') {
+        root.style.setProperty('--saber-cyan', '#ffb700');
+        root.style.setProperty('--saber-glow', 'rgba(255, 183, 0, 0.4)');
+      } else {
+        root.style.setProperty('--saber-cyan', '#00f3ff');
+        root.style.setProperty('--saber-glow', 'rgba(0, 243, 255, 0.4)');
+      }
+      document.querySelectorAll('.ctrl-btn').forEach(b => b.classList.remove('active'));
+      event.target.classList.add('active');
+    }
+
+    function animate() {
+      speed += (targetSpeed - speed) * 0.05;
+      ctx.fillStyle = 'rgba(2, 6, 14, 0.3)';
+      ctx.fillRect(0, 0, width, height);
+
+      const cx = width / 2;
+      const cy = height / 2;
+
+      stars.forEach(s => {
+        s.z -= speed;
+        if (s.z <= 0) {
+          s.z = width;
+          s.x = (Math.random() - 0.5) * width * 2;
+          s.y = (Math.random() - 0.5) * height * 2;
+        }
+
+        const k = 256 / s.z;
+        const px = s.x * k + cx;
+        const py = s.y * k + cy;
+
+        if (px >= 0 && px <= width && py >= 0 && py <= height) {
+          const size = Math.max(1, (1 - s.z / width) * 3);
+          const tail = speed > 10 ? speed * 0.8 : 0;
+
+          ctx.beginPath();
+          ctx.moveTo(px, py);
+          ctx.lineTo(px - (px - cx) * (tail / 100), py - (py - cy) * (tail / 100));
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = size;
+          ctx.stroke();
+        }
+      });
+
+      requestAnimationFrame(animate);
+    }
+
+    animate();
+  </script>
+</body>
+</html>
