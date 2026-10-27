@@ -41,4 +41,5 @@ tests/
 #                   WORKDIR=/app resuelve a /app/content
 #   Cargo.toml   -> manifiesto
 #   Cargo.lock   -> lock del binario, versionado; imprescindible para --locked
+#   build.rs     -> build script del crate; genera $OUT_DIR/temas_embebidos.rs
 # --------------------------------------------------------------------------
