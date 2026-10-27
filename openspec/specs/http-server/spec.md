@@ -7,9 +7,9 @@ El contrato de arranque y servicio: qué variables de entorno se leen y con qué
 
 ### Requirement: La configuración se lee solo del entorno
 
-La aplicación SHALL leer su configuración exclusivamente de variables de entorno: `PORT` (puerto de escucha, por defecto `8080`), `LOG_LEVEL` (filtro de registro, por defecto `info`), `LOG_FORMAT` (formato del registro, `text` o `json`, por defecto `text`), `CONTENT_DIR` (directorio de las páginas y los assets del operador, por defecto `content`; es un *override* de las páginas embebidas en el binario, no la única fuente de páginas), `DEFAULT_ERROR_PAGE` (código por defecto, por defecto `404`; NO SHALL nombrar ningún fichero), `RETRY_AFTER` (segundos de la cabecera `Retry-After` de los códigos que la llevan, por defecto `120`) y `THEME` (tema de las páginas HTML, por defecto `default`: uno de los **siete** incorporados al binario **o un tema descubierto en `CONTENT_DIR`**). NO SHALL leer ningún fichero de configuración como `config.yml`.
+La aplicación SHALL leer su configuración exclusivamente de variables de entorno: `PORT` (puerto de escucha, por defecto `8080`), `LOG_LEVEL` (filtro de registro, por defecto `info`), `LOG_FORMAT` (formato del registro, `text` o `json`, por defecto `text`), `CONTENT_DIR` (directorio de las páginas y los assets del operador, por defecto `content`; es un *override* de las páginas embebidas en el binario, no la única fuente de páginas), `DEFAULT_ERROR_PAGE` (código por defecto, por defecto `404`; NO SHALL nombrar ningún fichero), `RETRY_AFTER` (segundos de la cabecera `Retry-After` de los códigos que la llevan, por defecto `120`) y `THEME` (tema de las páginas HTML, por defecto `default`: uno de los **embebidos** al compilar desde `content/` **o un tema descubierto en `CONTENT_DIR`**). NO SHALL leer ningún fichero de configuración como `config.yml`.
 
-Una variable presente pero vacía NO SHALL confundirse con una ausente. Una variable numérica —`PORT`, `DEFAULT_ERROR_PAGE`, `RETRY_AFTER`— presente pero no interpretable SHALL abortar el arranque con un error que nombre la variable. Un `THEME` que no sea uno de los nombres del **registro** —los siete incorporados más los descubiertos en `CONTENT_DIR`—, o la cadena vacía, SHALL abortar el arranque con un error que nombre `THEME` y **enumere los nombres del registro**, en vez de degradar en caliente al tema por defecto. SHALL quedar escrito el **precio medido**: el error enumera los nombres que el registro **tenga en ese arranque**, así que un `THEME` correcto cuyo fichero **todavía** no esté en `CONTENT_DIR` —un volumen que aún no se ha montado— aborta el arranque; es la contrapartida de mantener el aborto, y va escrito para que no sorprenda.
+Una variable presente pero vacía NO SHALL confundirse con una ausente. Una variable numérica —`PORT`, `DEFAULT_ERROR_PAGE`, `RETRY_AFTER`— presente pero no interpretable SHALL abortar el arranque con un error que nombre la variable. Un `THEME` que no sea uno de los nombres del **registro** —los embebidos más los descubiertos en `CONTENT_DIR`—, o la cadena vacía, SHALL abortar el arranque con un error que nombre `THEME` y **enumere los nombres del registro**, en vez de degradar en caliente al tema por defecto. SHALL quedar escrito el **precio medido**: el error enumera los nombres que el registro **tenga en ese arranque**, así que un `THEME` correcto cuyo fichero **todavía** no esté en `CONTENT_DIR` —un volumen que aún no se ha montado— aborta el arranque; es la contrapartida de mantener el aborto, y va escrito para que no sorprenda.
 
 Que el directorio de `CONTENT_DIR` no exista NO SHALL impedir el arranque, ni cambiar el `200` de un asset, ni degradar ninguna página de error a un `500`: las páginas embebidas cubren ese caso.
 
@@ -83,7 +83,7 @@ Los endpoints `/healthz`, `/health`, `/health/live` y `/live` SHALL responder si
 
 ### Requirement: La imagen se construye desde el árbol y trae las páginas dentro
 
-La imagen SHALL construirse con `docker build` desde el árbol del repositorio, sin depender de nada que no esté versionado. El stage de **compilación** SHALL disponer de `content/` —las **siete** páginas de tema, `default.html`, `minimal.html`, `terminal.html`, `paper.html`, `amber.html`, `compact.html` y `matrix.html`—, porque el binario las embebe al compilar y `cargo` NO SHALL poder compilar el crate sin ellas. Que falten NO SHALL descubrirse por primera vez al publicar una etiqueta: el CI SHALL construir la imagen **y SHALL probarla arrancada** en cada propuesta de cambio. Construir NO SHALL contar como probar: una imagen que compila y no responde el contrato del servicio SHALL poner la puerta en rojo.
+La imagen SHALL construirse con `docker build` desde el árbol del repositorio, sin depender de nada que no esté versionado. El stage de **compilación** SHALL disponer de `content/` —las páginas de tema—, porque el binario las embebe al compilar mediante `build.rs`, que lee `content/`, y `cargo` NO SHALL poder compilar el crate sin ellas. Que falten NO SHALL descubrirse por primera vez al publicar una etiqueta: el CI SHALL construir la imagen **y SHALL probarla arrancada** en cada propuesta de cambio. Construir NO SHALL contar como probar: una imagen que compila y no responde el contrato del servicio SHALL poner la puerta en rojo.
 
 El stage de **runtime** SHALL copiar `content/` solo si la imagen tiene que servir esas páginas y no las del binario. Es una decisión abierta y declarada (`design.md`, preguntas abiertas): `CONTENT_DIR` es la única ruta de estáticos y, como la capa del disco gana a la embebida, esa segunda copia decide **qué bytes se sirven en producción**. Quitarla haría que la imagen sirviese las páginas embebidas.
 
@@ -97,8 +97,8 @@ El stage de **runtime** SHALL copiar `content/` solo si la imagen tiene que serv
 
 - **GIVEN** el stage `builder` de la imagen
 - **WHEN** compila el crate
-- **THEN** `content/` SHALL estar disponible en el contexto de compilación, con las siete páginas de tema
-- **AND** el binario SHALL quedar con las siete páginas embebidas
+- **THEN** `content/` SHALL estar disponible en el contexto de compilación, con las páginas de tema
+- **AND** el binario SHALL quedar con las páginas embebidas
 
 #### Scenario: la imagen sirve las páginas sin ficheros externos
 
@@ -230,11 +230,20 @@ comprobación de extremo a extremo necesita un motor de contenedores y NO corre 
 
 ### Requirement: Los ficheros de CONTENT_DIR se sirven como assets
 
-Las peticiones que no son páginas de error ni endpoints de servicio SHALL servirse como ficheros estáticos: el fichero de `CONTENT_DIR` cuando exista y se pueda leer, con su `Content-Type` correspondiente. NO SHALL existir una tabla de **assets embebidos**: la única fuente de assets es el disco de `CONTENT_DIR`, porque las páginas del proyecto van embebidas por la vía de la página de error y no por la de los assets.
+Los ficheros de `CONTENT_DIR` SHALL servirse como assets estáticos con su `Content-Type`. Los ficheros de tema (`<nombre>.html`) PUEDEN servirse como assets si no se piden como página de error; el servicio no los juzga. NO SHALL contarse ni enumerarse el número de assets.
 
-Las **páginas de tema** SHALL servirse como assets **crudos** si se piden por su path (`GET /minimal.html`, `/terminal.html`, `/paper.html`, `/amber.html`, `/compact.html`, `/matrix.html`): responden `200` con el fichero tal cual y los marcadores a la vista. Es coherente con cómo se servían antes las hojas de `content/themes/`, y no se intercepta porque hacerlo rompería «un asset existente gana» y añadiría casos especiales al middleware. La excepción SHALL ser `/default.html` y `/default.htm`: su path se clasifica como el código por defecto y NO SHALL servirse como asset.
+#### Scenario: un asset existente se sirve con su tipo
+- **GIVEN** un `CONTENT_DIR` con `estilo.css`
+- **WHEN** se pide `GET /estilo.css`
+- **THEN** el estado SHALL ser `200`
+- **AND** el `Content-Type` SHALL ser `text/css`
 
-Una página HTML de error NO SHALL servirse por esta vía: una petición cuyo path normalizado resuelva un código de error SHALL pasar por la página de error, con el código resuelto y nunca con un `200`.
+#### Scenario: una página de tema no se juzga como asset
+- **GIVEN** un `CONTENT_DIR` con `matrix.html`
+- **WHEN** se pide `GET /matrix.html`
+- **THEN** el estado SHALL ser `200`
+- **AND** el cuerpo SHALL ser el fichero crudo
+- **AND** el servicio NO SHALL parsearlo
 
 #### Scenario: un CSS se sirve desde el directorio de contenido
 - **GIVEN** el fichero `content/css/404.css`
@@ -243,13 +252,13 @@ Una página HTML de error NO SHALL servirse por esta vía: una petición cuyo pa
 - **AND** el `Content-Type` SHALL ser `text/css`
 
 #### Scenario: una página de tema se sirve cruda si se pide por su path
-- **GIVEN** un `CONTENT_DIR` con las siete páginas de tema
+- **GIVEN** un `CONTENT_DIR` con las páginas de tema
 - **WHEN** se pide `GET /matrix.html`
 - **THEN** SHALL responder `200`
 - **AND** el cuerpo SHALL ser el fichero tal cual, con los marcadores a la vista
 
 #### Scenario: una página de error no se sirve como asset con un 200
-- **GIVEN** un servicio arrancado con las siete páginas de tema
+- **GIVEN** un servicio arrancado con las páginas de tema
 - **WHEN** se pide `GET /404.html`
 - **THEN** el estado SHALL ser `404`
 - **AND** NO SHALL ser `200`
@@ -302,25 +311,15 @@ Una prueba automática SHALL guardar la propiedad sobre los ficheros versionados
 
 ### Requirement: El respaldo no publica las páginas de tema crudas
 
-Toda definición de router de respaldo que este repositorio entregue —los labels del ejemplo, los labels de la plantilla de producción, el bloque de labels del `README.md` raíz y las **dos** definiciones que ilustra `examples/traefik/README.md`: la del bloque de prosa y la del fragmento de *provider de fichero*— SHALL impedir que el respaldo sirva los paths de las **páginas de tema** crudas: ``HostRegexp(`.+`) && !Path(`/metrics`) && (!PathRegexp(`\.html?((%2[fF])|/|$)`) || Path(`/default.html`) || Path(`/default.htm`))``. El motivo es que el nombre del tema **es** la ruta de su página (`content/<nombre>.html`): las seis que no son el alias se sirven como assets **crudos**, con los marcadores `{{code}}`/`{{reason}}`/`{{description}}` a la vista, y un Host sin router propio las publica a cualquiera.
-
-La exclusión SHALL cubrir las **tres** formas con las que un cliente alcanza esa página cruda, porque las tres están **medidas** con `200` y con los marcadores a la vista contra Traefik v3.6.25: el path terminado en `.html`/`.htm`, el mismo con **barra final** o con un segmento detrás (`/minimal.html/`, `/matrix.html/`) y el mismo con la barra **percent-encoded**, en las dos cajas (`/minimal.html%2F`, `/matrix.html%2f`). Una exclusión anclada al fin de cadena —``!PathRegexp(`\.html?$`)``— NO SHALL contar como cumplirla: medida, dejaba **diecisiete** formas sirviendo el fichero crudo.
-
-La rama `%2[fF]` NO SHALL retirarse por parecer redundante. Es un hecho **medido**: Traefik contrasta la regla contra el path de la petición y normaliza los escapes de los caracteres **no reservados** —`GET /minimal%2Ehtml` y `GET /minimal.htm%6C` quedan bloqueados porque los lee como `minimal.html`— pero NO SHALL normalizar el de la **barra**, que sobrevive como `%2F`; sin esa rama, la familia `%2F` sigue sirviendo el asset crudo. La exclusión NO SHALL depender de la configuración del *entrypoint*: medido, la tabla de resultados es idéntica con `sanitizePath` en su valor por defecto y con `sanitizePath=false`, mientras que la forma que solo hace opcional la barra final **sí** filtra con `sanitizePath=false`.
-
-`/default.html` y `/default.htm` SHALL quedar **fuera** de esa exclusión, porque no son un leak: su path se clasifica como el código por defecto, el servicio lo intercepta y responde el código resuelto, **nunca `200`**. Excluirlos quitaría la única página de tema que no filtra.
-
-La conjunción NO SHALL llevarse por delante el respaldo: en un Host desconocido, `GET /` y `GET /503` SHALL seguir recibiendo la página de su código con sus cabeceras. Y el precio SHALL quedar escrito: la conjunción manda a la `404` de Traefik todo path cuyo `.html`/`.htm` vaya seguido de fin de cadena, de `/` o de `%2F` —`GET /404.html`, `GET /503.html`, `GET /sub/x.html`, `GET /x.html/y`, `GET /default.html%2F`—, lo que NO SHALL romper el flujo real, porque el middleware `errors` pide `/404` **sin** extensión (`errors.query: /{status}`).
+El respaldo de Traefik SHALL excluir las páginas de tema crudas. La exclusión SHALL cubrir las **tres** formas con las que un cliente alcanza esa página cruda: el path terminado en `.html`/`.htm`, el mismo con **barra final** o con un segmento detrás y el mismo con la barra **percent-encoded**, en las dos cajas. Una exclusión anclada al fin de cadena NO SHALL contar como cumplirla. NO SHALL enumerarse una lista fija de nombres de página: la exclusión SHALL cubrir la familia completa de `.html`/`.htm`.
 
 El matcher `PathRegexp` SHALL haberse medido contra la versión de Traefik que el ejemplo fija, porque una sintaxis que no case con nada deja el router `enabled` sin bloquear lo que debía bloquear, en silencio.
 
-La regla SHALL escribirse de modo que YAML la lea como se pretende: en un valor **entrecomillado** la barra invertida va doblada, y escribirla simple ahí NO SHALL contar —el parser falla con `found unknown escape character` y el *provider* **entero** deja de cargar, con el contenedor arriba y sin ningún router, en silencio—. Los sitios que este repositorio entrega la escriben como escalar **plano**, que es donde la barra va simple y donde los dos `$` de la regla llegan a Traefik verbatim.
+La regla SHALL escribirse de modo que YAML la lea como se pretende: en un valor **entrecomillado** la barra invertida va doblada, y escribirla simple ahí NO SHALL contar. Los sitios que este repositorio entrega la escriben como escalar **plano**, que es donde la barra va simple y donde los dos `$` de la regla llegan a Traefik verbatim.
 
 Una prueba automática SHALL guardar la propiedad sobre los ficheros versionados, con el mismo método que la exclusión de `/metrics`, porque la comprobación de extremo a extremo necesita un motor de contenedores y NO corre en el CI.
 
 Límite declarado y **medido**: `PathRegexp` es sensible a mayúsculas, así que `GET /MINIMAL.HTML` no casa con la exclusión y llega al servicio. NO SHALL contarse como incumplimiento: el servicio responde **su página de error** —no el fichero crudo—, porque el sistema de ficheros distingue mayúsculas y `ServeDir` contesta `404`. Es una dependencia del sistema de ficheros, no una propiedad del servicio.
-
-Segundo límite, declarado y **medido**: la regla se contrasta contra el path tal como Traefik lo presenta, así que las formas que Traefik **normaliza** las cierra la normalización y no la regla (`/minimal%2Ehtml`, `/minimal.htm%6C`), y las que sobreviven a ella sin llevar una barra (`/minimal.html%3F`, `/minimal.html%252E`, `/minimal%2Fhtml`) llegan al servicio y reciben **su** `404`, sin marcadores. Ninguna prueba textual SHALL intentar demostrar que la regla cierra **todas** las codificaciones: eso lo mide `examples/traefik/check.sh` con el ejemplo levantado, forma a forma.
 
 #### Scenario: el respaldo no sirve ninguna página de tema cruda
 
