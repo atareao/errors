@@ -6,15 +6,15 @@
 
 ## Estado real del repositorio (verificado)
 
-Implementado, verificado y versionado. **Dieciséis** changes están **archivados** en
+Implementado, verificado y versionado. **Diecisiete** changes están **archivados** en
 `openspec/changes/archive/` —cinco con fecha `2026-10-24` (`error-pages-parity`, `error-page-coverage`,
 `release-hardening`, `security-hardening` y `retry-after-configurable`), ocho con `2026-10-25`
 (`embedded-error-pages`, `error-page-template`, `self-contained-themes`, `theme-sheet-contracts`,
 `theme-visual-review`, `catchall-metrics-exclusion`, `fix-image-build` y `publish-crate-on-tag`) y tres
 con `2026-10-26` (`themes-as-pages`, `smoke-test-and-catchall-html-exclusion` y
-`themes-from-content-dir`)— y sus requisitos viven
+`themes-from-content-dir`) y uno con `2026-10-27` (`themes-discovered-at-build`)— y sus requisitos viven
 fusionados en los cuatro specs de `openspec/specs/`: `error-page`, `http-server`, `observability` y
-`response-extras`. Los **tres últimos** changes archivados: `themes-as-pages` —el tema deja de ser
+`response-extras`. Los **cuatro últimos** changes archivados: `themes-as-pages` —el tema deja de ser
 **una hoja** y pasa a ser **una página**, con la cascada del cuerpo HTML en un solo paso—, que entró en
 `error-page` y `http-server` (+6 requisitos añadidos, ~8 modificados, -5 retirados);
 `smoke-test-and-catchall-html-exclusion` —el smoke test pasa a un artefacto único que corren los dos
@@ -22,8 +22,14 @@ workflows, el respaldo gana la exclusión del leak de las páginas de tema y el 
 puerta—, que entró **solo** en `http-server` (+3 añadidos, ~1 modificado, 0 retirados); y
 `themes-from-content-dir` —la lista de temas deja de ser una tabla cerrada en el binario y
 `CONTENT_DIR` **añade** temas al **registro** construido al arrancar, con la trampa del volumen sin
-montar—, que entró en `error-page` y `http-server` (+1 añadido, ~3 modificados, 0 retirados). **No hay
-ningún change en curso**: `openspec/changes/` solo tiene `archive/`, y `openspec validate --all
+montar—, que entró en `error-page` y `http-server` (+1 añadido, ~3 modificados, 0 retirados); y
+`themes-discovered-at-build` —el descubrimiento de las páginas embebidas se mueve del arranque al
+**compilador** (`build.rs` lee `content/*.html` y genera el array `EMBEBIDOS`, que `src/embedded.rs`
+incluye con `include!`), las páginas pasan a ser **opacas** (se retiran las tres guardas de contenido
+—red, movimiento y cobertura de marcado— y la prueba de paridad con la copia embebida) y la lista de
+temas del proyecto deja de estar escrita a mano—, que entró en `error-page` y `http-server`
+(+4 añadidos, ~4 modificados, -6 retirados). **No hay ningún
+change en curso**: `openspec/changes/` solo tiene `archive/`, y `openspec validate --all
 --strict` da **4 passed, 0 failed**.
 
 - `src/main.rs` — arranque, router, middleware de páginas de error, la lista `SERVICE_ENDPOINTS` que acota ese middleware, el clasificador `is_error_page_path` (con el alias `/default.html`/`/default.htm`) y los tests de router; el tema se resuelve **contra el registro** antes del `spawn_blocking`, y `X-Theme` **nunca** compone una ruta.
@@ -34,7 +40,7 @@ ningún change en curso**: `openspec/changes/` solo tiene `archive/`, y `openspe
 - `src/theme.rs` — la **gestión de temas**: el registro parte de `EMBEBIDOS` —las páginas que `build.rs` descubrió en `content/` al compilar— y se completa al arrancar con los `*.html` descubiertos en la raíz de `CONTENT_DIR`; el fichero del directorio gana por nombre. Las páginas son **opacas**: el servicio no valida su contenido, sus marcadores ni su autocontención, y no las inspecciona al servir. La ruta de cada página sigue **derivada del nombre** (`Theme::page_path` → `"<nombre>.html"`) y `Theme::page` resuelve la página **como un asset** (disco si se puede leer; la copia embebida si no, y **solo** un tema embebido la tiene: uno descubierto sin fichero responde el respaldo de texto).
 - `src/embedded.rs` — incluye con `include!` el array `EMBEBIDOS` que genera `build.rs` a partir de `content/*.html`; una entrada por página y nombre. El binario sirve las páginas de tema sin ficheros de datos. El array se regenera al compilar: añadir un tema es dejar el `.html` en `content/` y reconstruir. Las páginas son **opacas** y no hay prueba de paridad ni guarda de contenido.
 - `src/metrics.rs` — contador de páginas servidas por código **y por origen del código**, y su serialización en texto Prometheus.
-- `content/` — **las páginas de tema del proyecto**, una por nombre en la **raíz**; `build.rs` las descubre al compilar y las embebe. Son **opacas**: cada una puede llevar su `<style>`, su `<script>`, los marcadores `{{code}}`/`{{reason}}`/`{{description}}` o ninguno; el servicio no las valida. Ya no hay hoja ni `content/css/`.
+- `content/` — **las páginas de tema del proyecto**, una por nombre en la **raíz**; `build.rs` las descubre al compilar y las embebe. Son **opacas**: cada una puede llevar su `<style>`, su `<script>`, los marcadores `{{code}}`/`{{reason}}`/`{{description}}` o ninguno; el servicio no las valida. Ya no hay hoja ni `content/css/`. Son **once**, en dos familias: las **canónicas** (`default`, `amber`, `compact`, `aurora`) siguen el contrato de la casa —`main`/`h1`/`h2`/`hr`/`p` y `<footer>errserve</footer>`, con `class="c{{code}}"`—, sin `<script>` ni red y con el contraste medido en la cabecera; las **ilustradas** (`antique`, `matrix`, `minimal`, `oasis`, `paper`, `starwars`, `terminal`) llevan su propio marcado, su `<script>` en línea y sus controles. **Tres** importan una tipografía de Google Fonts (`terminal`, `antique`, `starwars`): el contrato es que el **estilo vive dentro** —no hay hoja que servir—, no que ninguna página haga una petición.
 - `Dockerfile`, `.dockerignore`, `.justfile`, `compose.yml` — empaquetado (imagen ~13 MB, no-root uid 10001); el `compose.yml` va endurecido: `read_only: true`, `cap_drop: [ALL]`, `no-new-privileges:true` e `init: true`.
 - `README.md` — el contrato con Traefik y los ejemplos.
 - `.github/scripts/smoke.sh` — el **único** sitio donde viven las aserciones sobre la **imagen
@@ -294,7 +300,7 @@ resolución del código. El puerto por defecto del servicio es **8080**, el mism
 
 ```sh
 cargo run                                   # servidor
-cargo test                                  # 256 tests
+cargo test                                  # 213 tests
 cargo test <substring>                      # un test por nombre
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
@@ -417,7 +423,7 @@ tampoco reproduce el del runner: la imagen etiquetada `v0.8.0` construida en est
   líneas por petición —entrada y salida—, sin el falso «response failed» de cada `503`.
 - **`build.rs` lee `content/*.html` y genera `EMBEBIDOS`, y `src/embedded.rs` lo incluye con `include!`.**
   El descubrimiento se resuelve al compilar: borrar o renombrar **cualquiera** de las páginas del proyecto
-  —`content/default.html` … `content/matrix.html`— ya no degrada en silencio al respaldo de texto: es un
+  —`content/*.html`— ya no degrada en silencio al respaldo de texto: es un
   **error de compilación** (D6). Y como el embedding se resuelve al compilar, `content/` tiene que seguir
   entrando en el paquete —comprobable con `cargo package --list --offline`, que lista las páginas—: sin
   ese hecho el binario compila aquí y falla en la máquina de quien instala (D3). Y por eso el **stage de
@@ -428,31 +434,35 @@ tampoco reproduce el del runner: la imagen etiquetada `v0.8.0` construida en est
   cambio. La medición histórica del modelo anterior —el `exit code 101` y los doce `couldn't read` de la
   `0.4.0`— queda como referencia de lo que se juega el build en ese stage.
 - **Las páginas son opacas: el servicio no valida su contenido.** No hay guardas de red, movimiento
-  ni cobertura de marcado, ni prueba de paridad de las páginas sobrias. Una página de tema —embebida
+  ni cobertura de marcado, ni prueba de paridad de las páginas canónicas. Una página de tema —embebida
   o descubierta— puede llevar `@import`, animación, redirecciones, marcadores o ninguno; el servicio
   la sirve tal cual y solo rellena `{{code}}`/`{{reason}}`/`{{description}}` cuando están. El modelo
   anterior intentaba imponer tres comprobaciones textuales (red, movimiento y marcado) a las páginas
   **embebidas**; se retiraron con el descubrimiento al compilar: una página es contenido del
   operador y el servicio no la inspecciona. La decisión de qué lleva cada página es del autor del
   tema, no una puerta del binario.
-- **El `<hr>` de las páginas sobrias es decorativo, y su contraste bajo es una decisión medida.**
-  Va entre **1,31 y 1,55** según la página —1,31 `terminal`, 1,39 `paper`, **1,43** claro y **1,55**
-  oscuro en `default`/`minimal`/`compact`, 1,48 `amber`—, por debajo del 3:1 de WCAG 1.4.11, y queda
+- **El `<hr>` de las páginas canónicas es decorativo, y su contraste bajo es una decisión medida.**
+  Lo llevan **cuatro** páginas: `default` y `compact` (1,43 sobre el fondo claro y 1,55 sobre el
+  oscuro), `amber` (1,48) y `aurora` (1,49). Va por debajo del 3:1 de WCAG 1.4.11 y queda
   fuera de ese criterio porque cubre el **contenido no textual necesario para entender el contenido** y
   los componentes de interfaz, no el adorno. Se decide **no** subirlo —llevarlo a 3:1 pediría un trazo
-  mucho más marcado y rompería el aire de las páginas sobrias—, y es una **decisión explícita del
-  usuario**, no el resultado de una guarda: el `<hr>` queda con su ratio en la cabecera de cada página
-  para que quien vuelva a medirlo no lo cuente como hallazgo. Lo que **sí** importa es el contraste del
-  **texto** —el que se lee—, que se mide **a mano** (**44 pares**, objetivo **AA**) y se deja escrito:
-  **ninguna guarda mide el aspecto** —paleta, escala, jerarquía y espaciado se revisan a ojo—.
+  mucho más marcado y rompería el aire de las páginas canónicas—, y es una **decisión explícita del
+  usuario**, no el resultado de una guarda: cada `<hr>` queda con su ratio en la cabecera de su página
+  para que quien vuelva a medirlo no lo cuente como hallazgo. **Ninguna otra** página lleva `<hr>`. Lo
+  que **sí** importa es el contraste del **texto** —el que se lee—, que se mide **a mano** (objetivo
+  **AA**) y se deja escrito en la cabecera de cada canónica: **ninguna guarda mide el aspecto**
+  —paleta, escala, jerarquía y espaciado se revisan a ojo—.
 - **La página del proyecto es una plantilla, y ya no son ficheros sueltos: son las páginas.** Cada tema
-  **es** su página —`content/default.html` … `content/matrix.html`— y el servidor la **rellena al
+  **es** su página —`content/*.html`— y el servidor la **rellena al
   servir** (`src/render.rs::plantilla`): `{{code}}` con el código resuelto, `{{reason}}` con
   `resolve::canonical_reason(code)` y `{{description}}` con `resolve::description(code)`, los tres —el
   código también en la clase del `body`, `class="c{{code}}"`, y en `data-text="{{code}}"` de `matrix`—.
-  Las páginas de tema pueden envolver el contenido en un `<main>` y cerrar con un
+  Las páginas **canónicas** envuelven el contenido en un `<main>` y cierran con un
   `<footer>errserve</footer>` —**sin `href`**, y con el nombre como **texto del fichero**, no como
-  marcador: siguen siendo tres—; `matrix`, que es un **documento propio**, lleva su propio marcado. Las
+  marcador: siguen siendo tres—. Las **ilustradas** llevan su propio marcado —`matrix`, un documento
+  entero con canvas y pastillas; `terminal`, un CLI; otras, un botón que vuelve a `/`—, así que ni el
+  `<main>` ni el `<h2>` ni el `<footer>` son obligatorios en todas: lo único que el servidor necesita
+  de una página son los **tres marcadores**. Las
   reglas de esa sustitución: una página **sin** marcadores se sirve **byte a byte** —sin tocar el
   disco—, se sustituye **cada** aparición y no solo la primera, el escaneo es **por bytes** (una página
   del operador puede no estar en UTF-8) y se avanza por el documento de entrada, así que el valor recién

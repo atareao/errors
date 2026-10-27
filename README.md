@@ -97,7 +97,7 @@ curl -s  -H 'Accept: text/html' -H 'X-Theme: terminal' localhost:8080/404   # co
 | `DEFAULT_ERROR_PAGE` | `404` | Código cuando el path y `X-Code` no aportan uno utilizable. |
 | `LOG_FORMAT` | `text` | Formato del registro: `text` o `json`. |
 | `RETRY_AFTER` | `120` | Segundos de la cabecera `Retry-After`. La llevan solo el `429` y el `503`. |
-| `THEME` | `default` | Tema de las páginas **HTML**: uno de los **embebidos** (`default`, `minimal`, `terminal`, `paper`, `amber`, `compact`, `matrix`) **o** un tema descubierto en `CONTENT_DIR`. |
+| `THEME` | `default` | Tema de las páginas **HTML**: uno de los **embebidos** (ver «Los temas») **o** un tema descubierto en `CONTENT_DIR`. |
 
 No se lee ningún fichero de configuración. Una variable **presente pero vacía**
 es un error de arranque, no un valor por defecto. `DEFAULT_ERROR_PAGE` fuera del
@@ -143,7 +143,7 @@ página del tema** que se sirve. La elige `THEME` —el tema de todo el servicio
 cabecera `X-Theme`, que gana a `THEME` cuando nombra un tema del **registro** —los **embebidos**
 más los descubiertos en `CONTENT_DIR`—; un `X-Theme` ausente, desconocido o vacío **no** es un error y
 cae al tema configurado. En JSON, XML y texto no hay página que incrustar, así que ahí el tema se
-ignora (ver «Páginas autocontenidas y temas»).
+ignora (ver «Páginas y temas»).
 
 Cada página de error lleva `Content-Type`, `Content-Length`,
 `X-Robots-Tag: noindex, nofollow, nosnippet, noarchive` y, en `429` y `503`,
@@ -171,13 +171,16 @@ La plantilla lleva tres marcadores que el servidor sustituye **al servir**:
 
 | Marcador | Se sustituye por |
 |---|---|
-| `{{code}}` | El código resuelto (`404`), allí donde aparezca: el `<title>`, el `<h1>` y la clase del `body` (`class="c{{code}}"`). |
+| `{{code}}` | El código resuelto (`404`), allí donde aparezca. |
 | `{{reason}}` | La razón canónica del código (`Not Found`). |
 | `{{description}}` | La descripción del código (la tabla de `resolve`). |
 
-Cada página de tema lleva su `<style>` **dentro**, y la clase del `body` (`c504`, `c503`…) es lo que
-permite diferenciar el aspecto de cada código sin duplicar la página: el diseño por código vive ahí,
-no en un fichero por código. El tema `matrix` lleva además su `<script>` dentro (ver «Los temas»).
+Dónde va cada uno lo decide la página. Las **canónicas** los colocan en un orden fijo: `{{code}}` en
+el `<title>`, en el `<h1>` y en la clase del `body` (`class="c{{code}}"`), `{{reason}}` en el `<h2>`
+y `{{description}}` en el `<p>`; y es esa clase del `body` (`c504`, `c503`…) lo que permite
+diferenciar el aspecto de cada código sin duplicar la página. Las **ilustradas** los reparten a su
+manera —`matrix` en un `data-text`, `terminal` en su banner—, y ninguna forma es más correcta que la
+otra: el servidor solo ve marcadores y los rellena todos.
 
 ### Cómo cambiar el texto de una página de error
 
@@ -202,24 +205,31 @@ conservas: tu página del tema es tuya, gana a la embebida y se sirve byte a byt
 marcadores. Si quieres granularidad por código, el camino es el `<style>` de tu página, no un fichero
 por código.
 
-## Páginas autocontenidas y temas
+## Páginas y temas
 
-Cada página de tema es **autocontenida**: lleva su `<style>` **dentro** —y `matrix`, su `<script>`
-también—, así que la página no pide ningún fichero para verse. No es una preferencia estética, es el
-arreglo de un fallo medido. Con el middleware `errors` de Traefik —el montaje de cualquier aplicación
-con dominio propio—, la página se sirve **en el host de la aplicación**. Con el modelo anterior
-enlazaba `/css/error.css`, y ese path lo contestaba el upstream, no este servicio: el navegador pedía
-la hoja, recibía su `404` con `Content-Type: text/plain`, el middleware interceptaba ese `404` y lo
-volvía a pedir como página de error con un `Accept` que no negocia HTML —`text/css,*/*;q=0.1`—, así
-que la cascada de formato caía al **texto plano** y el navegador rechazaba la hoja: *«MIME type
-('text/plain') is not a supported stylesheet MIME type»*. El resultado era un `503` correcto, con el
-código correcto, y la página **sin estilos**. **Ese enlace ya no existe**: `content/css/error.css` y
-el asset `/css/error.css` se retiraron en la `0.8.0` —un tema es una página con su hoja dentro—, así
-que no hay `<link>` que servir y el fallo no puede volver.
+El **estilo** de cada página vive **dentro** de ella: cada una lleva su `<style>` —y su `<script>`, si
+lo tiene— en el propio HTML, así que no pide ninguna **hoja** para verse. No es una preferencia
+estética, es el arreglo de un fallo medido. Con el middleware `errors` de Traefik —el montaje de
+cualquier aplicación con dominio propio—, la página se sirve **en el host de la aplicación**. Con el
+modelo anterior enlazaba `/css/error.css`, y ese path lo contestaba el upstream, no este servicio: el
+navegador pedía la hoja, recibía su `404` con `Content-Type: text/plain`, el middleware interceptaba
+ese `404` y lo volvía a pedir como página de error con un `Accept` que no negocia HTML
+—`text/css,*/*;q=0.1`—, así que la cascada de formato caía al **texto plano** y el navegador
+rechazaba la hoja: *«MIME type ('text/plain') is not a supported stylesheet MIME type»*. El resultado
+era un `503` correcto, con el código correcto, y la página **sin estilos**. **Ese enlace ya no
+existe**: `content/css/error.css` y el asset `/css/error.css` se retiraron en la `0.8.0` —un tema es
+una página con su hoja dentro—, así que no hay `<link>` que servir y el fallo no puede volver.
 
-`error-pages` no lo sufre porque sus páginas son «fully self-contained — all styles and images are
-embedded directly in the HTML, without loading any external resources»: esto es **paridad**, no un
-adorno.
+Lo que **no** se promete es que ninguna página haga una petición de red, y conviene decirlo porque
+este README no debe afirmar lo que las páginas no cumplen: **tres** de ellas importan una tipografía
+de Google Fonts con `@import` —`terminal` (Fira Code), `antique` (Cinzel Decorative y Marcellus) y
+`starwars` (Orbitron y Rajdhani)—. Eso no reabre el fallo de arriba: la petición va a
+`fonts.googleapis.com`, no a un path del host de la aplicación que el upstream pueda contestar con su
+`404`; y si Google no responde —sin red, o bajo una CSP que no permita `fonts.googleapis.com`—, la página **mantiene el
+estilo** y usa la tipografía de reserva que cada una declara (`monospace`, `serif`, `sans-serif`). La
+paridad con `error-pages` —cuyas páginas son «fully self-contained — all styles and images are
+embedded directly in the HTML»— se mantiene donde importa: el estilo no se sirve por un path del
+upstream. La diferencia de las fuentes queda **declarada**, no escondida.
 
 ### El tema es una página
 
@@ -246,17 +256,26 @@ responde **otra** página de error. Los descubiertos van **ordenados por nombre*
 ### Los temas
 
 Los temas **embebidos** al binario son la **base** del registro, y un directorio puede **añadir**
-más (ver «El tema es una página»). La tabla describe algunos de los temas; la lista completa sale de `content/*.html`.
+más (ver «El tema es una página»). Hay **once**, y vienen en dos familias: las **canónicas** siguen
+al pie de la letra el contrato de la casa —`<main>`, `<h1>{{code}}</h1>`, `<h2>{{reason}}</h2>`,
+`<hr>`, `<p>{{description}}</p>` y `<footer>errserve</footer>`, con la clase `c{{code}}` en el
+`body`, sin `<script>` y sin red—; las **ilustradas** llevan su propio marcado, su `<script>` en
+línea y sus controles. Lo que las une es lo único que el servidor necesita: los tres marcadores. La
+lista completa sale de `content/*.html`.
 
 | Tema | Página en `CONTENT_DIR` | Aspecto |
 |---|---|---|
-| `default` | `default.html` | El tema sobrio de la casa, y el **único** tema sobrio que anima: un fundido de 180 ms sobre el contenido, que se apaga con `prefers-reduced-motion: reduce`. Sus reglas pueden cambiar de una versión a otra; lo que no cambia es que sigue siendo el tema por defecto. |
-| `minimal` | `minimal.html` | Solo tipografía, sin acento de color; claro u oscuro según decida el sistema. |
-| `terminal` | `terminal.html` | Monoespaciado, fósforo verde sobre negro. No se mueve: un terminal apagado, sin parpadeo ni cursor. |
-| `paper` | `paper.html` | Serif, fondo crema, aire de página impresa. |
-| `amber` | `amber.html` | Monocromo ámbar, tipo CRT. |
-| `compact` | `compact.html` | Todo lo corto posible, con el título y el subtítulo en una línea: para móvil y CLI. |
-| `matrix` | `matrix.html` | Un **documento propio**: canvas de lluvia, glitch, scanlines, terminal, pastillas roja y azul, minijuego de teclado y toast. Su `<script>` consulta `prefers-reduced-motion` y no arranca la lluvia con movimiento reducido. |
+| `default` | `default.html` | canónica. El tema por defecto: claro u oscuro según decida el sistema, con un acento por código. Su `<main>` entra con un fundido de 180 ms que se neutraliza en `prefers-reduced-motion: reduce`. Sus reglas pueden cambiar de una versión a otra; lo que no cambia es que sigue siendo el tema por defecto. |
+| `compact` | `compact.html` | canónica. Todo lo corto posible, con el título y el subtítulo en una línea, y claro u oscuro según el sistema: para móvil y CLI. |
+| `amber` | `amber.html` | canónica. Monocromo ámbar (`#ffb000`) sobre casi negro, tipo CRT. |
+| `aurora` | `aurora.html` | canónica. Oscuro con degradados y brillo: fondo azul→violeta, tarjeta de cristal y un halo tras el código, con un acento luminoso distinto por código. |
+| `minimal` | `minimal.html` | ilustrada. Oscuro, con tarjeta de cristal y acento índigo-violeta; botones «Ir al Inicio» y «Volver Atrás». |
+| `paper` | `paper.html` | ilustrada. Serif (Georgia), hoja crema sobre gris claro, aire de página impresa; acento ámbar; botones «Volver al inicio» y «Regresar». |
+| `matrix` | `matrix.html` | ilustrada. Un **documento propio**: canvas de lluvia, glitch, scanlines, terminal, pastillas roja y azul, minijuego de teclado y toast. Su `<script>` consulta `prefers-reduced-motion` y no arranca la lluvia con movimiento reducido. |
+| `terminal` | `terminal.html` | ilustrada. Un **emulador de terminal interactivo** (VT100): banner ASCII, reloj, logs de arranque y un **CLI** donde escribir `help` o `home`, con conmutadores de fósforo (verde, ámbar, cian, monocromo). Importa Fira Code de Google Fonts. |
+| `antique` | `antique.html` | ilustrada. Oro sobre casi negro, aire de club señorial; botón «Entrar al Club». Importa Cinzel Decorative y Marcellus de Google Fonts. |
+| `oasis` | `oasis.html` | ilustrada. Degradado radial nocturno en azul con tarjeta de cristal y acento cian; botón «Volver al Oasis». |
+| `starwars` | `starwars.html` | ilustrada. HUD retro-futurista en cian («sable»), con scanlines de CRT; botón «Volver a la Base». Importa Orbitron y Rajdhani de Google Fonts. |
 
 `THEME` (entorno, al arrancar) elige el tema de **todo el servicio**, y `X-Theme` (cabecera de la
 petición) elige el de **esa** petición, con el primer-origen-que-haga-match de siempre: un `X-Theme`
@@ -278,10 +297,12 @@ respaldo que bloquea ese leak está en «Operación y observabilidad».
 ### El endurecimiento y la CSP
 
 Las páginas son **incompatibles con una CSP estricta** (`default-src 'none'`): cada una lleva su
-`<style>` **en línea** y `matrix` su `<script>` **en línea**. Si el proxy pone una CSP sin
-`style-src 'unsafe-inline'` —o sin *nonce*—, las páginas pierden el estilo; y `matrix` pierde también el
-script, y con él el teclado del minijuego y las pastillas. El servicio **no emite CSP**: la pone el
-proxy, que es donde va el endurecimiento. Es una **decisión de diseño** escrita, no un fallo.
+`<style>` **en línea** y **siete** de ellas —todas las ilustradas— su `<script>` **en línea**. Si el
+proxy pone una CSP sin `style-src 'unsafe-inline'` —o sin *nonce*—, las páginas pierden el estilo; sin
+`script-src`, las ilustradas pierden su `<script>` —`matrix`, el teclado del minijuego y las pastillas;
+`terminal`, su CLI—; y `terminal`, `antique` y `starwars` necesitan además `style-src` y `font-src`
+para `fonts.googleapis.com`, o caen a la tipografía de reserva. El servicio **no emite CSP**: la pone
+el proxy, que es donde va el endurecimiento. Es una **decisión de diseño** escrita, no un fallo.
 
 `THEME` es el equivalente del `--template-name`/`$TEMPLATE_NAME` de `error-pages` —que por defecto usa
 `app-down`—, con una diferencia que se declara: allí la plantilla puede **rotar**
