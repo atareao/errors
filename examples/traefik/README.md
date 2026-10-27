@@ -70,23 +70,23 @@ Sobre `app.localtest.me/boom` —el **mismo** `503` del backend, no un caso nuev
 que afirman y niegan sobre el **cuerpo**:
 
 - `html_body app.localtest.me /boom '<style'` — el `503` del backend llega con la página del tema, que
-  trae su `<style>` **dentro**: la página no pide nada para verse.
-- `not_html_body app.localtest.me /boom 'rel="stylesheet"'` — y **no** enlaza ninguna hoja externa: el
-  enlace a `/css/error.css` **ya no existe**, porque cada página lleva su hoja incrustada. Es el
-  arreglo de un bug **medido**: con el modelo anterior, en el host de la aplicación ese enlace lo
+  trae su `<style>` **dentro**: la página no enlaza ninguna hoja que sirva este servicio.
+- `not_html_body app.localtest.me /boom 'rel="stylesheet"'` — y **no** lleva ningún
+  `<link rel="stylesheet">`: el enlace a `/css/error.css` **ya no existe**, porque cada página lleva su
+  `<style>` dentro. Es el arreglo de un bug **medido**: con el modelo anterior, en el host de la aplicación ese enlace lo
   contestaba el upstream —`404 text/plain`—, el middleware `errors` interceptaba ese `404` y lo volvía
   a pedir como página de error con un `Accept` que **no** negocia HTML, la cascada de formato caía al
   texto plano y el navegador rechazaba la hoja (*«MIME type ('text/plain') is not a supported
   stylesheet MIME type»*). La página salía **sin estilos**, con el `503` y el cuerpo correctos.
 - `html_differs app.localtest.me /boom 'X-Theme: terminal'` — el tema se elige **por petición**: pide
   el mismo path dos veces, con y sin esa cabecera, y exige que los cuerpos **difieran**. Es lo que
-  demuestra la selección de extremo a extremo, a través de Traefik; `terminal` es uno de los siete
+  demuestra la selección de extremo a extremo, a través de Traefik; `terminal` es uno de los once
   temas que documenta el [`README.md`](../../README.md) raíz.
 
 Los tres mandan `Accept: text/html` **a propósito**. Sin esa pista, un `curl` manda `*/*`, la cascada
 de formato no elige HTML —cae al **texto plano** por defecto— y el bloque no probaría nada: no habría
 página con su `<style>` que buscar en el cuerpo. Es también el motivo de que `html_differs` compare
-**cuerpos** y no busque un color en la hoja: un color es un detalle que se puede retocar sin avisar, y
+**cuerpos** y no busque un color en el `<style>`: un color es un detalle que se puede retocar sin avisar, y
 «el cuerpo cambia con la cabecera» es el contrato.
 
 ### El respaldo no publica el endpoint de servicio

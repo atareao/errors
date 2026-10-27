@@ -207,29 +207,40 @@ por código.
 
 ## Páginas y temas
 
-El **estilo** de cada página vive **dentro** de ella: cada una lleva su `<style>` —y su `<script>`, si
-lo tiene— en el propio HTML, así que no pide ninguna **hoja** para verse. No es una preferencia
-estética, es el arreglo de un fallo medido. Con el middleware `errors` de Traefik —el montaje de
-cualquier aplicación con dominio propio—, la página se sirve **en el host de la aplicación**. Con el
-modelo anterior enlazaba `/css/error.css`, y ese path lo contestaba el upstream, no este servicio: el
-navegador pedía la hoja, recibía su `404` con `Content-Type: text/plain`, el middleware interceptaba
+Una página de tema es **autocontenida**, y aquí eso significa algo un poco más laxo que en otras
+casas: todo lo que la página necesita para verse —su CSS, su JavaScript, sus tipografías, sus
+imágenes— vive **dentro de la propia página** o es un **recurso de internet**; lo que **nunca** puede
+ser es un recurso **servido por este servicio**. El errserve no publica ningún asset suyo que las
+páginas necesiten.
+
+Y no es una preferencia estética: es el arreglo de un fallo medido, cuyo motivo sigue a la vista en el
+path que lo causaba. Con el middleware `errors` de Traefik —el montaje de cualquier aplicación con
+dominio propio—, la página se sirve **en el host de la aplicación**, donde este servicio **no sirve
+assets**. La página enlazaba `/css/error.css`, y ese path lo contestaba el upstream, no este servicio:
+el navegador pedía la hoja, recibía su `404` con `Content-Type: text/plain`, el middleware interceptaba
 ese `404` y lo volvía a pedir como página de error con un `Accept` que no negocia HTML
 —`text/css,*/*;q=0.1`—, así que la cascada de formato caía al **texto plano** y el navegador
 rechazaba la hoja: *«MIME type ('text/plain') is not a supported stylesheet MIME type»*. El resultado
 era un `503` correcto, con el código correcto, y la página **sin estilos**. **Ese enlace ya no
 existe**: `content/css/error.css` y el asset `/css/error.css` se retiraron en la `0.8.0` —un tema es
-una página con su hoja dentro—, así que no hay `<link>` que servir y el fallo no puede volver.
+una página con su `<style>` dentro—, así que no hay `<link>` que servir.
 
-Lo que **no** se promete es que ninguna página haga una petición de red, y conviene decirlo porque
-este README no debe afirmar lo que las páginas no cumplen: **tres** de ellas importan una tipografía
-de Google Fonts con `@import` —`terminal` (Fira Code), `antique` (Cinzel Decorative y Marcellus) y
-`starwars` (Orbitron y Rajdhani)—. Eso no reabre el fallo de arriba: la petición va a
-`fonts.googleapis.com`, no a un path del host de la aplicación que el upstream pueda contestar con su
-`404`; y si Google no responde —sin red, o bajo una CSP que no permita `fonts.googleapis.com`—, la página **mantiene el
-estilo** y usa la tipografía de reserva que cada una declara (`monospace`, `serif`, `sans-serif`). La
-paridad con `error-pages` —cuyas páginas son «fully self-contained — all styles and images are
-embedded directly in the HTML»— se mantiene donde importa: el estilo no se sirve por un path del
-upstream. La diferencia de las fuentes queda **declarada**, no escondida.
+Las dos formas legítimas conviven en `content/`, y ninguna es un apaño:
+
+- **Dentro de la página**: el CSS y el JavaScript van incrustados. Las **once** llevan su `<style>`, y
+  **siete** su `<script>`.
+- **En internet**: `terminal`, `antique` y `starwars` importan su tipografía de Google Fonts con
+  `@import` —Fira Code; Cinzel Decorative y Marcellus; Orbitron y Rajdhani—. Ese recurso no lo sirve
+  este servicio ni el upstream de la aplicación, así que no hay nadie que pueda contestarle un `404`
+  con el que reescribir el formato; y si Google no responde —sin red, o bajo una CSP que no lo
+  permita—, la página **mantiene el estilo** y usa la tipografía de reserva que cada una declara
+  (`monospace`, `serif`, `sans-serif`).
+
+La paridad con `error-pages` —cuyas páginas son «fully self-contained — all styles and images are
+embedded directly in the HTML, without loading any external resources»— se mantiene en el eje que
+importa: **el servicio de errores no sirve ningún asset que las páginas necesiten**. No es literal en
+«sin recursos externos», porque tres de las nuestras importan una tipografía; sí lo es en que nada de
+lo que una página necesita depende de este binario.
 
 ### El tema es una página
 
@@ -259,7 +270,7 @@ Los temas **embebidos** al binario son la **base** del registro, y un directorio
 más (ver «El tema es una página»). Hay **once**, y vienen en dos familias: las **canónicas** siguen
 al pie de la letra el contrato de la casa —`<main>`, `<h1>{{code}}</h1>`, `<h2>{{reason}}</h2>`,
 `<hr>`, `<p>{{description}}</p>` y `<footer>errserve</footer>`, con la clase `c{{code}}` en el
-`body`, sin `<script>` y sin red—; las **ilustradas** llevan su propio marcado, su `<script>` en
+`body`, sin `<script>` y sin ninguna petición—; las **ilustradas** llevan su propio marcado, su `<script>` en
 línea y sus controles. Lo que las une es lo único que el servidor necesita: los tres marcadores. La
 lista completa sale de `content/*.html`.
 
