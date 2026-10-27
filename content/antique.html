@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{code}} - {{reason}}</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Marcellus&display=swap');
+
+    :root {
+      --gold-primary: #d4af37;
+      --gold-light: #f3e5ab;
+      --gold-dark: #aa7c11;
+      --bg-dark: #080705;
+      --card-bg: rgba(18, 15, 12, 0.88);
+      --border-gold: rgba(212, 175, 55, 0.4);
+      --font-heading: 'Cinzel Decorative', serif;
+      --font-body: 'Marcellus', serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--gold-light);
+      font-family: var(--font-body);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      position: relative;
+    }
+
+    canvas#deco-canvas {
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      z-index: 1;
+    }
+
+    /* Art Deco Outer Frame */
+    .deco-card {
+      position: relative;
+      z-index: 10;
+      max-width: 620px;
+      width: 90%;
+      padding: 3.5rem 2.5rem;
+      background: var(--card-bg);
+      border: 2px solid var(--gold-primary);
+      box-shadow: 0 0 30px rgba(212, 175, 55, 0.25), inset 0 0 20px rgba(0,0,0,0.9);
+      text-align: center;
+    }
+
+    /* Decorative Art Deco Corners */
+    .deco-card::before, .deco-card::after {
+      content: '';
+      position: absolute;
+      width: 24px; height: 24px;
+      border: 3px solid var(--gold-primary);
+    }
+    .deco-card::before { top: 6px; left: 6px; border-right: none; border-bottom: none; }
+    .deco-card::after { bottom: 6px; right: 6px; border-left: none; border-top: none; }
+
+    .error-code {
+      font-family: var(--font-heading);
+      font-size: clamp(4.5rem, 13vw, 7.5rem);
+      font-weight: 900;
+      line-height: 1;
+      background: linear-gradient(135deg, var(--gold-light) 0%, var(--gold-primary) 50%, var(--gold-dark) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 0.5rem;
+      letter-spacing: 2px;
+    }
+
+    .error-reason {
+      font-family: var(--font-heading);
+      font-size: clamp(1.1rem, 3vw, 1.6rem);
+      color: var(--gold-primary);
+      text-transform: uppercase;
+      letter-spacing: 3px;
+      margin-bottom: 1.2rem;
+      border-bottom: 1px solid var(--border-gold);
+      padding-bottom: 0.8rem;
+    }
+
+    .error-description {
+      font-size: 1.05rem;
+      color: var(--gold-light);
+      line-height: 1.8;
+      margin-bottom: 2.2rem;
+      opacity: 0.9;
+    }
+
+    /* Phonograph Vinyl Widget */
+    .gramophone-widget {
+      width: 70px; height: 70px;
+      margin: 0 auto 1.5rem auto;
+      border-radius: 50%;
+      background: radial-gradient(circle, #111 30%, var(--gold-dark) 31%, #111 35%, #111 60%, var(--gold-primary) 100%);
+      border: 2px solid var(--gold-primary);
+      cursor: pointer;
+      box-shadow: 0 0 15px rgba(212, 175, 55, 0.4);
+      transition: transform 0.3s ease;
+    }
+    .gramophone-widget.spinning {
+      animation: spin 3s linear infinite;
+    }
+    @keyframes spin { 100% { transform: rotate(360deg); } }
+
+    .actions {
+      display: flex;
+      gap: 1.2rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .btn-deco {
+      font-family: var(--font-heading);
+      font-size: 0.85rem;
+      padding: 0.8rem 1.8rem;
+      color: var(--gold-light);
+      background: transparent;
+      border: 1px solid var(--gold-primary);
+      text-decoration: none;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+
+    .btn-deco:hover {
+      background: var(--gold-primary);
+      color: var(--bg-dark);
+      box-shadow: 0 0 15px var(--gold-primary);
+      transform: translateY(-2px);
+    }
+
+    .controls-bar {
+      position: absolute;
+      bottom: 1.5rem; z-index: 20;
+      display: flex; gap: 0.8rem;
+      background: rgba(18, 15, 12, 0.9);
+      padding: 0.4rem 1rem;
+      border: 1px solid var(--border-gold);
+    }
+
+    .ctrl-btn {
+      background: transparent; border: none;
+      color: var(--gold-primary);
+      font-family: var(--font-body);
+      font-size: 0.85rem; cursor: pointer;
+      transition: color 0.2s;
+    }
+    .ctrl-btn:hover, .ctrl-btn.active { color: var(--gold-light); text-shadow: 0 0 5px var(--gold-primary); }
+  </style>
+</head>
+<body>
+
+  <canvas id="deco-canvas"></canvas>
+
+  <main class="deco-card">
+    <div class="gramophone-widget" id="vinyl" onclick="toggleJazz()" title="Haz clic para escuchar Jazz de los 1920s"></div>
+    <div class="error-code" id="display-code">{{code}}</div>
+    <h1 class="error-reason" id="display-reason">{{reason}}</h1>
+    <p class="error-description" id="display-description">{{description}}</p>
+
+    <div class="actions">
+      <a href="/" class="btn-deco" onclick="playAudio('click')">Entrar al Club (Inicio)</a>
+      <button onclick="playAudio('click'); history.back();" class="btn-deco">Salir a la Calle</button>
+    </div>
+  </main>
+
+  <div class="controls-bar">
+    <button class="ctrl-btn active" onclick="setTheme('gold')">Oro Prohibición</button>
+    <button class="ctrl-btn" onclick="setTheme('crimson')">Rojo Speakeasy</button>
+    <button class="ctrl-btn" onclick="setTheme('mono')">Cine Mudo 1920</button>
+  </div>
+
+  <script>
+    // Fallback dinámico para Jinja2 en navegador local
+    document.addEventListener("DOMContentLoaded", () => {
+      const codeEl = document.getElementById("display-code");
+      const reasonEl = document.getElementById("display-reason");
+      const descEl = document.getElementById("display-description");
+      const params = new URLSearchParams(window.location.search);
+
+      if (codeEl.innerText.includes("{{") || codeEl.innerText.trim() === "") {
+        codeEl.innerText = params.get("code") || "404";
+      }
+      if (reasonEl.innerText.includes("{{") || reasonEl.innerText.trim() === "") {
+        reasonEl.innerText = params.get("reason") || "DISPENSARIO CERRADO POR LA PROHIBICIÓN";
+      }
+      if (descEl.innerText.includes("{{") || descEl.innerText.trim() === "") {
+        descEl.innerText = params.get("description") || "La dirección que busca no figura en la lista del Speakeasy. Proporcione la contraseña correcta al portero o regrese al salón principal.";
+      }
+    });
+
+    // Sintetizador Web Audio API: Jazz de los Años 20 y Vinilo
+    let audioCtx = null;
+    let isPlayingJazz = false;
+
+    function initAudio() {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+
+    function toggleJazz() {
+      initAudio();
+      const vinyl = document.getElementById('vinyl');
+      isPlayingJazz = !isPlayingJazz;
+
+      if (isPlayingJazz) {
+        vinyl.classList.add('spinning');
+        playJazzChord();
+      } else {
+        vinyl.classList.remove('spinning');
+      }
+    }
+
+    function playJazzChord() {
+      if (!isPlayingJazz || !audioCtx) return;
+
+      const freqs = [261.63, 329.63, 392.00, 493.88]; // C Major 7 Jazz Chord
+      freqs.forEach(f => {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(f, audioCtx.currentTime);
+        gain.gain.setValueAtTime(0.03, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 2.5);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 2.5);
+      });
+
+      if (isPlayingJazz) setTimeout(playJazzChord, 2600);
+    }
+
+    function playAudio(type) {
+      initAudio();
+      if (!audioCtx) return;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(523.25, audioCtx.currentTime);
+      gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+      gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.15);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.15);
+    }
+
+    // Canvas Champán y Polvo de Oro
+    const canvas = document.getElementById('deco-canvas');
+    const ctx = canvas.getContext('2d');
+    let width, height;
+    let particles = [];
+
+    function resize() {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    for (let i = 0; i < 70; i++) {
+      particles.push({
+        x: Math.random() * width,
+        y: Math.random() * height,
+        vy: -Math.random() * 0.8 - 0.2,
+        r: Math.random() * 2.5 + 0.5,
+        alpha: Math.random() * 0.6 + 0.2
+      });
+    }
+
+    function setTheme(theme) {
+      playAudio('click');
+      const root = document.documentElement;
+      if (theme === 'crimson') {
+        root.style.setProperty('--gold-primary', '#e11d48');
+        root.style.setProperty('--gold-light', '#fecdd3');
+        root.style.setProperty('--gold-dark', '#881337');
+      } else if (theme === 'mono') {
+        root.style.setProperty('--gold-primary', '#d1d5db');
+        root.style.setProperty('--gold-light', '#ffffff');
+        root.style.setProperty('--gold-dark', '#4b5563');
+      } else {
+        root.style.setProperty('--gold-primary', '#d4af37');
+        root.style.setProperty('--gold-light', '#f3e5ab');
+        root.style.setProperty('--gold-dark', '#aa7c11');
+      }
+      document.querySelectorAll('.ctrl-btn').forEach(b => b.classList.remove('active'));
+      event.target.classList.add('active');
+    }
+
+    function animate() {
+      ctx.clearRect(0, 0, width, height);
+
+      particles.forEach(p => {
+        p.y += p.vy;
+        if (p.y < 0) p.y = height;
+
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(212, 175, 55, ${p.alpha})`;
+        ctx.fill();
+      });
+
+      requestAnimationFrame(animate);
+    }
+    animate();
+  </script>
+</body>
+</html>
