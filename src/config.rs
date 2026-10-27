@@ -111,7 +111,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use crate::resolve::{MAX_ERROR_CODE, MIN_ERROR_CODE, is_usable_code};
-use crate::theme::{self, DEFAULT_THEME_NAME, Theme, Themes};
+use crate::theme::{DEFAULT_THEME_NAME, Theme, Themes};
 
 /// Puerto de escucha por defecto (el que asume la guía de Traefik).
 const DEFAULT_PORT: u16 = 8080;
@@ -409,7 +409,10 @@ impl Config {
                     validos: themes.names(),
                 })?
                 .clone(),
-            None => theme::default_theme().clone(),
+            None => themes
+                .by_name(DEFAULT_THEME_NAME)
+                .cloned()
+                .expect("el tema por defecto tiene que estar en el registro"),
         };
 
         Ok(Config {
@@ -456,8 +459,8 @@ mod tests {
             .collect()
     }
 
-    /// Un `CONTENT_DIR` que **no existe**: el registro son los siete incorporados y
-    /// nada más (el caso del binario instalado sin ficheros de datos).
+    /// Un `CONTENT_DIR` que **no existe**: el registro son los embebidos y nada
+    /// más (el caso del binario instalado sin ficheros de datos).
     fn sin_contenido_dir() -> String {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/inexistente-y-ademas-inexistente");
@@ -841,11 +844,9 @@ mod tests {
             "el error debe nombrar la variable: {message}"
         );
 
-        // Enumera los siete del registro **de ese arranque**, y **no** `neon`, que
+        // Enumera los temas del registro **de ese arranque**, y **no** `neon`, que
         // es justo lo que el operador cree que ha configurado.
-        for nombre in [
-            "default", "minimal", "terminal", "paper", "amber", "compact", "matrix",
-        ] {
+        for (nombre, _) in crate::embedded::EMBEBIDOS {
             assert!(
                 message.contains(nombre),
                 "el error tiene que enumerar los temas del registro: falta `{nombre}` en {message}"
@@ -861,9 +862,11 @@ mod tests {
              configuración: {message}"
         );
 
-        let enumeracion = "default, minimal, terminal, paper, amber, compact, matrix";
+        let mut nombres: Vec<&str> = crate::embedded::EMBEBIDOS.iter().map(|(n, _)| *n).collect();
+        nombres.sort();
+        let enumeracion = nombres.join(", ");
         assert!(
-            message.contains(enumeracion),
+            message.contains(&enumeracion),
             "el error tiene que enumerar los nombres del registro de ese arranque, en orden: \
              {message}"
         );

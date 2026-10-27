@@ -120,7 +120,7 @@ comprobar /404.json 404                              # el formato no cambia el c
 comprobar /healthz 200                               # endpoint de servicio
 comprobar /metrics 200                               # contador Prometheus
 # La garantía 4, con una página de tema que no es el alias: un asset existente gana a
-# la página de error, y ese asset es una de las seis páginas de tema que NO son
+# la página de error, y ese asset es una página de tema que NO es
 # `/default.html`. El `200` es CRUDO —el fichero tal cual, con sus marcadores
 # `{{code}}`/`{{reason}}`/`{{description}}` a la vista—, que es justo lo que la
 # garantía promete; el bloqueo de ese leak va en el proxy, no en el servicio.
@@ -205,7 +205,7 @@ echo "ok   USER -> $usuario"
 # 6) El directorio del operador **añade** temas (change `themes-from-content-dir`).
 #
 # El registro de temas deja de ser una tabla cerrada en el binario: se construye **al
-# arrancar** con los **siete incorporados** más los `*.html` de la **raíz** de
+# arrancar** con los **temas embebidos** más los `*.html` de la **raíz** de
 # `CONTENT_DIR` —un fichero de más **es** un tema, y su tallo es su nombre—. En la
 # imagen `CONTENT_DIR` es la ruta que el **operador monta** y el proceso corre como
 # uid/gid **10001**, así que el barrido depende de que el montaje sea legible por ese
@@ -213,9 +213,9 @@ echo "ok   USER -> $usuario"
 # responde `404`; con `0755` responde `200`. Es una propiedad de la **imagen** que
 # `cargo test` **no puede ver** —ahí el directorio se lee con el uid de quien compila—,
 # y el modo de fallo es silencioso si el operador se apoya solo en `X-Theme` —el tema
-# configurado se sirve igual, con los siete incorporados detrás—. Por eso la primera
+# configurado se sirve igual, con los temas embebidos detrás—. Por eso la primera
 # puerta es el bucle de `/healthz`: con `THEME=neon` y el barrido sin ver el fichero,
-# el arranque **aborta** enumerando los siete incorporados.
+# el arranque **aborta** enumerando los temas embebidos.
 #
 # Va en un contenedor **aparte** y **no** en el de arriba: montar un `CONTENT_DIR`
 # propio deja **fuera** el `content/` que la imagen trae, y con él la aserción del leak
@@ -264,7 +264,7 @@ for _ in $(seq 1 20); do
   if curl -fsS -o /dev/null "$BASE_VOLUMEN/healthz"; then listo=1; break; fi
   sleep 1
 done
-[[ "$listo" == "1" ]] || fallo "el contenedor con CONTENT_DIR montado no respondió en /healthz tras 20 intentos: el barrido no vio 'neon.html' —el arranque aborta enumerando los siete incorporados— o el montaje no es legible por el uid 10001"
+[[ "$listo" == "1" ]] || fallo "el contenedor con CONTENT_DIR montado no respondió en /healthz tras 20 intentos: el barrido no vio 'neon.html' —el arranque aborta enumerando los temas embebidos— o el montaje no es legible por el uid 10001"
 
 # 6.a) El tema descubierto arrancó y sirve **su** fichero, que es su **única** copia
 #      —no tiene página embebida a la que caer—: si el barrido no lo hubiera visto, el
@@ -276,7 +276,7 @@ grep -q 'NEON-SMOKE' <<<"$neon" \
 echo "ok   GET /404 (THEME=neon, Accept: text/html) -> sirve la página del fichero montado"
 
 # 6.b) `X-Theme` elige **por petición** contra el registro: un tema **conocido** gana
-#      al configurado, y `minimal` es uno de los siete incorporados, así que esto no
+#      al configurado, y `minimal` es uno de los temas embebidos, así que esto no
 #      depende del montaje.
 minimal=$(curl -s -H 'Accept: text/html' -H 'X-Theme: minimal' "$BASE_VOLUMEN/404")
 if grep -q 'NEON-SMOKE' <<<"$minimal"; then

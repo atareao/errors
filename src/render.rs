@@ -300,7 +300,7 @@ pub(crate) fn plantilla(body: &[u8], code: u16) -> Vec<u8> {
 /// valor recién insertado no se vuelve a escanear; los valores son prosa del
 /// proyecto y no pueden traer el marcador de otro —es una **suposición
 /// declarada**, fijada en `un_valor_con_otro_marcador_sale_literal`—.
-fn rellena(body: &[u8], code: u16, razon: &str, descripcion: &str) -> Vec<u8> {
+pub(crate) fn rellena(body: &[u8], code: u16, razon: &str, descripcion: &str) -> Vec<u8> {
     if !lleva_marcadores(body) {
         return body.to_vec();
     }
@@ -467,7 +467,13 @@ mod tests {
     /// los marcadores `{{code}}`/`{{reason}}`/`{{description}}`. **Difiere** del
     /// fixture de arriba a propósito, y esa diferencia es la que impide invertir
     /// la precedencia: el del operador gana cuando existe.
-    const EMBEDDED_DEFAULT_PAGE: &str = include_str!("../content/default.html");
+    fn pagina_embebida(nombre: &str) -> &'static str {
+        crate::embedded::EMBEBIDOS
+            .iter()
+            .find(|(n, _)| *n == nombre)
+            .map(|(_, p)| *p)
+            .unwrap_or_else(|| panic!("el tema embebido `{nombre}` no existe"))
+    }
 
     /// La página del operador de `tests/fixtures/content/default.html` tal como se
     /// **sirve** para `code`: su plantilla rellenada.
@@ -494,7 +500,14 @@ mod tests {
 
     /// El tema por defecto, para las llamadas que no se ocupan del tema.
     fn tema_default() -> &'static Theme {
-        crate::theme::default_theme()
+        use std::sync::OnceLock;
+        static DEFAULT: OnceLock<Theme> = OnceLock::new();
+        DEFAULT.get_or_init(|| {
+            crate::theme::Themes::incorporados()
+                .by_name(crate::theme::DEFAULT_THEME_NAME)
+                .cloned()
+                .expect("el tema por defecto tiene que estar en el registro")
+        })
     }
 
     fn fixtures_content_dir() -> PathBuf {
@@ -816,7 +829,7 @@ mod tests {
         let body = render_body(503, Format::Html, &sin_contenido_dir(), tema_default())
             .expect("la página embebida está siempre");
 
-        let rellenada = plantilla(EMBEDDED_DEFAULT_PAGE.as_bytes(), 503);
+        let rellenada = plantilla(pagina_embebida("default").as_bytes(), 503);
 
         assert_eq!(
             body, rellenada,
@@ -836,7 +849,7 @@ mod tests {
         let body = render_body(418, Format::Html, &sin_contenido_dir(), tema_default())
             .expect("la página embebida está siempre");
 
-        let rellenada = plantilla(EMBEDDED_DEFAULT_PAGE.as_bytes(), 418);
+        let rellenada = plantilla(pagina_embebida("default").as_bytes(), 418);
 
         // Anclajes **independientes** de `plantilla`: el cuerpo servido nombra su
         // propio código y no deja ningún marcador.

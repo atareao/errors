@@ -1,105 +1,201 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="robots" content="noindex, nofollow" />
-    <title>{{code}} — {{reason}}</title>
-    <style>
-/* Estilo de la página del tema `paper`.
- *
- * Vive dentro de la página: un tema es una página, así que estas reglas no se
- * cargan de ningún fichero ni se incrustan al servir, y la página no puede pedir
- * nada por la red —nada de hojas importadas ni de ficheros remotos—. Si animase,
- * tendría que neutralizarlo en `prefers-reduced-motion: reduce`.
- *
- * Serif y fondo crema: el aire de un documento impreso. Márgenes generosos y
- * una regla discreta. El marcado lleva la clase `c<código>` en el `body`, pero
- * este tema no la usa.
- *
- * Contraste medido a mano (objetivo AA): fg/bg 14,01, accent/bg 6,85 y muted/bg
- * 5,62.
- *
- * El `<hr>` decorativo —un separador, no información— se queda fuera del 3:1
- * de WCAG 1.4.11, que cubre el contenido no textual necesario para entender el
- * contenido y los componentes de interfaz. Su `--rule` mide 1,39 sobre el fondo
- * `#faf7f0`: es una decisión medida, no un descuido, así que quien vuelva a
- * medirla no debería contarla como hallazgo.
- */
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{code}} - {{reason}}</title>
+  <style>
+    :root {
+      --bg-color: #e5e7eb;
+      --paper-bg: #fcfbf9;
+      --paper-shadow: rgba(0, 0, 0, 0.08);
+      --ink-primary: #111827;
+      --ink-muted: #6b7280;
+      --ink-faint: #9ca3af;
+      --accent: #d97706;
+      --font-serif: Georgia, Cambria, "Times New Roman", Times, serif;
+      --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
 
-:root {
-  color-scheme: light;
-  --bg: #faf7f0;
-  --fg: #2b2620;
-  --muted: #6b6252;
-  --accent: #7a4b2a;
-  --rule: #ddd3c0;
-}
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
 
-* {
-  box-sizing: border-box;
-}
+    body {
+      background-color: var(--bg-color);
+      /* Textura sutil de fondo */
+      background-image: radial-gradient(#d1d5db 1px, transparent 1px);
+      background-size: 24px 24px;
+      color: var(--ink-primary);
+      font-family: var(--font-sans);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem 1rem;
+    }
 
-body {
-  margin: 0 auto;
-  padding: 4rem 2rem;
-  max-width: 38rem;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 0.75rem;
-  font-family: Georgia, "Iowan Old Style", "Times New Roman", serif;
-  line-height: 1.6;
-  color: var(--fg);
-  background: var(--bg);
-}
+    .paper-container {
+      position: relative;
+      max-width: 580px;
+      width: 100%;
+      background-color: var(--paper-bg);
+      padding: 4rem 3rem;
+      box-shadow: 0 20px 25px -5px var(--paper-shadow), 0 8px 10px -6px var(--paper-shadow);
+      border-radius: 2px;
+    }
 
-h1 {
-  margin: 0;
-  font-size: clamp(2.75rem, 10vw, 5rem);
-  font-weight: 400;
-  letter-spacing: -0.01em;
-  color: var(--accent);
-}
+    /* Borde rasgado superior e inferior con CSS SVG mask/clip */
+    .paper-torn-top {
+      position: absolute;
+      top: -12px;
+      left: 0;
+      width: 100%;
+      height: 12px;
+      fill: var(--paper-bg);
+    }
 
-h2 {
-  margin: 0;
-  font-size: clamp(1.1rem, 3vw, 1.4rem);
-  font-weight: 400;
-  font-style: italic;
-  color: var(--muted);
-}
+    .paper-torn-bottom {
+      position: absolute;
+      bottom: -12px;
+      left: 0;
+      width: 100%;
+      height: 12px;
+      fill: var(--paper-bg);
+    }
 
-hr {
-  width: 5rem;
-  margin: 1.25rem 0;
-  border: 0;
-  border-top: 1px solid var(--rule);
-}
+    .error-code {
+      font-family: var(--font-serif);
+      font-size: clamp(5rem, 15vw, 8.5rem);
+      font-weight: 400;
+      line-height: 0.85;
+      letter-spacing: -0.05em;
+      color: var(--ink-primary);
+      margin-bottom: 1.5rem;
+      position: relative;
+      display: inline-block;
+    }
 
-p {
-  margin: 0;
-  max-width: 38rem;
-  color: var(--muted);
-}
+    /* Trazado rojo de corrección / nota al margen */
+    .error-code::after {
+      content: '';
+      position: absolute;
+      bottom: 5px;
+      left: 0;
+      width: 100%;
+      height: 2px;
+      background: var(--accent);
+      transform: rotate(-1deg);
+      opacity: 0.8;
+    }
 
-/* La firma: una línea discreta en cursiva, en el tono de la tinta atenuada. */
-footer {
-  margin-top: 1.25rem;
-  font-size: 0.85rem;
-  font-style: italic;
-  color: var(--muted);
-}
-    </style>
-  </head>
-  <body class="c{{code}}">
-    <main>
-      <h1>{{code}}</h1>
-      <h2>{{reason}}</h2>
-      <hr />
-      <p>{{description}}</p>
-    </main>
-    <footer>errserve</footer>
-  </body>
+    .error-reason {
+      font-family: var(--font-serif);
+      font-size: clamp(1.25rem, 3vw, 1.75rem);
+      font-weight: 400;
+      font-style: italic;
+      color: var(--ink-primary);
+      margin-bottom: 1rem;
+    }
+
+    .divider {
+      width: 40px;
+      height: 1px;
+      background-color: var(--ink-faint);
+      margin: 1.5rem 0;
+    }
+
+    .error-description {
+      font-size: 1rem;
+      color: var(--ink-muted);
+      line-height: 1.7;
+      margin-bottom: 3rem;
+      max-width: 460px;
+    }
+
+    .actions {
+      display: flex;
+      gap: 1.5rem;
+      align-items: center;
+    }
+
+    .btn {
+      font-size: 0.9rem;
+      text-decoration: none;
+      transition: all 0.2s ease;
+      cursor: pointer;
+      background: none;
+      border: none;
+      font-family: var(--font-sans);
+    }
+
+    .btn-primary {
+      color: var(--ink-primary);
+      font-weight: 600;
+      border-bottom: 1px solid var(--ink-primary);
+      padding-bottom: 2px;
+    }
+
+    .btn-primary:hover {
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .btn-secondary {
+      color: var(--ink-muted);
+    }
+
+    .btn-secondary:hover {
+      color: var(--ink-primary);
+    }
+  </style>
+</head>
+<body>
+
+  <main class="paper-container">
+    <!-- SVG Rasgado Superior -->
+    <svg class="paper-torn-top" viewBox="0 0 1200 12" preserveAspectRatio="none">
+      <path d="M0,0 L0,12 L50,6 L100,12 L150,4 L200,12 L250,8 L300,12 L350,5 L400,12 L450,7 L500,12 L550,4 L600,12 L650,8 L700,12 L750,5 L800,12 L850,7 L900,12 L950,4 L1000,12 L1050,8 L1100,12 L1150,5 L1200,12 L1200,0 Z"></path>
+    </svg>
+
+    <div class="error-code" id="display-code">{{code}}</div>
+    <h1 class="error-reason" id="display-reason">{{reason}}</h1>
+    
+    <div class="divider"></div>
+
+    <p class="error-description" id="display-description">{{description}}</p>
+
+    <div class="actions">
+      <a href="/" class="btn btn-primary">Volver al inicio</a>
+      <button onclick="history.back()" class="btn btn-secondary">Regresar</button>
+    </div>
+
+    <!-- SVG Rasgado Inferior -->
+    <svg class="paper-torn-bottom" viewBox="0 0 1200 12" preserveAspectRatio="none">
+      <path d="M0,12 L0,0 L50,6 L100,0 L150,8 L200,0 L250,4 L300,0 L350,7 L400,0 L450,5 L500,0 L550,8 L600,0 L650,4 L700,0 L750,7 L800,0 L850,5 L900,0 L950,8 L1000,0 L1050,4 L1100,0 L1150,7 L1200,0 L1200,12 Z"></path>
+    </svg>
+  </main>
+
+  <script>
+    // Fallback si se abre localmente sin procesar con Jinja2
+    document.addEventListener("DOMContentLoaded", () => {
+      const codeEl = document.getElementById("display-code");
+      const reasonEl = document.getElementById("display-reason");
+      const descEl = document.getElementById("display-description");
+      const params = new URLSearchParams(window.location.search);
+
+      if (codeEl.innerText.includes("{{") || codeEl.innerText.trim() === "") {
+        codeEl.innerText = params.get("code") || "404";
+      }
+      if (reasonEl.innerText.includes("{{") || reasonEl.innerText.trim() === "") {
+        reasonEl.innerText = params.get("reason") || "Página en blanco";
+      }
+      if (descEl.innerText.includes("{{") || descEl.innerText.trim() === "") {
+        descEl.innerText = params.get("description") || "Esta página parece haber sido arrancada o aún está por escribir. Comprueba la dirección ingresada.";
+      }
+    });
+  </script>
+</body>
 </html>
