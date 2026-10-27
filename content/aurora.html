@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>{{code}} — {{reason}}</title>
+    <style>
+/* Estilo de la página del tema `aurora`.
+ *
+ * Vive **dentro** de la página: un tema es una página, así que estas reglas no
+ * vienen de ninguna hoja suelta ni se incrustan al servir —no hay marcador de
+ * hoja que sustituir—. Y por eso la página no puede pedir nada por la red: ni
+ * hojas importadas, ni fuentes, ni imágenes, ni scripts remotos. El degradado,
+ * el cristal y el halo son CSS: cero peticiones.
+ *
+ * La entrada de `<main>` es un fundido de 220 ms con un desplazamiento mínimo;
+ * no hay bucles ni animaciones de fondo. El movimiento es adorno y se neutraliza
+ * en `prefers-reduced-motion: reduce`.
+ *
+ * Una sola página, no una por código: la diferencia de aspecto se expresa con la
+ * clase `c<código>` del `body`, con un acento distinto por código. El `404` —y
+ * cualquier código sin regla propia— se queda con el acento por defecto de
+ * `:root`; los demás solo lo sobreescriben. El acento tiñe el código y su halo.
+ *
+ * Contraste medido a mano (objetivo AA). Sobre el cristal compuesto en el peor
+ * rincón del degradado (#111125): fg 15,06, muted 7,61 y acento 14,13 el de por
+ * defecto. Sobre el rincón más claro del degradado (#28385e): fg 9,37, muted
+ * 4,73 y acento 4,65 el más apagado (`c500`). El halo del título, medido también,
+ * deja la muted en 4,89 y el acento más apagado en 5,59. Todo por encima de
+ * 4,5:1, el objetivo para texto normal.
+ *
+ * El `<hr>` es un separador decorativo: la página se entiende igual sin él, y el
+ * 3:1 de WCAG 1.4.11 cubre el contenido no textual necesario para entender el
+ * contenido y los componentes de interfaz, no el adorno. Su `--rule` mide 1,49
+ * sobre el cristal y se queda ahí a propósito: es una decisión medida, no un
+ * descuido. Quien vuelva a medirla, que no la cuente como hallazgo.
+ */
+
+:root {
+  color-scheme: dark;
+  --bg: #04020a;
+  --card: rgba(12, 9, 24, 0.82);
+  --fg: #e8e6f2;
+  --muted: #a7a3bb;
+  --accent: #6ff7d9;
+  --glow: rgba(111, 247, 217, 0.18);
+  --rule: #372e55;
+  --hairline: rgba(255, 255, 255, 0.08);
+}
+
+/* Un acento por código. Discreto: solo cambia el color del código y el halo. */
+body.c400 {
+  --accent: #ff9ecd;
+  --glow: rgba(255, 158, 205, 0.18);
+}
+body.c401 {
+  --accent: #c8a2ff;
+  --glow: rgba(200, 162, 255, 0.18);
+}
+body.c403 {
+  --accent: #ff8fa3;
+  --glow: rgba(255, 143, 163, 0.18);
+}
+body.c405 {
+  --accent: #9ef78a;
+  --glow: rgba(158, 247, 138, 0.18);
+}
+body.c408 {
+  --accent: #ffb26b;
+  --glow: rgba(255, 178, 107, 0.18);
+}
+body.c429 {
+  --accent: #7ee8ff;
+  --glow: rgba(126, 232, 255, 0.18);
+}
+body.c500 {
+  --accent: #ff7b8a;
+  --glow: rgba(255, 123, 138, 0.18);
+}
+body.c502 {
+  --accent: #d6a2ff;
+  --glow: rgba(214, 162, 255, 0.18);
+}
+body.c503 {
+  --accent: #9aa4c7;
+  --glow: rgba(154, 164, 199, 0.18);
+}
+body.c504 {
+  --accent: #8fb8ff;
+  --glow: rgba(143, 184, 255, 0.18);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 2rem;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.25rem;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.5;
+  color: var(--fg);
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(
+      ellipse 80% 60% at 15% 8%,
+      rgba(80, 255, 210, 0.12),
+      transparent 62%
+    ),
+    radial-gradient(
+      ellipse 70% 60% at 85% 18%,
+      rgba(160, 100, 255, 0.14),
+      transparent 64%
+    ),
+    radial-gradient(
+      ellipse 90% 70% at 50% 108%,
+      rgba(60, 130, 255, 0.1),
+      transparent 62%
+    ),
+    linear-gradient(155deg, #05030d 0%, #08041a 48%, #04020a 100%);
+  background-repeat: no-repeat;
+}
+
+/* La tarjeta de cristal: el *landmark* que un lector de pantalla anuncia como
+ * «contenido principal», con el halo del tema dentro y la entrada de la casa. */
+main {
+  position: relative;
+  isolation: isolate;
+  width: 100%;
+  max-width: 40rem;
+  padding: 3rem 2.25rem 2.75rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.7rem;
+  text-align: center;
+  background: var(--card);
+  border: 1px solid var(--hairline);
+  border-radius: 1.4rem;
+  box-shadow:
+    0 30px 70px -28px rgba(0, 0, 0, 0.85),
+    0 1px 0 rgba(255, 255, 255, 0.06) inset;
+  backdrop-filter: blur(20px) saturate(130%);
+  -webkit-backdrop-filter: blur(20px) saturate(130%);
+  overflow: hidden;
+  animation: aurora-entrada 220ms ease-out;
+}
+
+/* El halo detrás del código: un brillo suave, no un foco. Queda por encima del
+ * fondo del cristal y por debajo del contenido. */
+main::before {
+  content: "";
+  position: absolute;
+  top: -18%;
+  left: -12%;
+  right: -12%;
+  height: 82%;
+  background: radial-gradient(
+    ellipse at 50% 42%,
+    var(--glow) 0%,
+    transparent 70%
+  );
+  filter: blur(28px);
+  opacity: 0.9;
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* La arista luminosa del borde superior: el detalle que da profundidad. */
+main::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 16%;
+  right: 16%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(4.5rem, 17vw, 8rem);
+  font-weight: 800;
+  line-height: 0.92;
+  letter-spacing: -0.05em;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  text-shadow: 0 0 0.3em var(--glow), 0 0 1.2em var(--glow);
+}
+
+h2 {
+  margin: 0;
+  font-size: clamp(1.15rem, 3.4vw, 1.6rem);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--fg);
+  text-wrap: balance;
+}
+
+hr {
+  width: 7rem;
+  margin: 0.75rem 0;
+  border: 0;
+  border-top: 1px solid var(--rule);
+}
+
+p {
+  margin: 0;
+  max-width: 34rem;
+  color: var(--muted);
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+
+/* La firma: pequeña y atenuada, para que no compita con el código. */
+footer {
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* La entrada: un fundido con un desplazamiento mínimo y una escala apenas
+ * perceptible. No es un bucle; la página de error no se mueve sola. */
+@keyframes aurora-entrada {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  main {
+    animation: none;
+  }
+}
+
+@media (max-width: 30rem) {
+  body {
+    padding: 1.25rem;
+  }
+
+  main {
+    padding: 2.25rem 1.5rem 2rem;
+    border-radius: 1.1rem;
+  }
+}
+    </style>
+  </head>
+  <body class="c{{code}}">
+    <main>
+      <h1>{{code}}</h1>
+      <h2>{{reason}}</h2>
+      <hr />
+      <p>{{description}}</p>
+    </main>
+    <footer>errserve</footer>
+  </body>
+</html>
