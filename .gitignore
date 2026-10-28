@@ -1,1 +1,5 @@
 target/
+
+# El plan de trabajo del change en curso: es local, no se versiona.
+# `tests/traefik_catchall.rs` ya lo salta al descubrir los ficheros de despliegue.
+PLAN.md
