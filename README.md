@@ -305,6 +305,63 @@ una lista cerrada de temas ni una guarda que inspeccione la página: la decisió
 es de quien la escribe. El servicio las sirve también como assets crudos si se piden; la regla del
 respaldo que bloquea ese leak está en «Operación y observabilidad».
 
+### Capturas
+
+Las **once** páginas **servidas por el servidor** —la respuesta ya resuelta, con el código y los
+textos sustituidos—, no el fichero tal cual se sirve como asset crudo. Todas con el código `404`, a
+1849×975, y con el canal alfa descartado: era **opaco** en las once, así que la comparación píxel a
+píxel da **cero** y no hay pérdida. `default` y `compact` van en la variante **oscura** —la que pide
+un sistema en modo oscuro—; `paper` es la única clara por diseño.
+
+La distinción importa porque las **siete ilustradas** traen en su `<script>` un **relleno de reserva**:
+si el texto todavía trae `{{`, toman `?code=`/`?reason=`/`?description=` o su propio 404 en español,
+así que servidas como asset crudo parecen resueltas sin serlo; las cuatro canónicas, que no tienen
+`<script>`, muestran las llaves a la vista.
+
+**`default`**
+
+![El tema default sirviendo un 404, en su variante oscura](screenshots/default.png)
+
+**`compact`**
+
+![El tema compact sirviendo un 404, en su variante oscura](screenshots/compact.png)
+
+**`amber`**
+
+![El tema amber sirviendo un 404](screenshots/amber.png)
+
+**`aurora`**
+
+![El tema aurora sirviendo un 404](screenshots/aurora.png)
+
+**`minimal`**
+
+![El tema minimal sirviendo un 404](screenshots/minimal.png)
+
+**`paper`**
+
+![El tema paper sirviendo un 404](screenshots/paper.png)
+
+**`matrix`**
+
+![El tema matrix sirviendo un 404](screenshots/matrix.png)
+
+**`terminal`**
+
+![El tema terminal sirviendo un 404](screenshots/terminal.png)
+
+**`antique`**
+
+![El tema antique sirviendo un 404](screenshots/antique.png)
+
+**`oasis`**
+
+![El tema oasis sirviendo un 404](screenshots/oasis.png)
+
+**`starwars`**
+
+![El tema starwars sirviendo un 404](screenshots/starwars.png)
+
 ### El endurecimiento y la CSP
 
 Las páginas son **incompatibles con una CSP estricta** (`default-src 'none'`): cada una lleva su

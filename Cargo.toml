@@ -9,7 +9,7 @@ repository = "https://github.com/atareao/errserve"
 readme = "README.md"
 keywords = ["http-server", "error-pages", "traefik", "reverse-proxy", "axum"]
 categories = ["command-line-utilities", "network-programming", "web-programming::http-server"]
-exclude = ["/openspec", "/.github", "/AGENTS.md", "/cliff.toml", "/deny.toml", "/.justfile"]
+exclude = ["/openspec", "/.github", "/AGENTS.md", "/cliff.toml", "/deny.toml", "/.justfile", "/screenshots"]
 
 # Versiones elegidas contra la caché local de `~/.cargo/registry` (rangos caret,
 # sin fijar de memoria): axum 0.8.9, tokio 1.54.1, tower-http 0.6.11,
