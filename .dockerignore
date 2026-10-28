@@ -13,10 +13,13 @@ target/
 .gitignore
 
 # Documentación, automatización y specs: no son entrada de la compilación.
+# `screenshots/` son las capturas de la galería del README: material de
+# documentación, no entrada del build.
 AGENTS.md
 README.md
 openspec/
 .justfile
+screenshots/
 
 # Secretos y configuración local. No hay ninguno versionado; la lista existe
 # para que un `.env` de trabajo nunca acabe horneado en una capa.
